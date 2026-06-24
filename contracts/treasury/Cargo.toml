@@ -17,6 +17,6 @@ soroban-sdk.workspace = true
 
 [dev-dependencies]
 derive_arbitrary.workspace = true
-soroban-sdk.workspace = true
+soroban-sdk = { workspace = true, features = ["testutils"] }
 compliance = { package = "comebackhere-compliance", path = "../compliance" }
 invoice = { package = "comebackhere-invoice", path = "../invoice" }
