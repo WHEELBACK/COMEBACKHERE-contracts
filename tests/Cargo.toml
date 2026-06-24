@@ -1,0 +1,15 @@
+[package]
+name = "comebackhere-tests"
+version = "1.0.0"
+edition = "2021"
+publish = false
+
+[features]
+default = ["testutils"]
+testutils = ["soroban-sdk/testutils"]
+
+[dependencies]
+soroban-sdk.workspace = true
+invoice = { package = "comebackhere-invoice", path = "../contracts/invoice" }
+treasury = { package = "comebackhere-treasury", path = "../contracts/treasury" }
+compliance = { package = "comebackhere-compliance", path = "../contracts/compliance" }
