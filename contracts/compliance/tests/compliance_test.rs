@@ -17,7 +17,7 @@ fn block_and_clear_address() {
     let (_env, admin, payer, client) = setup();
     client.allow_address(&admin, &payer);
     assert!(client.is_allowed(&payer));
-    client.block_address(&admin, &payer);
+    client.block_address(&admin, &payer, &None);
     assert!(!client.is_allowed(&payer));
     client.clear_address(&admin, &payer);
     assert!(client.is_allowed(&payer));
@@ -55,7 +55,7 @@ fn block_and_clear_permitted_while_paused() {
     client.allow_address(&admin, &payer);
     client.pause(&admin);
     // block and clear must succeed even while paused (emergency policy)
-    client.block_address(&admin, &payer);
+    client.block_address(&admin, &payer, &None);
     assert!(!client.is_allowed(&payer));
     client.clear_address(&admin, &payer);
     assert!(client.is_allowed(&payer));
@@ -104,7 +104,7 @@ fn block_address_mutation_succeeds_after_unpause() {
     client.unpause(&admin);
 
     // Block address should now work
-    client.block_address(&admin, &address);
+    client.block_address(&admin, &address, &None);
     assert!(!client.is_allowed(&address));
 }
 
@@ -120,7 +120,7 @@ fn clear_address_mutation_succeeds_after_unpause() {
 
     // Allow and block address first
     client.allow_address(&admin, &address);
-    client.block_address(&admin, &address);
+    client.block_address(&admin, &address, &None);
     assert!(!client.is_allowed(&address));
 
     // Pause then unpause
@@ -145,7 +145,7 @@ fn read_only_queries_not_blocked_by_pause() {
 
     // Setup: allow one address, block another
     client.allow_address(&admin, &allowed_address);
-    client.block_address(&admin, &blocked_address);
+    client.block_address(&admin, &blocked_address, &None);
 
     // Pause the contract
     client.pause(&admin);
@@ -203,7 +203,7 @@ fn emits_address_blocked_event() {
     let (env, admin, subject, client) = setup();
     client.allow_address(&admin, &subject);
     assert!(client.is_allowed(&subject));
-    client.block_address(&admin, &subject);
+    client.block_address(&admin, &subject, &None);
     assert!(!client.is_allowed(&subject));
     // Events are captured by the snapshot test harness; no additional assertions needed here.
     let _ = env;
@@ -217,7 +217,7 @@ fn emits_address_blocked_event() {
 fn emits_address_cleared_event() {
     let (env, admin, subject, client) = setup();
     client.allow_address(&admin, &subject);
-    client.block_address(&admin, &subject);
+    client.block_address(&admin, &subject, &None);
     assert!(!client.is_allowed(&subject));
     client.clear_address(&admin, &subject);
     assert!(client.is_allowed(&subject));
@@ -237,7 +237,7 @@ fn precedence_never_allowed_is_denied() {
 fn precedence_allowed_then_blocked_is_denied() {
     let (_env, admin, subject, client) = setup();
     client.allow_address(&admin, &subject);
-    client.block_address(&admin, &subject);
+    client.block_address(&admin, &subject, &None);
     assert!(!client.is_allowed(&subject));
 }
 
@@ -245,7 +245,7 @@ fn precedence_allowed_then_blocked_is_denied() {
 fn precedence_blocked_then_cleared_is_allowed() {
     let (_env, admin, subject, client) = setup();
     client.allow_address(&admin, &subject);
-    client.block_address(&admin, &subject);
+    client.block_address(&admin, &subject, &None);
     client.clear_address(&admin, &subject);
     assert!(client.is_allowed(&subject));
 }
@@ -253,7 +253,7 @@ fn precedence_blocked_then_cleared_is_allowed() {
 #[test]
 fn precedence_block_without_prior_allow_is_denied() {
     let (_env, admin, subject, client) = setup();
-    client.block_address(&admin, &subject);
+    client.block_address(&admin, &subject, &None);
     assert!(!client.is_allowed(&subject));
 }
 
@@ -297,7 +297,7 @@ fn batch_block_multiple_addresses() {
         client.allow_address(&admin, &addr);
     }
     for addr in addrs.iter() {
-        client.block_address(&admin, &addr);
+        client.block_address(&admin, &addr, &None);
     }
     for addr in addrs.iter() {
         assert!(!client.is_allowed(&addr));
@@ -314,7 +314,7 @@ fn batch_allow_then_block_subset() {
         client.allow_address(&admin, addr);
     }
     // block only b
-    client.block_address(&admin, &b);
+    client.block_address(&admin, &b, &None);
     assert!(client.is_allowed(&a));
     assert!(!client.is_allowed(&b));
     assert!(client.is_allowed(&c));
@@ -344,7 +344,7 @@ fn temp_allow_blocked_address_is_denied_regardless_of_expiry() {
     let (env, admin, subject, client) = setup();
     let now = env.ledger().timestamp();
     client.allow_address_until(&admin, &subject, &(now + 1000));
-    client.block_address(&admin, &subject);
+    client.block_address(&admin, &subject, &None);
     assert!(!client.is_allowed(&subject));
 }
 
@@ -451,7 +451,7 @@ fn export_snapshot_returns_all_tracked_addresses() {
 
     client.allow_address(&admin, &a);
     client.allow_address(&admin, &b);
-    client.block_address(&admin, &c);
+    client.block_address(&admin, &c, &None);
 
     let snapshot = client.export_snapshot(&admin);
     assert_eq!(snapshot.len(), 3);
@@ -484,7 +484,7 @@ fn export_snapshot_reflects_state_changes() {
     let snap1 = client.export_snapshot(&admin);
     assert_eq!(snap1.get(0).unwrap().1, AddressState::Allowed);
 
-    client.block_address(&admin, &subject);
+    client.block_address(&admin, &subject, &None);
     let snap2 = client.export_snapshot(&admin);
     assert_eq!(snap2.get(0).unwrap().1, AddressState::Blocked);
 }
@@ -494,7 +494,7 @@ fn export_snapshot_dedups_repeated_operations_on_same_address() {
     let (_env, admin, subject, client) = setup();
 
     client.allow_address(&admin, &subject);
-    client.block_address(&admin, &subject);
+    client.block_address(&admin, &subject, &None);
     client.clear_address(&admin, &subject);
 
     let snapshot = client.export_snapshot(&admin);

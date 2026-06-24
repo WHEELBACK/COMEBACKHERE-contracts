@@ -8,6 +8,7 @@ pub enum DataKey {
     Allowed(Address),
     Blocked(Address),
     AllowedUntil(Address),
+    BlockReason(Address),
     Paused,
     AddressIndex,
 }
