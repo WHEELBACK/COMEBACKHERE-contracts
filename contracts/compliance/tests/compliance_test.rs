@@ -438,3 +438,83 @@ fn allow_address_returns_contract_paused_when_paused() {
     let result = client.try_allow_address(&admin, &address);
     assert_eq!(result, Err(Ok(ContractError::ContractPaused)));
 }
+
+// ── #80 export_snapshot tests ─────────────────────────────────────────────────
+
+#[test]
+fn export_snapshot_returns_all_tracked_addresses() {
+    use compliance::AddressState;
+    let (env, admin, _, client) = setup();
+    let a = Address::generate(&env);
+    let b = Address::generate(&env);
+    let c = Address::generate(&env);
+
+    client.allow_address(&admin, &a);
+    client.allow_address(&admin, &b);
+    client.block_address(&admin, &c);
+
+    let snapshot = client.export_snapshot(&admin);
+    assert_eq!(snapshot.len(), 3);
+
+    // collect into a plain vec for easy lookup
+    let mut found_a = false;
+    let mut found_b = false;
+    let mut found_c = false;
+    for (addr, state) in snapshot.iter() {
+        if addr == a {
+            assert_eq!(state, AddressState::Allowed);
+            found_a = true;
+        } else if addr == b {
+            assert_eq!(state, AddressState::Allowed);
+            found_b = true;
+        } else if addr == c {
+            assert_eq!(state, AddressState::Blocked);
+            found_c = true;
+        }
+    }
+    assert!(found_a && found_b && found_c);
+}
+
+#[test]
+fn export_snapshot_reflects_state_changes() {
+    use compliance::AddressState;
+    let (_env, admin, subject, client) = setup();
+
+    client.allow_address(&admin, &subject);
+    let snap1 = client.export_snapshot(&admin);
+    assert_eq!(snap1.get(0).unwrap().1, AddressState::Allowed);
+
+    client.block_address(&admin, &subject);
+    let snap2 = client.export_snapshot(&admin);
+    assert_eq!(snap2.get(0).unwrap().1, AddressState::Blocked);
+}
+
+#[test]
+fn export_snapshot_dedups_repeated_operations_on_same_address() {
+    let (_env, admin, subject, client) = setup();
+
+    client.allow_address(&admin, &subject);
+    client.block_address(&admin, &subject);
+    client.clear_address(&admin, &subject);
+
+    let snapshot = client.export_snapshot(&admin);
+    assert_eq!(snapshot.len(), 1);
+}
+
+#[test]
+fn export_snapshot_empty_when_no_addresses_tracked() {
+    let (_env, admin, _subject, client) = setup();
+    let snapshot = client.export_snapshot(&admin);
+    assert_eq!(snapshot.len(), 0);
+}
+
+#[test]
+fn export_snapshot_expired_temp_allow_shows_expired() {
+    use compliance::AddressState;
+    let (env, admin, subject, client) = setup();
+    let now = env.ledger().timestamp();
+    // expires_at == now means timestamp is NOT < expires_at → Expired
+    client.allow_address_until(&admin, &subject, &now);
+    let snapshot = client.export_snapshot(&admin);
+    assert_eq!(snapshot.get(0).unwrap().1, AddressState::Expired);
+}

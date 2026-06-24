@@ -1,9 +1,9 @@
 #![no_std]
 
 mod allowlist;
-pub use allowlist::{ComplianceError, DataKey};
+pub use allowlist::{AddressState, ComplianceError, DataKey};
 
-use soroban_sdk::{contract, contracterror, contractimpl, Address, Env, Symbol};
+use soroban_sdk::{contract, contracterror, contractimpl, Address, Env, Symbol, Vec};
 
 #[contracterror]
 #[derive(Copy, Clone, Debug, PartialEq)]
@@ -67,6 +67,7 @@ impl ComplianceContract {
         env.storage()
             .persistent()
             .remove(&DataKey::AllowedUntil(address.clone()));
+        Self::track_address(&env, &address);
         env.events()
             .publish((Symbol::new(&env, "address_allowed"),), address);
         Ok(())
@@ -79,6 +80,7 @@ impl ComplianceContract {
         env.storage()
             .persistent()
             .set(&DataKey::Blocked(address.clone()), &true);
+        Self::track_address(&env, &address);
         env.events()
             .publish((Symbol::new(&env, "address_blocked"),), address);
         Ok(())
@@ -100,6 +102,7 @@ impl ComplianceContract {
         env.storage()
             .persistent()
             .set(&DataKey::AllowedUntil(address.clone()), &expires_at);
+        Self::track_address(&env, &address);
         env.events().publish(
             (Symbol::new(&env, "address_allowed_until"),),
             (address, expires_at),
@@ -148,6 +151,7 @@ impl ComplianceContract {
         env.storage()
             .persistent()
             .set(&DataKey::Allowed(address.clone()), &true);
+        Self::track_address(&env, &address);
         env.events()
             .publish((Symbol::new(&env, "address_cleared"),), address);
         Ok(())
@@ -188,6 +192,66 @@ impl ComplianceContract {
             return Err(ContractError::ContractPaused);
         }
         Ok(())
+    }
+
+    /// Returns the current compliance state for every tracked address.
+    /// Requires admin authentication for audit-trail accountability.
+    pub fn export_snapshot(env: Env, admin: Address) -> Vec<(Address, AddressState)> {
+        Self::require_admin(&env, &admin).expect("Unauthorized");
+        let index: Vec<Address> = env
+            .storage()
+            .instance()
+            .get(&DataKey::AddressIndex)
+            .unwrap_or(Vec::new(&env));
+        let mut out: Vec<(Address, AddressState)> = Vec::new(&env);
+        for addr in index.iter() {
+            let blocked: bool = env
+                .storage()
+                .persistent()
+                .get(&DataKey::Blocked(addr.clone()))
+                .unwrap_or(false);
+            let state = if blocked {
+                AddressState::Blocked
+            } else {
+                let allowed: bool = env
+                    .storage()
+                    .persistent()
+                    .get(&DataKey::Allowed(addr.clone()))
+                    .unwrap_or(false);
+                if !allowed {
+                    AddressState::Blocked
+                } else if let Some(expires_at) = env
+                    .storage()
+                    .persistent()
+                    .get::<_, u64>(&DataKey::AllowedUntil(addr.clone()))
+                {
+                    if env.ledger().timestamp() < expires_at {
+                        AddressState::Allowed
+                    } else {
+                        AddressState::Expired
+                    }
+                } else {
+                    AddressState::Allowed
+                }
+            };
+            out.push_back((addr, state));
+        }
+        out
+    }
+
+    /// Adds `address` to the instance-level AddressIndex if not already present.
+    fn track_address(env: &Env, address: &Address) {
+        let mut index: Vec<Address> = env
+            .storage()
+            .instance()
+            .get(&DataKey::AddressIndex)
+            .unwrap_or(Vec::new(env));
+        if !index.contains(address) {
+            index.push_back(address.clone());
+            env.storage()
+                .instance()
+                .set(&DataKey::AddressIndex, &index);
+        }
     }
 }
 

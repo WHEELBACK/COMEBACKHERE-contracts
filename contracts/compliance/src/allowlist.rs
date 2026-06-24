@@ -9,6 +9,15 @@ pub enum DataKey {
     Blocked(Address),
     AllowedUntil(Address),
     Paused,
+    AddressIndex,
+}
+
+#[contracttype]
+#[derive(Clone, PartialEq, Debug)]
+pub enum AddressState {
+    Allowed,
+    Blocked,
+    Expired,
 }
 
 #[contracterror]
