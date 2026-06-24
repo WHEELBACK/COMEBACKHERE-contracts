@@ -20,6 +20,14 @@ lint:
 deny:
     cargo deny check
 
+# Audit dependencies for security vulnerabilities
+audit:
+    cargo audit
+
+# Expand macros for a specific contract
+expand contract:
+    cargo expand -p {{contract}}
+
 # Run format and lint checks (for CI)
 check: fmt lint test deny
     @echo "✓ All checks passed"
