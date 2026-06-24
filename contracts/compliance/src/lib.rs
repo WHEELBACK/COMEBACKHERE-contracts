@@ -157,6 +157,24 @@ impl ComplianceContract {
         Ok(())
     }
 
+    /// Remove the allowed status for an address without blocking it.
+    /// This is a soft de-listing: the address is removed from the allowlist
+    /// but not placed on the blocklist, so it can be re-allowed later.
+    pub fn revoke_allow(env: Env, admin: Address, address: Address) -> Result<(), ContractError> {
+        Self::require_admin(&env, &admin)?;
+        Self::require_not_paused(&env)?;
+        env.storage()
+            .persistent()
+            .remove(&DataKey::Allowed(address.clone()));
+        env.storage()
+            .persistent()
+            .remove(&DataKey::AllowedUntil(address.clone()));
+        Self::track_address(&env, &address);
+        env.events()
+            .publish((Symbol::new(&env, "address_revoked"),), address);
+        Ok(())
+    }
+
     pub fn pause(env: Env, admin: Address) -> Result<(), ContractError> {
         Self::require_admin(&env, &admin)?;
         env.storage().instance().set(&DataKey::Paused, &true);

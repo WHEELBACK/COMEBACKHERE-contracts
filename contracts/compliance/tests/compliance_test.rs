@@ -133,6 +133,68 @@ fn clear_address_mutation_succeeds_after_unpause() {
 }
 
 #[test]
+fn revoke_allow_removes_allowed_status() {
+    let (_env, admin, subject, client) = setup();
+    client.allow_address(&admin, &subject);
+    assert!(client.is_allowed(&subject));
+    client.revoke_allow(&admin, &subject);
+    assert!(!client.is_allowed(&subject));
+}
+
+#[test]
+fn revoke_allow_does_not_block() {
+    let (_env, admin, subject, client) = setup();
+    client.allow_address(&admin, &subject);
+    client.revoke_allow(&admin, &subject);
+    // Not allowed, but also not blocked — re-allow should work
+    client.allow_address(&admin, &subject);
+    assert!(client.is_allowed(&subject));
+}
+
+#[test]
+fn revoke_allow_removes_expiry() {
+    let (env, admin, subject, client) = setup();
+    let now = env.ledger().timestamp();
+    client.allow_address_until(&admin, &subject, &(now + 1000));
+    assert!(client.is_allowed(&subject));
+    client.revoke_allow(&admin, &subject);
+    assert!(!client.is_allowed(&subject));
+    // Re-allow permanently
+    client.allow_address(&admin, &subject);
+    assert!(client.is_allowed(&subject));
+}
+
+#[test]
+fn revoke_allow_returns_unauthorized_for_non_admin() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let admin = Address::generate(&env);
+    let non_admin = Address::generate(&env);
+    let address = Address::generate(&env);
+    let id = env.register_contract(None, ComplianceContract);
+    let client = ComplianceContractClient::new(&env, &id);
+    client.initialize(&admin);
+
+    let result = client.try_revoke_allow(&non_admin, &address);
+    assert_eq!(result, Err(Ok(ContractError::Unauthorized)));
+}
+
+#[test]
+fn revoke_allow_returns_contract_paused_when_paused() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let admin = Address::generate(&env);
+    let address = Address::generate(&env);
+    let id = env.register_contract(None, ComplianceContract);
+    let client = ComplianceContractClient::new(&env, &id);
+    client.initialize(&admin);
+    client.pause(&admin);
+
+    let result = client.try_revoke_allow(&admin, &address);
+    assert_eq!(result, Err(Ok(ContractError::ContractPaused)));
+}
+
+#[test]
 fn read_only_queries_not_blocked_by_pause() {
     let env = Env::default();
     env.mock_all_auths();
