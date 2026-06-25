@@ -5,11 +5,16 @@ use soroban_sdk::{contracterror, contracttype, Address};
 pub enum DataKey {
     Admin,
     PendingAdmin,
+    Operator,
     Allowed(Address),
     Blocked(Address),
     AllowedUntil(Address),
+    BlockReason(Address),
+    SchemaVersion,
     Paused,
     AddressIndex,
+    AllowCount,
+    BlockCount,
 }
 
 #[contracttype]
@@ -22,6 +27,7 @@ pub enum AddressState {
 
 #[contracterror]
 #[derive(Clone, Copy, Debug, PartialEq)]
+#[repr(u32)]
 pub enum ComplianceError {
     AlreadyInitialized = 1,
 }

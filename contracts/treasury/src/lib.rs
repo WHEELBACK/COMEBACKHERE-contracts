@@ -136,9 +136,11 @@ impl TreasuryContract {
         let allowlist: Vec<Address> = env.storage().instance()
             .get(&DataKey::TokenAllowlist).unwrap_or_else(|| Vec::new(&env));
         if !allowlist.is_empty() && !allowlist.contains(&token_contract) { panic!("TokenNotAllowed"); }
+        let payout_address = env.storage().instance().get::<DataKey, Address>(&DataKey::MerchantPayoutAddress(settlement.merchant_address.clone()))
+            .unwrap_or_else(|| settlement.merchant_address.clone());
         let treasury = env.current_contract_address();
         let token_client = token::Client::new(&env, &token_contract);
-        token_client.transfer(&treasury, &settlement.merchant_address, &settlement.amount);
+        token_client.transfer(&treasury, &payout_address, &settlement.amount);
         settlement.status = SettlementStatus::Executed;
         env.storage().persistent().set(&DataKey::Settlement(settlement_id), &settlement);
         env.events().publish((Symbol::new(&env, "settlement_executed"), settlement_id), settlement);
@@ -175,6 +177,23 @@ impl TreasuryContract {
         settlement.status = SettlementStatus::Cancelled;
         env.storage().persistent().set(&DataKey::Settlement(settlement_id), &settlement);
         env.events().publish((Symbol::new(&env, "settlement_cancelled"), settlement_id), settlement);
+    }
+
+    pub fn batch_cancel_settlements(env: Env, admin: Address, ids: Vec<u64>) {
+        Self::require_admin(&env, &admin);
+        for id in ids.iter() {
+            let settlement_opt: Option<Settlement> = env.storage().persistent()
+                .get(&DataKey::Settlement(id));
+            if let Some(mut settlement) = settlement_opt {
+                if settlement.status == SettlementStatus::Pending {
+                    settlement.status = SettlementStatus::Cancelled;
+                    env.storage().persistent().set(&DataKey::Settlement(id), &settlement);
+                    env.events().publish((Symbol::new(&env, "settlement_cancelled"), id), settlement);
+                }
+                // non-pending settlements are silently skipped
+            }
+            // missing settlement IDs are silently skipped
+        }
     }
 
     pub fn get_pending_settlements(env: Env) -> Vec<Settlement> {
