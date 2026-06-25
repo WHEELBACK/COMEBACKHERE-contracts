@@ -1,5 +1,5 @@
 use compliance::{ComplianceContract, ComplianceContractClient, ContractError};
-use soroban_sdk::{testutils::Address as _, Address, Env};
+use soroban_sdk::{testutils::{Address as _, Events as _}, Address, Env, Symbol};
 
 fn setup() -> (Env, Address, Address, ComplianceContractClient<'static>) {
     let env = Env::default();
@@ -453,7 +453,7 @@ fn export_snapshot_returns_all_tracked_addresses() {
     client.allow_address(&admin, &b);
     client.block_address(&admin, &c);
 
-    let snapshot = client.export_snapshot(&admin);
+    let snapshot = client.export_snapshot(&admin, &0, &0);
     assert_eq!(snapshot.len(), 3);
 
     // collect into a plain vec for easy lookup
@@ -481,11 +481,11 @@ fn export_snapshot_reflects_state_changes() {
     let (_env, admin, subject, client) = setup();
 
     client.allow_address(&admin, &subject);
-    let snap1 = client.export_snapshot(&admin);
+    let snap1 = client.export_snapshot(&admin, &0, &0);
     assert_eq!(snap1.get(0).unwrap().1, AddressState::Allowed);
 
     client.block_address(&admin, &subject);
-    let snap2 = client.export_snapshot(&admin);
+    let snap2 = client.export_snapshot(&admin, &0, &0);
     assert_eq!(snap2.get(0).unwrap().1, AddressState::Blocked);
 }
 
@@ -497,14 +497,14 @@ fn export_snapshot_dedups_repeated_operations_on_same_address() {
     client.block_address(&admin, &subject);
     client.clear_address(&admin, &subject);
 
-    let snapshot = client.export_snapshot(&admin);
+    let snapshot = client.export_snapshot(&admin, &0, &0);
     assert_eq!(snapshot.len(), 1);
 }
 
 #[test]
 fn export_snapshot_empty_when_no_addresses_tracked() {
     let (_env, admin, _subject, client) = setup();
-    let snapshot = client.export_snapshot(&admin);
+    let snapshot = client.export_snapshot(&admin, &0, &0);
     assert_eq!(snapshot.len(), 0);
 }
 
@@ -515,6 +515,206 @@ fn export_snapshot_expired_temp_allow_shows_expired() {
     let now = env.ledger().timestamp();
     // expires_at == now means timestamp is NOT < expires_at → Expired
     client.allow_address_until(&admin, &subject, &now);
-    let snapshot = client.export_snapshot(&admin);
+    let snapshot = client.export_snapshot(&admin, &0, &0);
     assert_eq!(snapshot.get(0).unwrap().1, AddressState::Expired);
+}
+
+// ── #88 Event snapshot tests ──────────────────────────────────────────────────
+
+#[test]
+fn event_snapshot_address_allowed() {
+    let (env, admin, subject, client) = setup();
+    client.allow_address(&admin, &subject);
+    let events = env.events().all();
+    // Last event: topics = ("address_allowed",), data = subject address
+    let ev = events.last().unwrap();
+    let topics: soroban_sdk::Vec<soroban_sdk::Val> = ev.1;
+    let topic_sym: Symbol = soroban_sdk::FromVal::from_val(&env, &topics.get(0).unwrap());
+    assert_eq!(topic_sym, Symbol::new(&env, "address_allowed"));
+    let data_addr: Address = soroban_sdk::FromVal::from_val(&env, &ev.2);
+    assert_eq!(data_addr, subject);
+}
+
+#[test]
+fn event_snapshot_address_blocked() {
+    let (env, admin, subject, client) = setup();
+    client.block_address(&admin, &subject);
+    let events = env.events().all();
+    let ev = events.last().unwrap();
+    let topics: soroban_sdk::Vec<soroban_sdk::Val> = ev.1;
+    let topic_sym: Symbol = soroban_sdk::FromVal::from_val(&env, &topics.get(0).unwrap());
+    assert_eq!(topic_sym, Symbol::new(&env, "address_blocked"));
+    let data_addr: Address = soroban_sdk::FromVal::from_val(&env, &ev.2);
+    assert_eq!(data_addr, subject);
+}
+
+#[test]
+fn event_snapshot_address_allowed_until() {
+    let (env, admin, subject, client) = setup();
+    let expires_at: u64 = env.ledger().timestamp() + 1000;
+    client.allow_address_until(&admin, &subject, &expires_at);
+    let events = env.events().all();
+    let ev = events.last().unwrap();
+    let topics: soroban_sdk::Vec<soroban_sdk::Val> = ev.1;
+    let topic_sym: Symbol = soroban_sdk::FromVal::from_val(&env, &topics.get(0).unwrap());
+    assert_eq!(topic_sym, Symbol::new(&env, "address_allowed_until"));
+    let data: (Address, u64) = soroban_sdk::FromVal::from_val(&env, &ev.2);
+    assert_eq!(data.0, subject);
+    assert_eq!(data.1, expires_at);
+}
+
+#[test]
+fn event_snapshot_address_cleared() {
+    let (env, admin, subject, client) = setup();
+    client.allow_address(&admin, &subject);
+    client.block_address(&admin, &subject);
+    client.clear_address(&admin, &subject);
+    let events = env.events().all();
+    let ev = events.last().unwrap();
+    let topics: soroban_sdk::Vec<soroban_sdk::Val> = ev.1;
+    let topic_sym: Symbol = soroban_sdk::FromVal::from_val(&env, &topics.get(0).unwrap());
+    assert_eq!(topic_sym, Symbol::new(&env, "address_cleared"));
+    let data_addr: Address = soroban_sdk::FromVal::from_val(&env, &ev.2);
+    assert_eq!(data_addr, subject);
+}
+
+#[test]
+fn event_snapshot_admin_transfer_initiated() {
+    let (env, admin, _subject, client) = setup();
+    let new_admin = Address::generate(&env);
+    client.transfer_admin(&admin, &new_admin);
+    let events = env.events().all();
+    let ev = events.last().unwrap();
+    let topics: soroban_sdk::Vec<soroban_sdk::Val> = ev.1;
+    let topic_sym: Symbol = soroban_sdk::FromVal::from_val(&env, &topics.get(0).unwrap());
+    assert_eq!(topic_sym, Symbol::new(&env, "admin_transfer_initiated"));
+    let data_addr: Address = soroban_sdk::FromVal::from_val(&env, &ev.2);
+    assert_eq!(data_addr, new_admin);
+}
+
+#[test]
+fn event_snapshot_admin_transferred() {
+    let (env, admin, _subject, client) = setup();
+    let new_admin = Address::generate(&env);
+    client.transfer_admin(&admin, &new_admin);
+    client.accept_admin(&new_admin);
+    let events = env.events().all();
+    let ev = events.last().unwrap();
+    let topics: soroban_sdk::Vec<soroban_sdk::Val> = ev.1;
+    let topic_sym: Symbol = soroban_sdk::FromVal::from_val(&env, &topics.get(0).unwrap());
+    assert_eq!(topic_sym, Symbol::new(&env, "admin_transferred"));
+    let data_addr: Address = soroban_sdk::FromVal::from_val(&env, &ev.2);
+    assert_eq!(data_addr, new_admin);
+}
+
+#[test]
+fn event_snapshot_compliance_paused() {
+    let (env, admin, _subject, client) = setup();
+    client.pause(&admin);
+    let events = env.events().all();
+    let ev = events.last().unwrap();
+    let topics: soroban_sdk::Vec<soroban_sdk::Val> = ev.1;
+    let topic_sym: Symbol = soroban_sdk::FromVal::from_val(&env, &topics.get(0).unwrap());
+    assert_eq!(topic_sym, Symbol::new(&env, "compliance_paused"));
+    let data_addr: Address = soroban_sdk::FromVal::from_val(&env, &ev.2);
+    assert_eq!(data_addr, admin);
+}
+
+#[test]
+fn event_snapshot_compliance_unpaused() {
+    let (env, admin, _subject, client) = setup();
+    client.pause(&admin);
+    client.unpause(&admin);
+    let events = env.events().all();
+    let ev = events.last().unwrap();
+    let topics: soroban_sdk::Vec<soroban_sdk::Val> = ev.1;
+    let topic_sym: Symbol = soroban_sdk::FromVal::from_val(&env, &topics.get(0).unwrap());
+    assert_eq!(topic_sym, Symbol::new(&env, "compliance_unpaused"));
+    let data_addr: Address = soroban_sdk::FromVal::from_val(&env, &ev.2);
+    assert_eq!(data_addr, admin);
+}
+
+// ── #89 Pagination tests ──────────────────────────────────────────────────────
+
+#[test]
+fn export_snapshot_pagination_first_page() {
+    use compliance::AddressState;
+    let (env, admin, _, client) = setup();
+    let a = Address::generate(&env);
+    let b = Address::generate(&env);
+    let c = Address::generate(&env);
+    client.allow_address(&admin, &a);
+    client.allow_address(&admin, &b);
+    client.allow_address(&admin, &c);
+
+    let page = client.export_snapshot(&admin, &0, &2);
+    assert_eq!(page.len(), 2);
+}
+
+#[test]
+fn export_snapshot_pagination_second_page() {
+    let (env, admin, _, client) = setup();
+    let a = Address::generate(&env);
+    let b = Address::generate(&env);
+    let c = Address::generate(&env);
+    client.allow_address(&admin, &a);
+    client.allow_address(&admin, &b);
+    client.allow_address(&admin, &c);
+
+    let page = client.export_snapshot(&admin, &2, &2);
+    assert_eq!(page.len(), 1);
+}
+
+#[test]
+fn export_snapshot_pagination_start_beyond_end() {
+    let (env, admin, _, client) = setup();
+    let a = Address::generate(&env);
+    client.allow_address(&admin, &a);
+
+    let page = client.export_snapshot(&admin, &10, &5);
+    assert_eq!(page.len(), 0);
+}
+
+#[test]
+fn bulk_check_addresses_returns_states() {
+    use compliance::AddressState;
+    let (env, admin, _, client) = setup();
+    let a = Address::generate(&env);
+    let b = Address::generate(&env);
+    client.allow_address(&admin, &a);
+    client.block_address(&admin, &b);
+
+    let addrs = soroban_sdk::vec![&env, a.clone(), b.clone()];
+    let result = client.bulk_check_addresses(&addrs, &0, &0);
+    assert_eq!(result.len(), 2);
+    assert_eq!(result.get(0).unwrap().1, AddressState::Allowed);
+    assert_eq!(result.get(1).unwrap().1, AddressState::Blocked);
+}
+
+#[test]
+fn bulk_check_addresses_pagination() {
+    use compliance::AddressState;
+    let (env, admin, _, client) = setup();
+    let a = Address::generate(&env);
+    let b = Address::generate(&env);
+    let c = Address::generate(&env);
+    client.allow_address(&admin, &a);
+    client.allow_address(&admin, &b);
+    client.allow_address(&admin, &c);
+
+    let addrs = soroban_sdk::vec![&env, a.clone(), b.clone(), c.clone()];
+    let page = client.bulk_check_addresses(&addrs, &1, &2);
+    assert_eq!(page.len(), 2);
+    assert_eq!(page.get(0).unwrap().0, b);
+    assert_eq!(page.get(0).unwrap().1, AddressState::Allowed);
+}
+
+#[test]
+fn bulk_check_addresses_unknown_address_is_blocked() {
+    use compliance::AddressState;
+    let (env, _admin, _, client) = setup();
+    let unknown = Address::generate(&env);
+    let addrs = soroban_sdk::vec![&env, unknown.clone()];
+    let result = client.bulk_check_addresses(&addrs, &0, &0);
+    assert_eq!(result.get(0).unwrap().1, AddressState::Blocked);
 }
