@@ -177,6 +177,23 @@ impl TreasuryContract {
         env.events().publish((Symbol::new(&env, "settlement_cancelled"), settlement_id), settlement);
     }
 
+    pub fn batch_cancel_settlements(env: Env, admin: Address, ids: Vec<u64>) {
+        Self::require_admin(&env, &admin);
+        for id in ids.iter() {
+            let settlement_opt: Option<Settlement> = env.storage().persistent()
+                .get(&DataKey::Settlement(id));
+            if let Some(mut settlement) = settlement_opt {
+                if settlement.status == SettlementStatus::Pending {
+                    settlement.status = SettlementStatus::Cancelled;
+                    env.storage().persistent().set(&DataKey::Settlement(id), &settlement);
+                    env.events().publish((Symbol::new(&env, "settlement_cancelled"), id), settlement);
+                }
+                // non-pending settlements are silently skipped
+            }
+            // missing settlement IDs are silently skipped
+        }
+    }
+
     pub fn get_pending_settlements(env: Env) -> Vec<Settlement> {
         let count: u64 = env.storage().instance().get(&DataKey::SettlementCount).unwrap_or(0);
         let mut pending = Vec::new(&env);

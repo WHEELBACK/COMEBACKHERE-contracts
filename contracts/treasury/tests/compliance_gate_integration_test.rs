@@ -282,3 +282,37 @@ fn blocked_merchant_rejected_even_when_already_settled() {
     // Merchant did not receive the second settlement amount
     assert_eq!(token.balance(&merchant), 10_000_000);
 }
+
+#[test]
+fn execute_settlement_fails_when_merchant_blocked_mid_flight() {
+    let (env, admin, merchant, compliance_id, compliance, treasury_id, treasury, token_id) =
+        setup();
+
+    // Merchant is allowed at proposal time.
+    compliance.allow_address(&admin, &merchant);
+    let settlement_id = treasury.propose_settlement(&admin, &merchant, &10_000_000);
+
+    let token = TestTokenContractClient::new(&env, &token_id);
+    token.mint(&treasury_id, &10_000_000);
+
+    // Block the merchant after the settlement is already proposed (mid-flight).
+    compliance.block_address(&admin, &merchant);
+
+    let workflow_id = env.register_contract(None, SettlementWorkflow);
+    let workflow = SettlementWorkflowClient::new(&env, &workflow_id);
+
+    // Execution must fail: compliance gate sees the block even though proposal was valid.
+    let err = workflow
+        .try_execute_with_compliance(
+            &compliance_id,
+            &treasury_id,
+            &settlement_id,
+            &token_id,
+            &merchant,
+        )
+        .unwrap_err()
+        .unwrap();
+    assert_eq!(err, WorkflowError::ComplianceFailed);
+    // Merchant received nothing.
+    assert_eq!(token.balance(&merchant), 0);
+}
