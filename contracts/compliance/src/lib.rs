@@ -1,7 +1,7 @@
 #![no_std]
 
 mod allowlist;
-pub use allowlist::{AddressState, ComplianceError, DataKey};
+pub use allowlist::{AddressState, AddressStatus, ComplianceError, DataKey};
 
 use soroban_sdk::{contract, contracterror, contractimpl, Address, Bytes, Env, Symbol, Vec};
 
