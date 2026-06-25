@@ -722,3 +722,43 @@ fn old_admin_pause_returns_unauthorized_after_transfer() {
     let result = client.try_pause(&admin);
     assert_eq!(result, Err(Ok(ContractError::Unauthorized)));
 }
+
+// ── #71 Tiered allowlist ───────────────────────────────────────────────────────
+
+#[test]
+fn allow_address_with_tier_sets_allowed_and_tier() {
+    let (_env, admin, subject, client) = setup();
+    client.allow_address_with_tier(&admin, &subject, &2u8);
+    assert!(client.is_allowed(&subject));
+    assert_eq!(client.get_address_tier(&subject), 2u8);
+}
+
+#[test]
+fn get_address_tier_defaults_to_zero_for_unset_address() {
+    let (_env, _admin, subject, client) = setup();
+    assert_eq!(client.get_address_tier(&subject), 0u8);
+}
+
+#[test]
+fn allow_address_with_tier_overwrites_previous_tier() {
+    let (_env, admin, subject, client) = setup();
+    client.allow_address_with_tier(&admin, &subject, &1u8);
+    client.allow_address_with_tier(&admin, &subject, &3u8);
+    assert_eq!(client.get_address_tier(&subject), 3u8);
+}
+
+#[test]
+fn allow_address_with_tier_unauthorized_for_non_admin() {
+    let (env, _admin, subject, client) = setup();
+    let non_admin = Address::generate(&env);
+    let result = client.try_allow_address_with_tier(&non_admin, &subject, &1u8);
+    assert_eq!(result, Err(Ok(ContractError::Unauthorized)));
+}
+
+#[test]
+fn allow_address_with_tier_rejected_when_paused() {
+    let (_env, admin, subject, client) = setup();
+    client.pause(&admin);
+    let result = client.try_allow_address_with_tier(&admin, &subject, &1u8);
+    assert_eq!(result, Err(Ok(ContractError::ContractPaused)));
+}

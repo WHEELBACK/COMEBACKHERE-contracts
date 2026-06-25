@@ -15,6 +15,7 @@ pub enum DataKey {
     AddressIndex,
     AllowCount,
     BlockCount,
+    Tier(Address),
 }
 
 #[contracttype]
