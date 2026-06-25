@@ -136,9 +136,11 @@ impl TreasuryContract {
         let allowlist: Vec<Address> = env.storage().instance()
             .get(&DataKey::TokenAllowlist).unwrap_or_else(|| Vec::new(&env));
         if !allowlist.is_empty() && !allowlist.contains(&token_contract) { panic!("TokenNotAllowed"); }
+        let payout_address = env.storage().instance().get::<DataKey, Address>(&DataKey::MerchantPayoutAddress(settlement.merchant_address.clone()))
+            .unwrap_or_else(|| settlement.merchant_address.clone());
         let treasury = env.current_contract_address();
         let token_client = token::Client::new(&env, &token_contract);
-        token_client.transfer(&treasury, &settlement.merchant_address, &settlement.amount);
+        token_client.transfer(&treasury, &payout_address, &settlement.amount);
         settlement.status = SettlementStatus::Executed;
         env.storage().persistent().set(&DataKey::Settlement(settlement_id), &settlement);
         env.events().publish((Symbol::new(&env, "settlement_executed"), settlement_id), settlement);
