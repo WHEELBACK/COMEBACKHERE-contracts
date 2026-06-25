@@ -1,0 +1,17 @@
+[package]
+name = "comebackhere-compliance-client"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[lib]
+name = "compliance_client"
+
+[dependencies]
+soroban-sdk.workspace = true
+
+[dev-dependencies]
+soroban-sdk = { workspace = true, features = ["testutils"] }
+compliance = { package = "comebackhere-compliance", path = "../../contracts/compliance" }

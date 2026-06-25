@@ -593,7 +593,7 @@ fn export_snapshot_returns_all_tracked_addresses() {
     client.allow_address(&admin, &b);
     client.block_address(&admin, &c, &None);
 
-    let snapshot = client.export_snapshot(&admin);
+    let snapshot = client.export_snapshot(&admin, &0, &0);
     assert_eq!(snapshot.len(), 3);
 
     // collect into a plain vec for easy lookup
@@ -621,7 +621,7 @@ fn export_snapshot_reflects_state_changes() {
     let (_env, admin, subject, client) = setup();
 
     client.allow_address(&admin, &subject);
-    let snap1 = client.export_snapshot(&admin);
+    let snap1 = client.export_snapshot(&admin, &0, &0);
     assert_eq!(snap1.get(0).unwrap().1, AddressState::Allowed);
 
     client.block_address(&admin, &subject, &None);
@@ -637,14 +637,14 @@ fn export_snapshot_dedups_repeated_operations_on_same_address() {
     client.block_address(&admin, &subject, &None);
     client.clear_address(&admin, &subject);
 
-    let snapshot = client.export_snapshot(&admin);
+    let snapshot = client.export_snapshot(&admin, &0, &0);
     assert_eq!(snapshot.len(), 1);
 }
 
 #[test]
 fn export_snapshot_empty_when_no_addresses_tracked() {
     let (_env, admin, _subject, client) = setup();
-    let snapshot = client.export_snapshot(&admin);
+    let snapshot = client.export_snapshot(&admin, &0, &0);
     assert_eq!(snapshot.len(), 0);
 }
 
@@ -655,7 +655,7 @@ fn export_snapshot_expired_temp_allow_shows_expired() {
     let now = env.ledger().timestamp();
     // expires_at == now means timestamp is NOT < expires_at → Expired
     client.allow_address_until(&admin, &subject, &now);
-    let snapshot = client.export_snapshot(&admin);
+    let snapshot = client.export_snapshot(&admin, &0, &0);
     assert_eq!(snapshot.get(0).unwrap().1, AddressState::Expired);
 }
 

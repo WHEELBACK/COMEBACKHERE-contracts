@@ -19,6 +19,16 @@ pub struct ComplianceContract;
 
 #[contractimpl]
 impl ComplianceContract {
+    /// Initialize the compliance contract with an admin address.
+    ///
+    /// # Parameters
+    /// - `admin`: The initial administrator. Must authorize this call.
+    ///
+    /// # Errors
+    /// - [`ContractError::AlreadyInitialized`] if the contract has already been initialized.
+    ///
+    /// # Events
+    /// None emitted on initialization.
     pub fn initialize(env: Env, admin: Address) -> Result<(), ContractError> {
         if env.storage().instance().has(&DataKey::Admin) {
             return Err(ContractError::AlreadyInitialized);
@@ -66,6 +76,18 @@ impl ComplianceContract {
         true
     }
 
+    /// Permanently allow an address. Removes any existing expiry.
+    ///
+    /// # Parameters
+    /// - `admin`: Current administrator. Must authorize this call.
+    /// - `address`: The address to allow.
+    ///
+    /// # Errors
+    /// - [`ContractError::Unauthorized`] if `admin` is not the stored administrator.
+    /// - [`ContractError::ContractPaused`] if the contract is paused.
+    ///
+    /// # Events
+    /// Publishes `("address_allowed",) → address`.
     pub fn allow_address(env: Env, admin: Address, address: Address) -> Result<(), ContractError> {
         Self::require_admin(&env, &admin)?;
         Self::require_not_paused(&env)?;
@@ -169,7 +191,21 @@ impl ComplianceContract {
     }
 
     /// Allow an address until a specific ledger timestamp (seconds since epoch).
-    /// After expiry, `is_allowed` returns false even if the Allowed flag is set.
+    ///
+    /// After `expires_at`, [`is_allowed`](Self::is_allowed) returns `false` even if
+    /// the `Allowed` flag is set.
+    ///
+    /// # Parameters
+    /// - `admin`: Current administrator. Must authorize this call.
+    /// - `address`: The address to allow temporarily.
+    /// - `expires_at`: Unix timestamp (seconds) after which the allowance expires.
+    ///
+    /// # Errors
+    /// - [`ContractError::Unauthorized`] if `admin` is not the stored administrator.
+    /// - [`ContractError::ContractPaused`] if the contract is paused.
+    ///
+    /// # Events
+    /// Publishes `("address_allowed_until",) → (address, expires_at)`.
     pub fn allow_address_until(
         env: Env,
         admin: Address,
@@ -192,7 +228,18 @@ impl ComplianceContract {
         Ok(())
     }
 
-    /// Initiate a two-step admin transfer. The pending admin must call accept_admin.
+    /// Initiate a two-step admin transfer. The pending admin must call
+    /// [`accept_admin`](Self::accept_admin) to complete the handover.
+    ///
+    /// # Parameters
+    /// - `admin`: Current administrator. Must authorize this call.
+    /// - `new_admin`: The address being nominated as the next administrator.
+    ///
+    /// # Errors
+    /// - [`ContractError::Unauthorized`] if `admin` is not the stored administrator.
+    ///
+    /// # Events
+    /// Publishes `("admin_transfer_initiated",) → new_admin`.
     pub fn transfer_admin(
         env: Env,
         admin: Address,
@@ -207,7 +254,21 @@ impl ComplianceContract {
         Ok(())
     }
 
-    /// Complete the admin transfer. Must be called by the pending admin.
+    /// Complete the admin transfer initiated by [`transfer_admin`](Self::transfer_admin).
+    ///
+    /// Must be called by the pending admin to activate the new admin role.
+    ///
+    /// # Parameters
+    /// - `new_admin`: The pending administrator. Must authorize this call.
+    ///
+    /// # Errors
+    /// - [`ContractError::Unauthorized`] if `new_admin` does not match the stored pending admin.
+    ///
+    /// # Panics
+    /// Panics with `"NoPendingAdmin"` if [`transfer_admin`](Self::transfer_admin) was never called.
+    ///
+    /// # Events
+    /// Publishes `("admin_transferred",) → new_admin`.
     pub fn accept_admin(env: Env, new_admin: Address) -> Result<(), ContractError> {
         new_admin.require_auth();
         let pending: Address = env
@@ -225,6 +286,21 @@ impl ComplianceContract {
         Ok(())
     }
 
+    /// Remove the block flag and explicitly allow an address.
+    ///
+    /// Permitted even while paused (emergency policy). Does **not** remove an existing
+    /// `AllowedUntil` expiry; call [`allow_address`](Self::allow_address) for a
+    /// permanent, expiry-free allow.
+    ///
+    /// # Parameters
+    /// - `admin`: Current administrator. Must authorize this call.
+    /// - `address`: The address to clear.
+    ///
+    /// # Errors
+    /// - [`ContractError::Unauthorized`] if `admin` is not the stored administrator.
+    ///
+    /// # Events
+    /// Publishes `("address_cleared",) → address`.
     pub fn clear_address(env: Env, admin: Address, address: Address) -> Result<(), ContractError> {
         Self::require_admin(&env, &admin)?;
         let was_blocked: bool = env
@@ -295,6 +371,16 @@ impl ComplianceContract {
         Ok(())
     }
 
+    /// Resume normal operation after a pause.
+    ///
+    /// # Parameters
+    /// - `admin`: Current administrator. Must authorize this call.
+    ///
+    /// # Errors
+    /// - [`ContractError::Unauthorized`] if `admin` is not the stored administrator.
+    ///
+    /// # Events
+    /// Publishes `("compliance_unpaused",) → admin`.
     pub fn unpause(env: Env, admin: Address) -> Result<(), ContractError> {
         Self::require_admin(&env, &admin)?;
         env.storage().instance().set(&DataKey::Paused, &false);
@@ -407,49 +493,37 @@ impl ComplianceContract {
         Ok(())
     }
 
-    /// Returns the current compliance state for every tracked address.
-    /// Requires admin authentication for audit-trail accountability.
-    pub fn export_snapshot(env: Env, admin: Address) -> Vec<(Address, AddressState)> {
-        Self::require_admin(&env, &admin).expect("Unauthorized");
-        let index: Vec<Address> = env
+    /// Compute the current [`AddressState`] for a single address without auth.
+    fn address_state(env: &Env, addr: &Address) -> AddressState {
+        let blocked: bool = env
             .storage()
-            .instance()
-            .get(&DataKey::AddressIndex)
-            .unwrap_or(Vec::new(&env));
-        let mut out: Vec<(Address, AddressState)> = Vec::new(&env);
-        for addr in index.iter() {
-            let blocked: bool = env
-                .storage()
-                .persistent()
-                .get(&DataKey::Blocked(addr.clone()))
-                .unwrap_or(false);
-            let state = if blocked {
-                AddressState::Blocked
-            } else {
-                let allowed: bool = env
-                    .storage()
-                    .persistent()
-                    .get(&DataKey::Allowed(addr.clone()))
-                    .unwrap_or(false);
-                if !allowed {
-                    AddressState::Blocked
-                } else if let Some(expires_at) = env
-                    .storage()
-                    .persistent()
-                    .get::<_, u64>(&DataKey::AllowedUntil(addr.clone()))
-                {
-                    if env.ledger().timestamp() < expires_at {
-                        AddressState::Allowed
-                    } else {
-                        AddressState::Expired
-                    }
-                } else {
-                    AddressState::Allowed
-                }
-            };
-            out.push_back((addr, state));
+            .persistent()
+            .get(&DataKey::Blocked(addr.clone()))
+            .unwrap_or(false);
+        if blocked {
+            return AddressState::Blocked;
         }
-        out
+        let allowed: bool = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Allowed(addr.clone()))
+            .unwrap_or(false);
+        if !allowed {
+            return AddressState::Blocked;
+        }
+        if let Some(expires_at) = env
+            .storage()
+            .persistent()
+            .get::<_, u64>(&DataKey::AllowedUntil(addr.clone()))
+        {
+            if env.ledger().timestamp() < expires_at {
+                AddressState::Allowed
+            } else {
+                AddressState::Expired
+            }
+        } else {
+            AddressState::Allowed
+        }
     }
 
     /// Adds `address` to the instance-level AddressIndex if not already present.
