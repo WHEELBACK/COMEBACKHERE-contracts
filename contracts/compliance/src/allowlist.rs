@@ -13,6 +13,8 @@ pub enum DataKey {
     SchemaVersion,
     Paused,
     AddressIndex,
+    AllowCount,
+    BlockCount,
 }
 
 #[contracttype]

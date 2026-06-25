@@ -69,6 +69,11 @@ impl ComplianceContract {
     pub fn allow_address(env: Env, admin: Address, address: Address) -> Result<(), ContractError> {
         Self::require_admin(&env, &admin)?;
         Self::require_not_paused(&env)?;
+        let was_allowed: bool = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Allowed(address.clone()))
+            .unwrap_or(false);
         env.storage()
             .persistent()
             .set(&DataKey::Allowed(address.clone()), &true);
@@ -76,6 +81,16 @@ impl ComplianceContract {
         env.storage()
             .persistent()
             .remove(&DataKey::AllowedUntil(address.clone()));
+        if !was_allowed {
+            let count: u64 = env
+                .storage()
+                .instance()
+                .get(&DataKey::AllowCount)
+                .unwrap_or(0u64);
+            env.storage()
+                .instance()
+                .set(&DataKey::AllowCount, &(count + 1));
+        }
         Self::track_address(&env, &address);
         env.events()
             .publish((Symbol::new(&env, "address_allowed"),), address);
@@ -91,6 +106,11 @@ impl ComplianceContract {
         reason: Option<Bytes>,
     ) -> Result<(), ContractError> {
         Self::require_admin(&env, &admin)?;
+        let was_blocked: bool = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Blocked(address.clone()))
+            .unwrap_or(false);
         env.storage()
             .persistent()
             .set(&DataKey::Blocked(address.clone()), &true);
@@ -207,12 +227,42 @@ impl ComplianceContract {
 
     pub fn clear_address(env: Env, admin: Address, address: Address) -> Result<(), ContractError> {
         Self::require_admin(&env, &admin)?;
+        let was_blocked: bool = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Blocked(address.clone()))
+            .unwrap_or(false);
+        let was_allowed: bool = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Allowed(address.clone()))
+            .unwrap_or(false);
         env.storage()
             .persistent()
             .set(&DataKey::Blocked(address.clone()), &false);
         env.storage()
             .persistent()
             .set(&DataKey::Allowed(address.clone()), &true);
+        if was_blocked {
+            let count: u64 = env
+                .storage()
+                .instance()
+                .get(&DataKey::BlockCount)
+                .unwrap_or(0u64);
+            env.storage()
+                .instance()
+                .set(&DataKey::BlockCount, &count.saturating_sub(1));
+        }
+        if !was_allowed {
+            let count: u64 = env
+                .storage()
+                .instance()
+                .get(&DataKey::AllowCount)
+                .unwrap_or(0u64);
+            env.storage()
+                .instance()
+                .set(&DataKey::AllowCount, &(count + 1));
+        }
         Self::track_address(&env, &address);
         env.events()
             .publish((Symbol::new(&env, "address_cleared"),), address);
