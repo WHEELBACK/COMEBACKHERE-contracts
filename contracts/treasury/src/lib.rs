@@ -359,6 +359,7 @@ impl TreasuryContract {
     }
 
     /// Resolves an open dispute in favour of claimant or counterparty (admin-only).
+    /// When the last open dispute for a settlement is resolved, the settlement hold is released.
     /// Panics: `DisputeNotFound`, `DisputeAlreadyResolved`, `ContractPaused`.
     /// Emits: `dispute_resolved`.
     pub fn resolve_dispute(env: Env, admin: Address, dispute_id: u64, in_favor_of_claimant: bool) {
@@ -368,8 +369,30 @@ impl TreasuryContract {
             .unwrap_or_else(|| panic!("DisputeNotFound"));
         if dispute.status != DisputeStatus::Raised { panic!("DisputeAlreadyResolved"); }
         dispute.status = if in_favor_of_claimant { DisputeStatus::ResolvedClaimant } else { DisputeStatus::ResolvedCounterparty };
+        let settlement_id = dispute.settlement_id;
         env.storage().persistent().set(&DataKey::Dispute(dispute_id), &dispute);
         env.events().publish((Symbol::new(&env, "dispute_resolved"), dispute_id), dispute);
+        if let Some(mut settlement) = env.storage().persistent().get::<DataKey, Settlement>(&DataKey::Settlement(settlement_id)) {
+            if settlement.status == SettlementStatus::OnHold {
+                let dispute_count: u64 = env.storage().instance().get(&DataKey::DisputeCount).unwrap_or(0);
+                let mut has_open = false;
+                let mut i = 1u64;
+                while i <= dispute_count {
+                    if let Some(d) = env.storage().persistent().get::<DataKey, Dispute>(&DataKey::Dispute(i)) {
+                        if d.settlement_id == settlement_id && d.status == DisputeStatus::Raised {
+                            has_open = true;
+                            break;
+                        }
+                    }
+                    i += 1;
+                }
+                if !has_open {
+                    settlement.status = SettlementStatus::Pending;
+                    settlement.hold_reason = SettlementHoldReason::None;
+                    env.storage().persistent().set(&DataKey::Settlement(settlement_id), &settlement);
+                }
+            }
+        }
     }
 
     /// Casts a weighted signer vote on a dispute; auto-resolves when cumulative weight meets threshold.
