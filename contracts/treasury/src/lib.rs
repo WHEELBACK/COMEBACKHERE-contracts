@@ -11,6 +11,8 @@ pub use multisig::{
 use settlement::{require_authorized_signer, signer_weight};
 use soroban_sdk::{contract, contractimpl, token, Address, Env, Symbol, Vec};
 
+const SETTLEMENT_TTL: u64 = 7 * 24 * 60 * 60;
+
 impl TreasuryError {
     fn panic(&self) -> ! {
         match self {
@@ -86,6 +88,7 @@ impl TreasuryContract {
             approval_weight: weight,
             status: SettlementStatus::Pending,
             hold_reason: SettlementHoldReason::None,
+            proposed_at: env.ledger().timestamp(),
         };
         env.storage().persistent().set(&DataKey::Settlement(id), &settlement);
         env.storage().instance().set(&DataKey::SettlementCount, &id);
@@ -263,6 +266,23 @@ impl TreasuryContract {
     pub fn get_settlement(env: Env, settlement_id: u64) -> Settlement {
         env.storage().persistent().get(&DataKey::Settlement(settlement_id))
             .unwrap_or_else(|| panic!("SettlementNotFound"))
+    }
+
+    /// Expires a pending settlement whose TTL has elapsed (admin-only).
+    /// Panics: `SettlementNotFound`, `AlreadyExecuted`, `TtlNotElapsed`.
+    /// Emits: `settlement_expired`.
+    pub fn expire_settlement(env: Env, admin: Address, settlement_id: u64) {
+        Self::require_admin(&env, &admin);
+        let mut settlement: Settlement = env.storage().persistent()
+            .get(&DataKey::Settlement(settlement_id))
+            .unwrap_or_else(|| panic!("SettlementNotFound"));
+        if settlement.status != SettlementStatus::Pending { panic!("AlreadyExecuted"); }
+        if env.ledger().timestamp() <= settlement.proposed_at + SETTLEMENT_TTL {
+            panic!("TtlNotElapsed");
+        }
+        settlement.status = SettlementStatus::Expired;
+        env.storage().persistent().set(&DataKey::Settlement(settlement_id), &settlement);
+        env.events().publish((Symbol::new(&env, "settlement_expired"), settlement_id), settlement);
     }
 
     /// Updates the multisig approval threshold required to execute settlements (admin-only).
