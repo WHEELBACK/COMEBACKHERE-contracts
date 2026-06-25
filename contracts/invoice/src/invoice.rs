@@ -23,6 +23,10 @@ pub enum InvoiceError {
     AmountPrecision = 12,
     /// Merchant nonce has already been used for a previous invoice.
     DuplicateNonce = 13,
+    /// expires_in_seconds exceeds MAX_EXPIRY_SECONDS.
+    ExpiryTooLong = 14,
+    /// Provided metadata_hash does not match the stored hash on the invoice.
+    MetadataMismatch = 15,
 }
 
 #[contracttype]
