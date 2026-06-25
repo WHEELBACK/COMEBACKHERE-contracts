@@ -24,6 +24,7 @@ pub enum AddressState {
 
 #[contracterror]
 #[derive(Clone, Copy, Debug, PartialEq)]
+#[repr(u32)]
 pub enum ComplianceError {
     AlreadyInitialized = 1,
 }
