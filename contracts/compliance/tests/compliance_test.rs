@@ -722,3 +722,16 @@ fn old_admin_pause_returns_unauthorized_after_transfer() {
     let result = client.try_pause(&admin);
     assert_eq!(result, Err(Ok(ContractError::Unauthorized)));
 }
+
+// ── Idempotent allow_address ──────────────────────────────────────────────────
+
+#[test]
+fn allow_address_is_idempotent() {
+    let (_env, admin, subject, client) = setup();
+    // First allow
+    client.allow_address(&admin, &subject);
+    assert!(client.is_allowed(&subject));
+    // Second allow on already-allowed address — must not error and must stay allowed
+    client.allow_address(&admin, &subject);
+    assert!(client.is_allowed(&subject));
+}
