@@ -1,5 +1,5 @@
 use compliance::{ComplianceContract, ComplianceContractClient, ContractError};
-use soroban_sdk::{testutils::{Address as _, Events}, Address, Env, Symbol};
+use soroban_sdk::{testutils::{Address as _, Events, Ledger}, Address, Env, Symbol};
 
 fn setup() -> (Env, Address, Address, ComplianceContractClient<'static>) {
     let env = Env::default();
@@ -251,7 +251,7 @@ fn emits_address_allowed_event() {
     let (env, admin, subject, client) = setup();
     client.allow_address(&admin, &subject);
     assert!(client.is_allowed(&subject));
-    assert_eq!(last_event_symbol(&env), "address_allowed");
+    assert_eq!(last_event_symbol(&env), Symbol::new(&env, "address_allowed"));
 }
 
 // Verification: address_blocked event schema
@@ -264,7 +264,7 @@ fn emits_address_blocked_event() {
     assert!(client.is_allowed(&subject));
     client.block_address(&admin, &subject, &None);
     assert!(!client.is_allowed(&subject));
-    assert_eq!(last_event_symbol(&env), "address_blocked");
+    assert_eq!(last_event_symbol(&env), Symbol::new(&env, "address_blocked"));
 }
 
 // Verification: address_cleared event schema
@@ -278,7 +278,7 @@ fn emits_address_cleared_event() {
     assert!(!client.is_allowed(&subject));
     client.clear_address(&admin, &subject);
     assert!(client.is_allowed(&subject));
-    assert_eq!(last_event_symbol(&env), "address_cleared");
+    assert_eq!(last_event_symbol(&env), Symbol::new(&env, "address_cleared"));
 }
 
 // ── #121 Allow/Block/Clear precedence matrix ─────────────────────────────────
@@ -520,7 +520,7 @@ fn bulk_check_returns_correct_results() {
 fn bulk_check_blocked_address_returns_false() {
     let (env, admin, subject, client) = setup();
     client.allow_address(&admin, &subject);
-    client.block_address(&admin, &subject);
+    client.block_address(&admin, &subject, &None);
 
     let addresses = soroban_sdk::vec![&env, subject.clone()];
     let results = client.bulk_check_addresses(&addresses);
@@ -549,7 +549,7 @@ fn non_admin_cannot_call_allow_address() {
 fn non_admin_cannot_call_block_address() {
     let (env, _admin, subject, client) = setup();
     let non_admin = Address::generate(&env);
-    let result = client.try_block_address(&non_admin, &subject);
+    let result = client.try_block_address(&non_admin, &subject, &None);
     assert_eq!(result, Err(Ok(ContractError::Unauthorized)));
 }
 
@@ -625,7 +625,7 @@ fn export_snapshot_reflects_state_changes() {
     assert_eq!(snap1.get(0).unwrap().1, AddressState::Allowed);
 
     client.block_address(&admin, &subject, &None);
-    let snap2 = client.export_snapshot(&admin);
+    let snap2 = client.export_snapshot(&admin, &0, &0);
     assert_eq!(snap2.get(0).unwrap().1, AddressState::Blocked);
 }
 
@@ -691,6 +691,39 @@ fn unpause_restores_allow_address_and_allow_address_until() {
     assert!(client.is_allowed(&subject2));
 }
 
+// ── #70 clear_address resets both allowed and blocked flags ───────────────────
+
+#[test]
+fn clear_address_resets_blocked_flag_and_sets_allowed() {
+    use compliance::AddressState;
+    let (_env, admin, subject, client) = setup();
+    // Block first (without prior allow so Blocked=true, Allowed=false)
+    client.block_address(&admin, &subject, &None);
+    assert!(!client.is_allowed(&subject));
+
+    client.clear_address(&admin, &subject);
+
+    // is_allowed must return true
+    assert!(client.is_allowed(&subject));
+    // address_status must reflect Allowed (not Blocked)
+    let state = client.address_status(&admin, &subject);
+    assert_eq!(state, AddressState::Allowed);
+}
+
+#[test]
+fn clear_address_never_blocked_is_idempotent() {
+    use compliance::AddressState;
+    let (_env, admin, subject, client) = setup();
+    // Address was never blocked or allowed; clear_address must not error
+    client.clear_address(&admin, &subject);
+    assert!(client.is_allowed(&subject));
+    let state = client.address_status(&admin, &subject);
+    assert_eq!(state, AddressState::Allowed);
+    // Second clear is also idempotent
+    client.clear_address(&admin, &subject);
+    assert!(client.is_allowed(&subject));
+}
+
 // ── #85 Old admin loses authority after admin transfer completes ──────────────
 
 #[test]
@@ -723,15 +756,44 @@ fn old_admin_pause_returns_unauthorized_after_transfer() {
     assert_eq!(result, Err(Ok(ContractError::Unauthorized)));
 }
 
-// ── Idempotent allow_address ──────────────────────────────────────────────────
+// ── #64 allow_address_until expiry boundary conditions ────────────────────────
+// is_allowed uses strict `<` comparison: timestamp < expires_at.
 
 #[test]
-fn allow_address_is_idempotent() {
-    let (_env, admin, subject, client) = setup();
-    // First allow
-    client.allow_address(&admin, &subject);
+fn allow_address_until_expires_at_minus_one_is_allowed() {
+    let (env, admin, subject, client) = setup();
+    let expires_at: u64 = 1_000;
+    client.allow_address_until(&admin, &subject, &expires_at);
+    env.ledger().with_mut(|l| l.timestamp = expires_at - 1);
     assert!(client.is_allowed(&subject));
-    // Second allow on already-allowed address — must not error and must stay allowed
+}
+
+#[test]
+fn allow_address_until_at_expires_at_is_not_allowed() {
+    let (env, admin, subject, client) = setup();
+    let expires_at: u64 = 1_000;
+    client.allow_address_until(&admin, &subject, &expires_at);
+    env.ledger().with_mut(|l| l.timestamp = expires_at);
+    assert!(!client.is_allowed(&subject));
+}
+
+#[test]
+fn allow_address_until_expires_at_plus_one_is_not_allowed() {
+    let (env, admin, subject, client) = setup();
+    let expires_at: u64 = 1_000;
+    client.allow_address_until(&admin, &subject, &expires_at);
+    env.ledger().with_mut(|l| l.timestamp = expires_at + 1);
+    assert!(!client.is_allowed(&subject));
+}
+
+#[test]
+fn allow_address_after_allow_address_until_removes_expiry() {
+    let (env, admin, subject, client) = setup();
+    let expires_at: u64 = 1_000;
+    client.allow_address_until(&admin, &subject, &expires_at);
+    // Promote to permanent allow — clears the AllowedUntil key.
     client.allow_address(&admin, &subject);
+    // Even past the original expiry the address is still allowed.
+    env.ledger().with_mut(|l| l.timestamp = expires_at + 9_999);
     assert!(client.is_allowed(&subject));
 }

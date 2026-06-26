@@ -156,6 +156,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "comebackhere-compliance-client"
+version = "0.1.0"
+dependencies = [
+ "comebackhere-compliance",
+ "soroban-sdk",
+]
+
+[[package]]
 name = "comebackhere-invoice"
 version = "1.0.0"
 dependencies = [

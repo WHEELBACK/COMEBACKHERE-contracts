@@ -23,6 +23,10 @@ pub enum InvoiceError {
     AmountPrecision = 12,
     /// Merchant nonce has already been used for a previous invoice.
     DuplicateNonce = 13,
+    /// expires_in_seconds exceeds MAX_EXPIRY_SECONDS.
+    ExpiryTooLong = 14,
+    /// Provided metadata_hash does not match the stored hash on the invoice.
+    MetadataMismatch = 15,
 }
 
 #[contracttype]
@@ -70,15 +74,27 @@ pub struct Invoice {
     pub merchant_nonce: u64,
 }
 
+/// A single status transition recorded in an invoice's audit log.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct StatusTransition {
+    pub from: InvoiceStatus,
+    pub to: InvoiceStatus,
+    pub timestamp: u64,
+}
+
 #[contracttype]
 #[derive(Clone)]
 pub enum DataKey {
     Invoice(u64),
     InvoiceCount,
     Admin,
+    PendingAdmin,
     Paused,
     /// Configurable grace window (seconds) added to expires_at during mark_paid.
     GraceWindow,
     /// Tracks used merchant nonces: (merchant_address, nonce) → bool.
     MerchantNonce(Address, u64),
+    /// Secondary index: merchant address → Vec<u64> of invoice IDs.
+    MerchantInvoices(Address),
 }

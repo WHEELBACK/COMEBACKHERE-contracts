@@ -14,7 +14,18 @@
 // - Optional types (Option<u64>) serialize to null or value
 
 use crate::invoice::Invoice;
-use soroban_sdk::{Address, Env, Symbol};
+use soroban_sdk::{contracttype, Address, Env, Symbol};
+
+/// Emitted when an amendment changes an invoice's amount fields.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct InvoiceAmountUpdatedEvent {
+    pub id: u64,
+    pub old_amount_usdc: i128,
+    pub new_amount_usdc: i128,
+    pub old_gross_usdc: i128,
+    pub new_gross_usdc: i128,
+}
 
 pub fn invoice_created(env: &Env, id: u64, invoice: &Invoice) {
     env.events()

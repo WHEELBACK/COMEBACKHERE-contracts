@@ -1,6 +1,9 @@
 use crate::invoice::{DataKey, InvoiceError, USDC_FACTOR};
 use soroban_sdk::{Address, Env};
 
+/// Maximum allowed expiry duration: 5 years in seconds.
+pub const MAX_EXPIRY_SECONDS: u64 = 5 * 365 * 24 * 60 * 60;
+
 pub fn require_not_paused(env: &Env) -> Result<(), InvoiceError> {
     let paused: bool = env
         .storage()
@@ -34,6 +37,14 @@ pub fn require_positive_amount(amount_usdc: i128, gross_usdc: i128) -> Result<()
 pub fn require_usdc_precision(amount_usdc: i128, gross_usdc: i128) -> Result<(), InvoiceError> {
     if amount_usdc < USDC_FACTOR || gross_usdc < USDC_FACTOR {
         return Err(InvoiceError::AmountPrecision);
+    }
+    Ok(())
+}
+
+/// Reject expires_in_seconds values that exceed MAX_EXPIRY_SECONDS.
+pub fn require_expiry_not_too_long(expires_in_seconds: u64) -> Result<(), InvoiceError> {
+    if expires_in_seconds > MAX_EXPIRY_SECONDS {
+        return Err(InvoiceError::ExpiryTooLong);
     }
     Ok(())
 }
