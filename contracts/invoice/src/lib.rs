@@ -47,6 +47,14 @@ impl InvoiceContract {
             .unwrap_or(0u64)
     }
 
+    /// Return the total number of invoices created so clients can page by id.
+    pub fn get_invoice_count(env: Env) -> u64 {
+        env.storage()
+            .instance()
+            .get(&DataKey::InvoiceCount)
+            .unwrap_or(0u64)
+    }
+
     // --- #58: merchant invoice nonce ---
 
     /// Create an invoice with an optional merchant-supplied nonce for idempotency.
