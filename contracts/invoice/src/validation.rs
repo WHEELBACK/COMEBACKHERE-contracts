@@ -37,3 +37,15 @@ pub fn require_usdc_precision(amount_usdc: i128, gross_usdc: i128) -> Result<(),
     }
     Ok(())
 }
+
+/// If payment_link_hash is provided, it must be exactly 32 bytes (SHA-256 digest).
+pub fn require_valid_payment_link_hash(
+    hash: &crate::invoice::MaybeBytes,
+) -> Result<(), InvoiceError> {
+    if let crate::invoice::MaybeBytes::Some(ref bytes) = hash {
+        if bytes.len() != 32 {
+            return Err(InvoiceError::InvalidPaymentLinkHash);
+        }
+    }
+    Ok(())
+}

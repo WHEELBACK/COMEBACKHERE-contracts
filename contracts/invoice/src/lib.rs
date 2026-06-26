@@ -9,6 +9,7 @@ pub use invoice::{DataKey, Invoice, InvoiceError, InvoiceStatus, MaybeAddress, M
 use soroban_sdk::{contract, contractimpl, Address, Env, Vec};
 use validation::{
     require_admin, require_not_paused, require_positive_amount, require_usdc_precision,
+    require_valid_payment_link_hash,
 };
 
 #[contract]
@@ -68,6 +69,8 @@ impl InvoiceContract {
         require_positive_amount(amount_usdc, gross_usdc)?;
         // #57: USDC decimal precision guardrail
         require_usdc_precision(amount_usdc, gross_usdc)?;
+        // #16: payment_link_hash must be exactly 32 bytes when provided
+        require_valid_payment_link_hash(&payment_link_hash)?;
 
         if expires_in_seconds == 0 {
             return Err(InvoiceError::ZeroDuration);
@@ -197,6 +200,30 @@ impl InvoiceContract {
             .get(&DataKey::Invoice(id))
             .ok_or(InvoiceError::NotFound)?;
         Ok(invoice.status)
+    }
+
+    /// Return up to `limit` invoices starting at `start_id` (inclusive).
+    /// Gaps (IDs with no stored invoice) are skipped.
+    pub fn get_invoices_page(env: Env, start_id: u64, limit: u64) -> Vec<Invoice> {
+        let count: u64 = env
+            .storage()
+            .instance()
+            .get(&DataKey::InvoiceCount)
+            .unwrap_or(0);
+        let end_id = start_id.saturating_add(limit).min(count + 1);
+        let mut result = Vec::new(&env);
+        let mut current = start_id;
+        while current < end_id {
+            if let Some(invoice) = env
+                .storage()
+                .persistent()
+                .get::<DataKey, Invoice>(&DataKey::Invoice(current))
+            {
+                result.push_back(invoice);
+            }
+            current += 1;
+        }
+        result
     }
 
     // Issue #49: merchant or admin may cancel a pending invoice

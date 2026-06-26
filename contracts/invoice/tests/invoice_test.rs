@@ -574,6 +574,7 @@ fn test_abi_snapshot_matches_contract() {
         "mark_paid",
         "get_invoice",
         "get_invoice_status",
+        "get_invoices_page",
         "cancel_invoice",
         "request_refund",
         "batch_expire",
@@ -1494,3 +1495,320 @@ fn test_same_nonce_different_merchants_accepted() {
             assert_eq!(paid.payer, MaybeAddress::Some(payer));
             assert!(paid.paid_at.is_some(), "paid_at must be set after mark_paid");
         }
+
+// --- #14: cancel_invoice authorization matrix ---
+
+// 1. Merchant cancels own invoice → Ok
+#[test]
+fn test_cancel_invoice_merchant_ok() {
+    let (env, _admin, client) = setup();
+    let merchant = Address::generate(&env);
+    let id = client.create_invoice(
+        &merchant,
+        &10_000_000,
+        &10_250_000,
+        &3600,
+        &MaybeBytes::None,
+        &MaybeBytes::None,
+        &0,
+    );
+    client.cancel_invoice(&merchant, &id);
+    assert_eq!(client.get_invoice(&id).status, InvoiceStatus::Cancelled);
+}
+
+// 2. Admin cancels any invoice → Ok
+#[test]
+fn test_cancel_invoice_admin_ok() {
+    let (env, admin, client) = setup();
+    let merchant = Address::generate(&env);
+    let id = client.create_invoice(
+        &merchant,
+        &10_000_000,
+        &10_250_000,
+        &3600,
+        &MaybeBytes::None,
+        &MaybeBytes::None,
+        &0,
+    );
+    client.cancel_invoice(&admin, &id);
+    assert_eq!(client.get_invoice(&id).status, InvoiceStatus::Cancelled);
+}
+
+// 3. Third-party cancels → Unauthorized
+#[test]
+fn test_cancel_invoice_third_party_unauthorized() {
+    let (env, _admin, client) = setup();
+    let merchant = Address::generate(&env);
+    let third_party = Address::generate(&env);
+    let id = client.create_invoice(
+        &merchant,
+        &10_000_000,
+        &10_250_000,
+        &3600,
+        &MaybeBytes::None,
+        &MaybeBytes::None,
+        &0,
+    );
+    let err = client
+        .try_cancel_invoice(&third_party, &id)
+        .unwrap_err()
+        .unwrap();
+    assert_eq!(err, InvoiceError::Unauthorized);
+}
+
+// 4. Cancelling a Paid invoice → NotPending
+#[test]
+fn test_cancel_invoice_paid_returns_not_pending() {
+    let (env, admin, client) = setup();
+    let merchant = Address::generate(&env);
+    let payer = Address::generate(&env);
+    let id = client.create_invoice(
+        &merchant,
+        &10_000_000,
+        &10_250_000,
+        &3600,
+        &MaybeBytes::None,
+        &MaybeBytes::None,
+        &0,
+    );
+    client.mark_paid(&admin, &id, &payer);
+    let err = client
+        .try_cancel_invoice(&merchant, &id)
+        .unwrap_err()
+        .unwrap();
+    assert_eq!(err, InvoiceError::NotPending);
+}
+
+// 5. Cancelling an already-Cancelled invoice → NotPending
+#[test]
+fn test_cancel_invoice_already_cancelled_returns_not_pending() {
+    let (env, _admin, client) = setup();
+    let merchant = Address::generate(&env);
+    let id = client.create_invoice(
+        &merchant,
+        &10_000_000,
+        &10_250_000,
+        &3600,
+        &MaybeBytes::None,
+        &MaybeBytes::None,
+        &0,
+    );
+    client.cancel_invoice(&merchant, &id);
+    let err = client
+        .try_cancel_invoice(&merchant, &id)
+        .unwrap_err()
+        .unwrap();
+    assert_eq!(err, InvoiceError::NotPending);
+}
+
+// --- #17: nonce deduplication + zero-nonce bypass ---
+
+// Consecutive calls with the same non-zero nonce → DuplicateNonce on second call
+#[test]
+fn test_nonce_dedup_second_call_rejected() {
+    let (env, _admin, client) = setup();
+    let merchant = Address::generate(&env);
+    client.create_invoice(
+        &merchant,
+        &10_000_000,
+        &10_000_000,
+        &3600,
+        &MaybeBytes::None,
+        &MaybeBytes::None,
+        &1001,
+    );
+    let err = client
+        .try_create_invoice(
+            &merchant,
+            &10_000_000,
+            &10_000_000,
+            &3600,
+            &MaybeBytes::None,
+            &MaybeBytes::None,
+            &1001,
+        )
+        .unwrap_err()
+        .unwrap();
+    assert_eq!(err, InvoiceError::DuplicateNonce);
+}
+
+// Nonce 0 is never stored → calling twice with nonce=0 always succeeds
+#[test]
+fn test_zero_nonce_always_accepted() {
+    let (env, _admin, client) = setup();
+    let merchant = Address::generate(&env);
+    let id1 = client.create_invoice(
+        &merchant,
+        &10_000_000,
+        &10_000_000,
+        &3600,
+        &MaybeBytes::None,
+        &MaybeBytes::None,
+        &0,
+    );
+    let id2 = client.create_invoice(
+        &merchant,
+        &10_000_000,
+        &10_000_000,
+        &3600,
+        &MaybeBytes::None,
+        &MaybeBytes::None,
+        &0,
+    );
+    assert_ne!(id1, id2, "zero-nonce bypass must create distinct invoices");
+    assert_eq!(client.get_invoice(&id1).merchant_nonce, 0);
+    assert_eq!(client.get_invoice(&id2).merchant_nonce, 0);
+}
+
+// --- #16: payment_link_hash 32-byte validation ---
+
+// Providing exactly 32 bytes → Ok
+#[test]
+fn test_payment_link_hash_32_bytes_accepted() {
+    let (env, _admin, client) = setup();
+    let merchant = Address::generate(&env);
+    let mut raw = [0u8; 32];
+    for (i, b) in raw.iter_mut().enumerate() {
+        *b = i as u8;
+    }
+    let hash = MaybeBytes::Some(soroban_sdk::Bytes::from_array(&env, &raw));
+    let id = client.create_invoice(
+        &merchant,
+        &10_000_000,
+        &10_000_000,
+        &3600,
+        &MaybeBytes::None,
+        &hash,
+        &0,
+    );
+    assert_eq!(client.get_invoice(&id).payment_link_hash, hash);
+}
+
+// Providing fewer than 32 bytes → InvalidPaymentLinkHash
+#[test]
+fn test_payment_link_hash_short_rejected() {
+    let (env, _admin, client) = setup();
+    let merchant = Address::generate(&env);
+    let hash = MaybeBytes::Some(soroban_sdk::Bytes::from_array(&env, &[0u8; 16]));
+    let err = client
+        .try_create_invoice(
+            &merchant,
+            &10_000_000,
+            &10_000_000,
+            &3600,
+            &MaybeBytes::None,
+            &hash,
+            &0,
+        )
+        .unwrap_err()
+        .unwrap();
+    assert_eq!(err, InvoiceError::InvalidPaymentLinkHash);
+}
+
+// Providing more than 32 bytes → InvalidPaymentLinkHash
+#[test]
+fn test_payment_link_hash_long_rejected() {
+    let (env, _admin, client) = setup();
+    let merchant = Address::generate(&env);
+    let hash = MaybeBytes::Some(soroban_sdk::Bytes::from_array(&env, &[0u8; 64]));
+    let err = client
+        .try_create_invoice(
+            &merchant,
+            &10_000_000,
+            &10_000_000,
+            &3600,
+            &MaybeBytes::None,
+            &hash,
+            &0,
+        )
+        .unwrap_err()
+        .unwrap();
+    assert_eq!(err, InvoiceError::InvalidPaymentLinkHash);
+}
+
+// MaybeBytes::None skips the hash check
+#[test]
+fn test_payment_link_hash_none_accepted() {
+    let (env, _admin, client) = setup();
+    let merchant = Address::generate(&env);
+    let id = client.create_invoice(
+        &merchant,
+        &10_000_000,
+        &10_000_000,
+        &3600,
+        &MaybeBytes::None,
+        &MaybeBytes::None,
+        &0,
+    );
+    assert_eq!(client.get_invoice(&id).payment_link_hash, MaybeBytes::None);
+}
+
+// --- #18: get_invoices_page ---
+
+#[test]
+fn test_get_invoices_page_returns_range() {
+    let (env, _admin, client) = setup();
+    let merchant = Address::generate(&env);
+    for _ in 0..5 {
+        client.create_invoice(
+            &merchant,
+            &10_000_000,
+            &10_000_000,
+            &3600,
+            &MaybeBytes::None,
+            &MaybeBytes::None,
+            &0,
+        );
+    }
+    let page = client.get_invoices_page(&1, &3);
+    assert_eq!(page.len(), 3);
+    assert_eq!(page.get(0).unwrap().id, 1);
+    assert_eq!(page.get(1).unwrap().id, 2);
+    assert_eq!(page.get(2).unwrap().id, 3);
+}
+
+#[test]
+fn test_get_invoices_page_clamps_to_count() {
+    let (env, _admin, client) = setup();
+    let merchant = Address::generate(&env);
+    for _ in 0..3 {
+        client.create_invoice(
+            &merchant,
+            &10_000_000,
+            &10_000_000,
+            &3600,
+            &MaybeBytes::None,
+            &MaybeBytes::None,
+            &0,
+        );
+    }
+    // asking for 100 from id=2, but only ids 2 and 3 exist
+    let page = client.get_invoices_page(&2, &100);
+    assert_eq!(page.len(), 2);
+    assert_eq!(page.get(0).unwrap().id, 2);
+    assert_eq!(page.get(1).unwrap().id, 3);
+}
+
+#[test]
+fn test_get_invoices_page_empty_when_no_invoices() {
+    let (_env, _admin, client) = setup();
+    let page = client.get_invoices_page(&1, &10);
+    assert_eq!(page.len(), 0);
+}
+
+#[test]
+fn test_get_invoices_page_start_beyond_count() {
+    let (env, _admin, client) = setup();
+    let merchant = Address::generate(&env);
+    client.create_invoice(
+        &merchant,
+        &10_000_000,
+        &10_000_000,
+        &3600,
+        &MaybeBytes::None,
+        &MaybeBytes::None,
+        &0,
+    );
+    let page = client.get_invoices_page(&100, &10);
+    assert_eq!(page.len(), 0);
+}

@@ -23,6 +23,8 @@ pub enum InvoiceError {
     AmountPrecision = 12,
     /// Merchant nonce has already been used for a previous invoice.
     DuplicateNonce = 13,
+    /// payment_link_hash was provided but is not exactly 32 bytes.
+    InvalidPaymentLinkHash = 14,
 }
 
 #[contracttype]
