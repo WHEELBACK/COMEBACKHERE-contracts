@@ -9,7 +9,7 @@ The `initialize` function in `contracts/compliance/src/lib.rs:22-30` already gua
 An explicit regression test ensures this guard is not accidentally removed or broken during future refactoring.
 
 ## Test added
-`reinitialize_is_rejected` in `contracts/compliance/tests/compliance_test.rs:177-182`
+`reinitialize_is_rejected` in `contracts/compliance/tests/compliance_test.rs:239-244`
 
 - Calls `setup()` which invokes `initialize` once with a legitimate admin.
 - Attempts a second `initialize` call via `try_initialize` with a different address.
