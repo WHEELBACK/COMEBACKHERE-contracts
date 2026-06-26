@@ -573,6 +573,7 @@ fn test_abi_snapshot_matches_contract() {
         "mark_paid",
         "get_invoice",
         "get_invoice_status",
+        "get_invoices_page",
         "cancel_invoice",
         "request_refund",
         "batch_expire",
