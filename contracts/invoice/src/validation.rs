@@ -1,6 +1,9 @@
 use crate::invoice::{DataKey, InvoiceError, USDC_FACTOR};
 use soroban_sdk::{Address, Env};
 
+/// Maximum allowed expiry duration: 5 years in seconds.
+pub const MAX_EXPIRY_SECONDS: u64 = 5 * 365 * 24 * 60 * 60;
+
 pub fn require_not_paused(env: &Env) -> Result<(), InvoiceError> {
     let paused: bool = env
         .storage()
@@ -38,14 +41,10 @@ pub fn require_usdc_precision(amount_usdc: i128, gross_usdc: i128) -> Result<(),
     Ok(())
 }
 
-/// If payment_link_hash is provided, it must be exactly 32 bytes (SHA-256 digest).
-pub fn require_valid_payment_link_hash(
-    hash: &crate::invoice::MaybeBytes,
-) -> Result<(), InvoiceError> {
-    if let crate::invoice::MaybeBytes::Some(ref bytes) = hash {
-        if bytes.len() != 32 {
-            return Err(InvoiceError::InvalidPaymentLinkHash);
-        }
+/// Reject expires_in_seconds values that exceed MAX_EXPIRY_SECONDS.
+pub fn require_expiry_not_too_long(expires_in_seconds: u64) -> Result<(), InvoiceError> {
+    if expires_in_seconds > MAX_EXPIRY_SECONDS {
+        return Err(InvoiceError::ExpiryTooLong);
     }
     Ok(())
 }

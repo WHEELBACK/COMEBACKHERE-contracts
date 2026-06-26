@@ -19,6 +19,7 @@ pub enum TreasuryError {
     RotationNotFound = 13,
     RotationAlreadyExecuted = 14,
     SettlementOnHold = 15,
+    DisputeNotExpired = 16,
 }
 
 // Issue #48: reason codes attached to a held settlement; None means not on hold
@@ -41,6 +42,7 @@ pub enum SettlementStatus {
     PartiallyExecuted,
     OnHold,
     Cancelled,
+    Expired,
 }
 
 #[contracttype]
@@ -49,6 +51,7 @@ pub enum DisputeStatus {
     Raised,
     ResolvedClaimant,
     ResolvedCounterparty,
+    Expired,
 }
 
 #[contracttype]
@@ -61,6 +64,7 @@ pub struct Settlement {
     pub approval_weight: u32,
     pub status: SettlementStatus,
     pub hold_reason: SettlementHoldReason,
+    pub proposed_at: u64,
 }
 
 #[contracttype]
@@ -75,6 +79,7 @@ pub struct Dispute {
     pub resolution_approvals: Vec<Address>,
     pub resolution_weight: u32,
     pub resolution_for_claimant: bool,
+    pub dispute_expires_at: u64,
 }
 
 #[contracttype]
@@ -111,4 +116,5 @@ pub enum DataKey {
     RotationCount,
     SignerRotation(u64),
     MerchantPayoutAddress(Address),
+    SignerList,
 }

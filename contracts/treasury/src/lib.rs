@@ -11,6 +11,8 @@ pub use multisig::{
 use settlement::{require_authorized_signer, signer_weight};
 use soroban_sdk::{contract, contractimpl, token, Address, Env, Symbol, Vec};
 
+const SETTLEMENT_TTL: u64 = 7 * 24 * 60 * 60;
+
 impl TreasuryError {
     fn panic(&self) -> ! {
         match self {
@@ -29,6 +31,7 @@ impl TreasuryError {
             TreasuryError::RotationNotFound => panic!("RotationNotFound"),
             TreasuryError::RotationAlreadyExecuted => panic!("RotationAlreadyExecuted"),
             TreasuryError::SettlementOnHold => panic!("SettlementOnHold"),
+            TreasuryError::DisputeNotExpired => panic!("DisputeNotExpired"),
         }
     }
 }
@@ -56,6 +59,9 @@ impl TreasuryContract {
         env.storage().instance().set(&DataKey::Paused, &false);
         env.storage().instance().set(&DataKey::DisputeCount, &0u64);
         env.storage().instance().set(&DataKey::Signer(admin.clone()), &1u32);
+        let mut signer_list = Vec::new(&env);
+        signer_list.push_back(admin.clone());
+        env.storage().instance().set(&DataKey::SignerList, &signer_list);
         env.events().publish((Symbol::new(&env, "treasury_initialized"),), admin);
         Ok(())
     }
@@ -65,6 +71,20 @@ impl TreasuryContract {
     pub fn set_signer(env: Env, admin: Address, signer: Address, weight: u32) {
         Self::require_admin(&env, &admin);
         env.storage().instance().set(&DataKey::Signer(signer.clone()), &weight);
+        let mut list: Vec<Address> = env.storage().instance()
+            .get(&DataKey::SignerList).unwrap_or_else(|| Vec::new(&env));
+        if weight > 0 {
+            if !list.contains(&signer) {
+                list.push_back(signer.clone());
+                env.storage().instance().set(&DataKey::SignerList, &list);
+            }
+        } else {
+            let mut updated = Vec::new(&env);
+            for s in list.iter() {
+                if s != signer { updated.push_back(s); }
+            }
+            env.storage().instance().set(&DataKey::SignerList, &updated);
+        }
         env.events().publish((Symbol::new(&env, "signer_weight_set"), signer), weight);
     }
 
@@ -86,6 +106,7 @@ impl TreasuryContract {
             approval_weight: weight,
             status: SettlementStatus::Pending,
             hold_reason: SettlementHoldReason::None,
+            proposed_at: env.ledger().timestamp(),
         };
         env.storage().persistent().set(&DataKey::Settlement(id), &settlement);
         env.storage().instance().set(&DataKey::SettlementCount, &id);
@@ -265,6 +286,23 @@ impl TreasuryContract {
             .unwrap_or_else(|| panic!("SettlementNotFound"))
     }
 
+    /// Expires a pending settlement whose TTL has elapsed (admin-only).
+    /// Panics: `SettlementNotFound`, `AlreadyExecuted`, `TtlNotElapsed`.
+    /// Emits: `settlement_expired`.
+    pub fn expire_settlement(env: Env, admin: Address, settlement_id: u64) {
+        Self::require_admin(&env, &admin);
+        let mut settlement: Settlement = env.storage().persistent()
+            .get(&DataKey::Settlement(settlement_id))
+            .unwrap_or_else(|| panic!("SettlementNotFound"));
+        if settlement.status != SettlementStatus::Pending { panic!("AlreadyExecuted"); }
+        if env.ledger().timestamp() <= settlement.proposed_at + SETTLEMENT_TTL {
+            panic!("TtlNotElapsed");
+        }
+        settlement.status = SettlementStatus::Expired;
+        env.storage().persistent().set(&DataKey::Settlement(settlement_id), &settlement);
+        env.events().publish((Symbol::new(&env, "settlement_expired"), settlement_id), settlement);
+    }
+
     /// Updates the multisig approval threshold required to execute settlements (admin-only).
     /// Errors: `ZeroThreshold`.
     /// Emits: `threshold_updated`.
@@ -293,10 +331,11 @@ impl TreasuryContract {
     }
 
     /// Raises a dispute against `settlement_id`, placing it on hold while the dispute is open.
+    /// `expires_at` is a ledger UNIX timestamp (seconds) after which `expire_dispute` may be called.
     /// Preconditions: contract not paused; `amount` must be positive.
     /// Panics: `ContractPaused`, `InvalidAmount`.
     /// Emits: `dispute_raised`.
-    pub fn raise_dispute(env: Env, claimant: Address, settlement_id: u64, counterparty: Address, amount: i128) -> u64 {
+    pub fn raise_dispute(env: Env, claimant: Address, settlement_id: u64, counterparty: Address, amount: i128, expires_at: u64) -> u64 {
         Self::require_not_paused(&env);
         claimant.require_auth();
         if amount <= 0 { panic!("InvalidAmount"); }
@@ -314,6 +353,7 @@ impl TreasuryContract {
             resolution_approvals: Vec::new(&env),
             resolution_weight: 0,
             resolution_for_claimant: false,
+            dispute_expires_at: expires_at,
         };
         env.storage().persistent().set(&DataKey::Dispute(id), &dispute);
         env.storage().instance().set(&DataKey::DisputeCount, &id);
@@ -321,7 +361,37 @@ impl TreasuryContract {
         id
     }
 
+    /// Transitions a `Raised` dispute to `Expired` after its deadline and releases the
+    /// associated settlement from `OnHold` back to `Pending`.
+    /// Panics: `Unauthorized`, `DisputeNotFound`, `DisputeAlreadyResolved`, `DisputeNotExpired`.
+    /// Emits: `dispute_expired`.
+    pub fn expire_dispute(env: Env, admin: Address, dispute_id: u64) {
+        Self::require_admin(&env, &admin);
+        let mut dispute: Dispute = env.storage().persistent().get(&DataKey::Dispute(dispute_id))
+            .unwrap_or_else(|| panic!("DisputeNotFound"));
+        if dispute.status != DisputeStatus::Raised { panic!("DisputeAlreadyResolved"); }
+        if env.ledger().timestamp() < dispute.dispute_expires_at { panic!("DisputeNotExpired"); }
+        dispute.status = DisputeStatus::Expired;
+        env.storage().persistent().set(&DataKey::Dispute(dispute_id), &dispute);
+        if let Some(mut settlement) = env.storage().persistent().get::<DataKey, Settlement>(&DataKey::Settlement(dispute.settlement_id)) {
+            if settlement.status == SettlementStatus::OnHold {
+                settlement.status = SettlementStatus::Pending;
+                settlement.hold_reason = SettlementHoldReason::None;
+                env.storage().persistent().set(&DataKey::Settlement(dispute.settlement_id), &settlement);
+            }
+        }
+        env.events().publish((Symbol::new(&env, "dispute_expired"), dispute_id), dispute);
+    }
+
+    /// Returns the dispute with the given `dispute_id`.
+    /// Panics: `DisputeNotFound`.
+    pub fn get_dispute(env: Env, dispute_id: u64) -> Dispute {
+        env.storage().persistent().get(&DataKey::Dispute(dispute_id))
+            .unwrap_or_else(|| panic!("DisputeNotFound"))
+    }
+
     /// Resolves an open dispute in favour of claimant or counterparty (admin-only).
+    /// When the last open dispute for a settlement is resolved, the settlement hold is released.
     /// Panics: `DisputeNotFound`, `DisputeAlreadyResolved`, `ContractPaused`.
     /// Emits: `dispute_resolved`.
     pub fn resolve_dispute(env: Env, admin: Address, dispute_id: u64, in_favor_of_claimant: bool) {
@@ -331,8 +401,30 @@ impl TreasuryContract {
             .unwrap_or_else(|| panic!("DisputeNotFound"));
         if dispute.status != DisputeStatus::Raised { panic!("DisputeAlreadyResolved"); }
         dispute.status = if in_favor_of_claimant { DisputeStatus::ResolvedClaimant } else { DisputeStatus::ResolvedCounterparty };
+        let settlement_id = dispute.settlement_id;
         env.storage().persistent().set(&DataKey::Dispute(dispute_id), &dispute);
         env.events().publish((Symbol::new(&env, "dispute_resolved"), dispute_id), dispute);
+        if let Some(mut settlement) = env.storage().persistent().get::<DataKey, Settlement>(&DataKey::Settlement(settlement_id)) {
+            if settlement.status == SettlementStatus::OnHold {
+                let dispute_count: u64 = env.storage().instance().get(&DataKey::DisputeCount).unwrap_or(0);
+                let mut has_open = false;
+                let mut i = 1u64;
+                while i <= dispute_count {
+                    if let Some(d) = env.storage().persistent().get::<DataKey, Dispute>(&DataKey::Dispute(i)) {
+                        if d.settlement_id == settlement_id && d.status == DisputeStatus::Raised {
+                            has_open = true;
+                            break;
+                        }
+                    }
+                    i += 1;
+                }
+                if !has_open {
+                    settlement.status = SettlementStatus::Pending;
+                    settlement.hold_reason = SettlementHoldReason::None;
+                    env.storage().persistent().set(&DataKey::Settlement(settlement_id), &settlement);
+                }
+            }
+        }
     }
 
     /// Casts a weighted signer vote on a dispute; auto-resolves when cumulative weight meets threshold.
@@ -443,6 +535,19 @@ impl TreasuryContract {
     pub fn get_allowed_tokens(env: Env) -> Vec<Address> {
         env.storage().instance().get(&DataKey::TokenAllowlist)
             .unwrap_or_else(|| Vec::new(&env))
+    }
+
+    /// Returns all registered signers and their current weights.
+    pub fn get_all_signers(env: Env) -> Vec<(Address, u32)> {
+        let list: Vec<Address> = env.storage().instance()
+            .get(&DataKey::SignerList).unwrap_or_else(|| Vec::new(&env));
+        let mut result = Vec::new(&env);
+        for signer in list.iter() {
+            let weight: u32 = env.storage().instance()
+                .get(&DataKey::Signer(signer.clone())).unwrap_or(0);
+            result.push_back((signer, weight));
+        }
+        result
     }
 
     /// Proposes replacing `old_signer` with `new_signer` in the authorised signer set.
