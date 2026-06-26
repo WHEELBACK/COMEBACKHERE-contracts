@@ -27,6 +27,10 @@ pub enum InvoiceError {
     ExpiryTooLong = 14,
     /// Provided metadata_hash does not match the stored hash on the invoice.
     MetadataMismatch = 15,
+    /// No pending admin transfer to accept.
+    NoPendingAdmin = 16,
+    /// payment_link_hash was provided but is not exactly 32 bytes.
+    InvalidPaymentLinkHash = 17,
 }
 
 #[contracttype]
@@ -97,4 +101,6 @@ pub enum DataKey {
     MerchantNonce(Address, u64),
     /// Secondary index: merchant address → Vec<u64> of invoice IDs.
     MerchantInvoices(Address),
+    /// Ordered audit log of status transitions for an invoice.
+    InvoiceHistory(u64),
 }

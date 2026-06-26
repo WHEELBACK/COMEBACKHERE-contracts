@@ -54,7 +54,7 @@ fn test_mark_paid_rejected_when_paused() {
     let payer = Address::generate(&env);
     client.pause(&admin);
     let err = client
-        .try_mark_paid(&admin, &id, &payer)
+        .try_mark_paid(&admin, &id, &payer, &MaybeBytes::None)
         .unwrap_err()
         .unwrap();
     assert_eq!(err, InvoiceError::ContractPaused);
@@ -65,7 +65,7 @@ fn test_release_escrow_rejected_when_paused() {
     let (env, admin, client) = setup();
     let id = make_invoice(&env, &client);
     let payer = Address::generate(&env);
-    client.mark_paid(&admin, &id, &payer);
+    client.mark_paid(&admin, &id, &payer, &MaybeBytes::None);
     client.pause(&admin);
     let err = client
         .try_release_escrow(&admin, &id)
@@ -100,7 +100,7 @@ fn test_request_refund_rejected_when_paused() {
         &MaybeBytes::None,
         &0,
     );
-    client.mark_paid(&admin, &id, &payer);
+    client.mark_paid(&admin, &id, &payer, &MaybeBytes::None);
     client.pause(&admin);
     let err = client
         .try_request_refund(&payer, &id)
