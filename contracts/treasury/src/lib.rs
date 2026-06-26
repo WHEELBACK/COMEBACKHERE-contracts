@@ -29,6 +29,7 @@ impl TreasuryError {
             TreasuryError::RotationNotFound => panic!("RotationNotFound"),
             TreasuryError::RotationAlreadyExecuted => panic!("RotationAlreadyExecuted"),
             TreasuryError::SettlementOnHold => panic!("SettlementOnHold"),
+            TreasuryError::DisputeNotExpired => panic!("DisputeNotExpired"),
         }
     }
 }
@@ -293,10 +294,11 @@ impl TreasuryContract {
     }
 
     /// Raises a dispute against `settlement_id`, placing it on hold while the dispute is open.
+    /// `expires_at` is a ledger UNIX timestamp (seconds) after which `expire_dispute` may be called.
     /// Preconditions: contract not paused; `amount` must be positive.
     /// Panics: `ContractPaused`, `InvalidAmount`.
     /// Emits: `dispute_raised`.
-    pub fn raise_dispute(env: Env, claimant: Address, settlement_id: u64, counterparty: Address, amount: i128) -> u64 {
+    pub fn raise_dispute(env: Env, claimant: Address, settlement_id: u64, counterparty: Address, amount: i128, expires_at: u64) -> u64 {
         Self::require_not_paused(&env);
         claimant.require_auth();
         if amount <= 0 { panic!("InvalidAmount"); }
@@ -314,11 +316,41 @@ impl TreasuryContract {
             resolution_approvals: Vec::new(&env),
             resolution_weight: 0,
             resolution_for_claimant: false,
+            dispute_expires_at: expires_at,
         };
         env.storage().persistent().set(&DataKey::Dispute(id), &dispute);
         env.storage().instance().set(&DataKey::DisputeCount, &id);
         env.events().publish((Symbol::new(&env, "dispute_raised"), id), dispute);
         id
+    }
+
+    /// Transitions a `Raised` dispute to `Expired` after its deadline and releases the
+    /// associated settlement from `OnHold` back to `Pending`.
+    /// Panics: `Unauthorized`, `DisputeNotFound`, `DisputeAlreadyResolved`, `DisputeNotExpired`.
+    /// Emits: `dispute_expired`.
+    pub fn expire_dispute(env: Env, admin: Address, dispute_id: u64) {
+        Self::require_admin(&env, &admin);
+        let mut dispute: Dispute = env.storage().persistent().get(&DataKey::Dispute(dispute_id))
+            .unwrap_or_else(|| panic!("DisputeNotFound"));
+        if dispute.status != DisputeStatus::Raised { panic!("DisputeAlreadyResolved"); }
+        if env.ledger().timestamp() < dispute.dispute_expires_at { panic!("DisputeNotExpired"); }
+        dispute.status = DisputeStatus::Expired;
+        env.storage().persistent().set(&DataKey::Dispute(dispute_id), &dispute);
+        if let Some(mut settlement) = env.storage().persistent().get::<DataKey, Settlement>(&DataKey::Settlement(dispute.settlement_id)) {
+            if settlement.status == SettlementStatus::OnHold {
+                settlement.status = SettlementStatus::Pending;
+                settlement.hold_reason = SettlementHoldReason::None;
+                env.storage().persistent().set(&DataKey::Settlement(dispute.settlement_id), &settlement);
+            }
+        }
+        env.events().publish((Symbol::new(&env, "dispute_expired"), dispute_id), dispute);
+    }
+
+    /// Returns the dispute with the given `dispute_id`.
+    /// Panics: `DisputeNotFound`.
+    pub fn get_dispute(env: Env, dispute_id: u64) -> Dispute {
+        env.storage().persistent().get(&DataKey::Dispute(dispute_id))
+            .unwrap_or_else(|| panic!("DisputeNotFound"))
     }
 
     /// Resolves an open dispute in favour of claimant or counterparty (admin-only).
