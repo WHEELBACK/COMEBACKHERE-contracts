@@ -42,6 +42,38 @@ fn test_create_invoice_succeeds() {
 }
 
 #[test]
+fn test_get_invoice_count_tracks_created_invoices() {
+    let (env, _admin, client) = setup();
+    let merchant = Address::generate(&env);
+
+    assert_eq!(client.get_invoice_count(), 0);
+
+    let first_id = client.create_invoice(
+        &merchant,
+        &10_000_000,
+        &10_250_000,
+        &3600,
+        &MaybeBytes::None,
+        &MaybeBytes::None,
+        &0,
+    );
+    assert_eq!(first_id, 1);
+    assert_eq!(client.get_invoice_count(), 1);
+
+    let second_id = client.create_invoice(
+        &merchant,
+        &20_000_000,
+        &20_500_000,
+        &7200,
+        &MaybeBytes::None,
+        &MaybeBytes::None,
+        &0,
+    );
+    assert_eq!(second_id, 2);
+    assert_eq!(client.get_invoice_count(), 2);
+}
+
+#[test]
 fn test_mark_paid_requires_admin() {
     let (env, _admin, client) = setup();
     let merchant = Address::generate(&env);
