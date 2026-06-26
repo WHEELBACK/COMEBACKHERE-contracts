@@ -74,6 +74,18 @@ pub struct Invoice {
     pub merchant_nonce: u64,
 }
 
+/// Parameters for a single invoice within a batch_create_invoice call.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct BatchInvoiceParams {
+    pub amount_usdc: i128,
+    pub gross_usdc: i128,
+    pub expires_in_seconds: u64,
+    pub metadata_hash: MaybeBytes,
+    pub payment_link_hash: MaybeBytes,
+    pub merchant_nonce: u64,
+}
+
 /// A single status transition recorded in an invoice's audit log.
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
