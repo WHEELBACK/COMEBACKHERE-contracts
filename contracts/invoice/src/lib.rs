@@ -34,6 +34,9 @@ pub struct InvoiceContract;
 
 #[contractimpl]
 impl InvoiceContract {
+    /// Bootstrap the contract. Sets `admin`, initialises `InvoiceCount` to 0, and
+    /// clears the paused flag. Returns [`InvoiceError::AlreadyInitialized`] if called
+    /// more than once. Requires auth from `admin`.
     pub fn initialize(env: Env, admin: Address) -> Result<(), InvoiceError> {
         if env.storage().instance().has(&DataKey::Admin) {
             return Err(InvoiceError::AlreadyInitialized);
@@ -75,9 +78,23 @@ impl InvoiceContract {
 
     // --- #58: merchant invoice nonce ---
 
-    /// Create an invoice with an optional merchant-supplied nonce for idempotency.
-    /// Pass `merchant_nonce = 0` to skip nonce enforcement.
-    /// A non-zero nonce that has already been used for this merchant is rejected.
+    /// Create a new invoice and return its assigned ID.
+    ///
+    /// - `merchant` — the payee; must sign this call.
+    /// - `amount_usdc` — net payment amount in USDC micro-units (must be > 0).
+    /// - `gross_usdc` — gross amount including fees (must be ≥ `amount_usdc`).
+    /// - `expires_in_seconds` — TTL from now; must be > 0 and within the max allowed window.
+    /// - `metadata_hash` — optional 32-byte content hash for off-chain metadata.
+    /// - `payment_link_hash` — optional 32-byte hash identifying the payment link.
+    /// - `merchant_nonce` — idempotency key; pass `0` to skip duplicate detection.
+    ///   A non-zero value that has already been used by this merchant returns
+    ///   [`InvoiceError::DuplicateNonce`].
+    ///
+    /// Errors: [`InvoiceError::Paused`], [`InvoiceError::ZeroAmount`],
+    /// [`InvoiceError::GrossLessThanNet`], [`InvoiceError::InvalidUsdcPrecision`],
+    /// [`InvoiceError::InvalidPaymentLinkHash`], [`InvoiceError::ZeroDuration`],
+    /// [`InvoiceError::ExpiryTooLong`], [`InvoiceError::ExpiryOverflow`],
+    /// [`InvoiceError::DuplicateNonce`].
     #[allow(clippy::too_many_arguments)]
     pub fn create_invoice(
         env: Env,
@@ -155,6 +172,19 @@ impl InvoiceContract {
         Ok(id)
     }
 
+    /// Mark a `Pending` invoice as `Paid`. Admin-only.
+    ///
+    /// - `id` — invoice to settle.
+    /// - `payer` — address of the paying party, stored on the invoice.
+    /// - `provided_metadata_hash` — when not `MaybeBytes::None`, must match the
+    ///   hash stored at creation time; prevents accidental cross-invoice settlement.
+    ///
+    /// Respects the grace window set via [`Self::set_grace_window`]: the ledger
+    /// timestamp must be strictly less than `expires_at + grace_window`.
+    ///
+    /// Errors: [`InvoiceError::Unauthorized`], [`InvoiceError::Paused`],
+    /// [`InvoiceError::NotFound`], [`InvoiceError::NotPending`],
+    /// [`InvoiceError::MetadataMismatch`], [`InvoiceError::Expired`].
     pub fn mark_paid(
         env: Env,
         admin: Address,
@@ -232,6 +262,9 @@ impl InvoiceContract {
         Ok(())
     }
 
+    /// Return the full [`Invoice`] for `id`.
+    ///
+    /// Errors: [`InvoiceError::NotFound`] if no invoice exists at that ID.
     pub fn get_invoice(env: Env, id: u64) -> Result<Invoice, InvoiceError> {
         env.storage()
             .persistent()
@@ -239,6 +272,9 @@ impl InvoiceContract {
             .ok_or(InvoiceError::NotFound)
     }
 
+    /// Return only the [`InvoiceStatus`] for `id` (cheaper than a full `get_invoice`).
+    ///
+    /// Errors: [`InvoiceError::NotFound`] if no invoice exists at that ID.
     pub fn get_invoice_status(env: Env, id: u64) -> Result<InvoiceStatus, InvoiceError> {
         let invoice: Invoice = env
             .storage()
@@ -272,6 +308,14 @@ impl InvoiceContract {
         result
     }
 
+    /// Cancel a `Pending` invoice. May be called by the invoice merchant or by the admin.
+    ///
+    /// Requires auth from `caller`. Transitions the invoice to `Cancelled` and emits
+    /// a cancellation event.
+    ///
+    /// Errors: [`InvoiceError::Paused`], [`InvoiceError::NotFound`],
+    /// [`InvoiceError::Unauthorized`] (caller is neither merchant nor admin),
+    /// [`InvoiceError::NotPending`].
     // Issue #49: merchant or admin may cancel a pending invoice
     pub fn cancel_invoice(env: Env, caller: Address, id: u64) -> Result<(), InvoiceError> {
         caller.require_auth();
@@ -327,6 +371,14 @@ impl InvoiceContract {
         Ok(expired_count)
     }
 
+    /// Open a refund dispute on a `Paid` invoice. May only be called by the payer
+    /// recorded on the invoice. Requires auth from `payer`.
+    ///
+    /// Transitions the invoice from `Paid` → `RefundRequested` and emits a refund
+    /// request event for off-chain dispute resolution.
+    ///
+    /// Errors: [`InvoiceError::Paused`], [`InvoiceError::NotFound`],
+    /// [`InvoiceError::NotPaid`], [`InvoiceError::Unauthorized`].
     // payer may request a refund on a paid invoice (escrow dispute)
     pub fn request_refund(env: Env, payer: Address, id: u64) -> Result<(), InvoiceError> {
         payer.require_auth();
@@ -410,6 +462,10 @@ impl InvoiceContract {
         Ok(())
     }
 
+    /// Pause the contract. Admin-only. All state-mutating entrypoints that call
+    /// `require_not_paused` will reject calls while paused.
+    ///
+    /// Errors: [`InvoiceError::Unauthorized`].
     pub fn pause(env: Env, admin: Address) -> Result<(), InvoiceError> {
         require_admin(&env, &admin)?;
         env.storage().instance().set(&DataKey::Paused, &true);
@@ -417,6 +473,10 @@ impl InvoiceContract {
         Ok(())
     }
 
+    /// Resume a paused contract. Admin-only. Restores normal operation after a
+    /// previous [`Self::pause`] call.
+    ///
+    /// Errors: [`InvoiceError::Unauthorized`].
     pub fn unpause(env: Env, admin: Address) -> Result<(), InvoiceError> {
         require_admin(&env, &admin)?;
         env.storage().instance().set(&DataKey::Paused, &false);
