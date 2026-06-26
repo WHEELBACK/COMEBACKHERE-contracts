@@ -691,6 +691,39 @@ fn unpause_restores_allow_address_and_allow_address_until() {
     assert!(client.is_allowed(&subject2));
 }
 
+// ── #70 clear_address resets both allowed and blocked flags ───────────────────
+
+#[test]
+fn clear_address_resets_blocked_flag_and_sets_allowed() {
+    use compliance::AddressState;
+    let (_env, admin, subject, client) = setup();
+    // Block first (without prior allow so Blocked=true, Allowed=false)
+    client.block_address(&admin, &subject, &None);
+    assert!(!client.is_allowed(&subject));
+
+    client.clear_address(&admin, &subject);
+
+    // is_allowed must return true
+    assert!(client.is_allowed(&subject));
+    // address_status must reflect Allowed (not Blocked)
+    let state = client.address_status(&admin, &subject);
+    assert_eq!(state, AddressState::Allowed);
+}
+
+#[test]
+fn clear_address_never_blocked_is_idempotent() {
+    use compliance::AddressState;
+    let (_env, admin, subject, client) = setup();
+    // Address was never blocked or allowed; clear_address must not error
+    client.clear_address(&admin, &subject);
+    assert!(client.is_allowed(&subject));
+    let state = client.address_status(&admin, &subject);
+    assert_eq!(state, AddressState::Allowed);
+    // Second clear is also idempotent
+    client.clear_address(&admin, &subject);
+    assert!(client.is_allowed(&subject));
+}
+
 // ── #85 Old admin loses authority after admin transfer completes ──────────────
 
 #[test]
