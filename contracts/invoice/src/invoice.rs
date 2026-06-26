@@ -70,6 +70,15 @@ pub struct Invoice {
     pub merchant_nonce: u64,
 }
 
+/// A single status transition recorded in an invoice's audit log.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct StatusTransition {
+    pub from: InvoiceStatus,
+    pub to: InvoiceStatus,
+    pub timestamp: u64,
+}
+
 #[contracttype]
 #[derive(Clone)]
 pub enum DataKey {
@@ -81,4 +90,6 @@ pub enum DataKey {
     GraceWindow,
     /// Tracks used merchant nonces: (merchant_address, nonce) → bool.
     MerchantNonce(Address, u64),
+    /// Chronological list of status transitions for an invoice.
+    InvoiceHistory(u64),
 }

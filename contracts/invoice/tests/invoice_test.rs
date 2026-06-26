@@ -1494,3 +1494,31 @@ fn test_same_nonce_different_merchants_accepted() {
             assert_eq!(paid.payer, MaybeAddress::Some(payer));
             assert!(paid.paid_at.is_some(), "paid_at must be set after mark_paid");
         }
+
+// #22: batch_expire silently skips IDs that do not exist in storage
+#[test]
+fn test_batch_expire_skips_nonexistent_ids() {
+    let (env, admin, client) = setup();
+    let merchant = Address::generate(&env);
+
+    let id = client.create_invoice(
+        &merchant,
+        &10_000_000,
+        &10_250_000,
+        &1,
+        &MaybeBytes::None,
+        &MaybeBytes::None,
+        &0,
+    );
+
+    // Advance past expiry
+    env.ledger().with_mut(|li| li.timestamp += 2);
+
+    // Mix valid expired ID with IDs that were never created
+    let ids = soroban_sdk::vec![&env, id, 9999u64, 8888u64];
+    let expired_count = client.batch_expire(&admin, &ids);
+
+    // Only the real invoice should be expired; non-existent IDs are silently skipped
+    assert_eq!(expired_count, 1);
+    assert_eq!(client.get_invoice(&id).status, InvoiceStatus::Expired);
+}
