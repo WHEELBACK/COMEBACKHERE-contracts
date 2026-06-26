@@ -168,11 +168,6 @@ impl ComplianceContract {
         reason: Option<Bytes>,
     ) -> Result<(), ContractError> {
         Self::require_admin(&env, &admin)?;
-        let was_blocked: bool = env
-            .storage()
-            .persistent()
-            .get(&DataKey::Blocked(address.clone()))
-            .unwrap_or(false);
         env.storage()
             .persistent()
             .set(&DataKey::Blocked(address.clone()), &true);
@@ -430,8 +425,6 @@ impl ComplianceContract {
     }
 
     /// Assign an operator address. Only admin may call this.
-    /// The operator can invoke read-only compliance queries (`get_allow_expiry`,
-    /// `address_status`) without holding admin privileges.
     pub fn set_operator(env: Env, admin: Address, operator: Address) -> Result<(), ContractError> {
         Self::require_admin(&env, &admin)?;
         env.storage().instance().set(&DataKey::Operator, &operator);
@@ -441,18 +434,40 @@ impl ComplianceContract {
     }
 
     /// Returns the raw expiry timestamp (seconds since epoch) for `address`, or
-    /// `None` if the address has no time-limited allow entry.
-    /// Requires admin or operator authentication.
-    pub fn get_allow_expiry(
-        env: Env,
-        caller: Address,
-        address: Address,
-    ) -> Result<Option<u64>, ContractError> {
-        Self::require_admin_or_operator(&env, &caller)?;
-        Ok(env
-            .storage()
+    /// `None` if the address has no time-limited allow entry (permanent allow or no allow).
+    pub fn get_allow_expiry(env: Env, address: Address) -> Option<u64> {
+        env.storage()
             .persistent()
-            .get::<_, u64>(&DataKey::AllowedUntil(address)))
+            .get::<_, u64>(&DataKey::AllowedUntil(address))
+    }
+
+    /// Returns a paginated snapshot of all tracked addresses and their current state.
+    /// Pass `offset=0, limit=0` to return all entries.
+    pub fn export_snapshot(
+        env: Env,
+        admin: Address,
+        offset: u32,
+        limit: u32,
+    ) -> Vec<(Address, AddressState)> {
+        Self::require_admin(&env, &admin).unwrap();
+        let index: Vec<Address> = env
+            .storage()
+            .instance()
+            .get(&DataKey::AddressIndex)
+            .unwrap_or(Vec::new(&env));
+        let mut result = Vec::new(&env);
+        let start = offset as usize;
+        let end = if limit == 0 {
+            index.len() as usize
+        } else {
+            (start + limit as usize).min(index.len() as usize)
+        };
+        for i in start..end {
+            let addr = index.get(i as u32).unwrap();
+            let state = Self::address_state(&env, &addr);
+            result.push_back((addr, state));
+        }
+        result
     }
 
     /// Returns the compliance state for `address` (Allowed, Blocked, or Expired).
