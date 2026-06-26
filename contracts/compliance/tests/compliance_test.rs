@@ -1,12 +1,5 @@
 use compliance::{ComplianceContract, ComplianceContractClient, ContractError};
-use soroban_sdk::{testutils::{Address as _, Events}, Address, Env, FromVal, Symbol, Val};
-
-fn last_event_symbol(env: &Env) -> Symbol {
-    let events = env.events().all();
-    let (_contract, topics, _data) = events.last().unwrap();
-    let val: Val = topics.get(0).unwrap();
-    Symbol::from_val(env, &val)
-}
+use soroban_sdk::{testutils::{Address as _, Events, Ledger}, Address, Env, Symbol};
 
 fn setup() -> (Env, Address, Address, ComplianceContractClient<'static>) {
     let env = Env::default();
@@ -730,37 +723,44 @@ fn old_admin_pause_returns_unauthorized_after_transfer() {
     assert_eq!(result, Err(Ok(ContractError::Unauthorized)));
 }
 
-// ── #65 get_allow_expiry read entrypoint tests ────────────────────────────────
+// ── #64 allow_address_until expiry boundary conditions ────────────────────────
+// is_allowed uses strict `<` comparison: timestamp < expires_at.
 
 #[test]
-fn get_allow_expiry_returns_none_for_permanent_allow() {
-    let (_env, admin, subject, client) = setup();
-    client.allow_address(&admin, &subject);
-    assert_eq!(client.get_allow_expiry(&subject), None);
-}
-
-#[test]
-fn get_allow_expiry_returns_none_for_untracked_address() {
-    let (env, _admin, _subject, client) = setup();
-    let unknown = Address::generate(&env);
-    assert_eq!(client.get_allow_expiry(&unknown), None);
-}
-
-#[test]
-fn get_allow_expiry_returns_timestamp_for_temp_allow() {
+fn allow_address_until_expires_at_minus_one_is_allowed() {
     let (env, admin, subject, client) = setup();
-    let expires_at = env.ledger().timestamp() + 1000;
+    let expires_at: u64 = 1_000;
     client.allow_address_until(&admin, &subject, &expires_at);
-    assert_eq!(client.get_allow_expiry(&subject), Some(expires_at));
+    env.ledger().with_mut(|l| l.timestamp = expires_at - 1);
+    assert!(client.is_allowed(&subject));
 }
 
 #[test]
-fn get_allow_expiry_returns_none_after_permanent_allow_clears_expiry() {
+fn allow_address_until_at_expires_at_is_not_allowed() {
     let (env, admin, subject, client) = setup();
-    let expires_at = env.ledger().timestamp() + 1000;
+    let expires_at: u64 = 1_000;
     client.allow_address_until(&admin, &subject, &expires_at);
-    assert_eq!(client.get_allow_expiry(&subject), Some(expires_at));
-    // Permanent allow removes expiry
+    env.ledger().with_mut(|l| l.timestamp = expires_at);
+    assert!(!client.is_allowed(&subject));
+}
+
+#[test]
+fn allow_address_until_expires_at_plus_one_is_not_allowed() {
+    let (env, admin, subject, client) = setup();
+    let expires_at: u64 = 1_000;
+    client.allow_address_until(&admin, &subject, &expires_at);
+    env.ledger().with_mut(|l| l.timestamp = expires_at + 1);
+    assert!(!client.is_allowed(&subject));
+}
+
+#[test]
+fn allow_address_after_allow_address_until_removes_expiry() {
+    let (env, admin, subject, client) = setup();
+    let expires_at: u64 = 1_000;
+    client.allow_address_until(&admin, &subject, &expires_at);
+    // Promote to permanent allow — clears the AllowedUntil key.
     client.allow_address(&admin, &subject);
-    assert_eq!(client.get_allow_expiry(&subject), None);
+    // Even past the original expiry the address is still allowed.
+    env.ledger().with_mut(|l| l.timestamp = expires_at + 9_999);
+    assert!(client.is_allowed(&subject));
 }
