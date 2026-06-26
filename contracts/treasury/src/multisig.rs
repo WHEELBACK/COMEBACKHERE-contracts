@@ -42,6 +42,7 @@ pub enum SettlementStatus {
     PartiallyExecuted,
     OnHold,
     Cancelled,
+    Expired,
 }
 
 #[contracttype]
@@ -63,6 +64,7 @@ pub struct Settlement {
     pub approval_weight: u32,
     pub status: SettlementStatus,
     pub hold_reason: SettlementHoldReason,
+    pub proposed_at: u64,
 }
 
 #[contracttype]
@@ -114,4 +116,5 @@ pub enum DataKey {
     RotationCount,
     SignerRotation(u64),
     MerchantPayoutAddress(Address),
+    SignerList,
 }
