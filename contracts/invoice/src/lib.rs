@@ -10,7 +10,7 @@ pub use invoice::{BatchInvoiceParams, DataKey, Invoice, InvoiceError, InvoiceSta
 use soroban_sdk::{contract, contractimpl, Address, Env, Vec};
 use validation::{
     require_admin, require_expiry_not_too_long, require_not_paused, require_positive_amount,
-    require_usdc_precision,
+    require_usdc_precision, require_valid_payment_link_hash,
 };
 
 fn append_history(env: &Env, id: u64, from: InvoiceStatus, to: InvoiceStatus) {
