@@ -381,6 +381,61 @@ impl InvoiceContract {
         Ok(())
     }
 
+    /// Amend a Pending invoice's amount fields before it has been paid or expired.
+    /// Only the merchant who created the invoice may call this.
+    pub fn amend_invoice(
+        env: Env,
+        merchant: Address,
+        id: u64,
+        new_amount_usdc: i128,
+        new_gross_usdc: i128,
+        new_expires_in_seconds: u64,
+    ) -> Result<(), InvoiceError> {
+        merchant.require_auth();
+        require_not_paused(&env)?;
+        require_positive_amount(new_amount_usdc, new_gross_usdc)?;
+        require_usdc_precision(new_amount_usdc, new_gross_usdc)?;
+        if new_expires_in_seconds == 0 {
+            return Err(InvoiceError::ZeroDuration);
+        }
+        require_expiry_not_too_long(new_expires_in_seconds)?;
+
+        let mut invoice: Invoice = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Invoice(id))
+            .ok_or(InvoiceError::NotFound)?;
+
+        if invoice.merchant != merchant {
+            return Err(InvoiceError::Unauthorized);
+        }
+        if invoice.status != InvoiceStatus::Pending {
+            return Err(InvoiceError::NotPending);
+        }
+
+        let event = InvoiceAmountUpdatedEvent {
+            id,
+            old_amount_usdc: invoice.amount_usdc,
+            new_amount_usdc,
+            old_gross_usdc: invoice.gross_usdc,
+            new_gross_usdc,
+        };
+
+        invoice.amount_usdc = new_amount_usdc;
+        invoice.gross_usdc = new_gross_usdc;
+        invoice.expires_at = env
+            .ledger()
+            .timestamp()
+            .checked_add(new_expires_in_seconds)
+            .ok_or(InvoiceError::ExpiryOverflow)?;
+
+        env.storage()
+            .persistent()
+            .set(&DataKey::Invoice(id), &invoice);
+        events::invoice_amended(&env, &event);
+        Ok(())
+    }
+
     /// Expire all pending invoices whose `expires_at` has passed.
     ///
     /// IDs that do not correspond to an existing invoice are silently skipped,

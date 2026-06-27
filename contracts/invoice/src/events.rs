@@ -73,3 +73,8 @@ pub fn contract_unpaused(env: &Env, admin: &Address) {
     env.events()
         .publish((Symbol::new(env, "contract_unpaused"),), admin);
 }
+
+pub fn invoice_amended(env: &Env, event: &InvoiceAmountUpdatedEvent) {
+    env.events()
+        .publish((Symbol::new(env, "invoice_amended"), event.id), event.clone());
+}
