@@ -435,6 +435,30 @@ impl InvoiceContract {
         Ok(())
     }
 
+    /// Approve a refund request. Admin-only. Transitions RefundRequested → Refunded.
+    pub fn approve_refund(env: Env, admin: Address, id: u64) -> Result<(), InvoiceError> {
+        require_admin(&env, &admin)?;
+        require_not_paused(&env)?;
+
+        let mut invoice: Invoice = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Invoice(id))
+            .ok_or(InvoiceError::NotFound)?;
+
+        if invoice.status != InvoiceStatus::RefundRequested {
+            return Err(InvoiceError::NotRefundRequested);
+        }
+
+        invoice.status = InvoiceStatus::Refunded;
+        env.storage()
+            .persistent()
+            .set(&DataKey::Invoice(id), &invoice);
+        append_history(&env, id, InvoiceStatus::RefundRequested, InvoiceStatus::Refunded);
+        events::refund_approved(&env, id, &invoice);
+        Ok(())
+    }
+
     // --- #9: paginated merchant invoice index read ---
 
     /// Return a page of invoice IDs for `merchant`.

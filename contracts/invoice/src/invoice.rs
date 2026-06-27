@@ -43,6 +43,8 @@ pub enum InvoiceStatus {
     RefundRequested,
     /// Escrow funds have been released to the merchant after payment confirmation.
     Released,
+    /// Refund has been approved by admin; terminal status for disputed invoices.
+    Refunded,
 }
 
 // contracttype enum wrappers for optional complex types; Option<Address> and

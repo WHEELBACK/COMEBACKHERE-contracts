@@ -54,6 +54,11 @@ pub fn invoice_refund_requested(env: &Env, id: u64, invoice: &Invoice) {
     );
 }
 
+pub fn refund_approved(env: &Env, id: u64, invoice: &Invoice) {
+    env.events()
+        .publish((Symbol::new(env, "refund_approved"), id), invoice.clone());
+}
+
 pub fn escrow_released(env: &Env, id: u64, invoice: &Invoice) {
     env.events()
         .publish((Symbol::new(env, "escrow_released"), id), invoice.clone());

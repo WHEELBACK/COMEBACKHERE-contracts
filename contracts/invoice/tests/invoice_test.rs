@@ -614,6 +614,7 @@ fn test_abi_snapshot_matches_contract() {
         "set_grace_window",
         "get_grace_window",
         "release_escrow",
+        "approve_refund",
     ]
     .iter()
     .copied()
@@ -628,6 +629,7 @@ fn test_abi_snapshot_matches_contract() {
         "escrow_released",
         "contract_paused",
         "contract_unpaused",
+        "refund_approved",
     ]
     .iter()
     .copied()
@@ -966,3 +968,68 @@ fn test_request_refund_only_recorded_payer_can_call() {
     assert_eq!(client.get_invoice(&id).status, InvoiceStatus::RefundRequested);
 }
 
+// --- approve_refund tests ---
+
+#[test]
+fn test_approve_refund_transitions_to_refunded() {
+    let (env, admin, client) = setup();
+    let merchant = Address::generate(&env);
+    let payer = Address::generate(&env);
+    let id = client.create_invoice(
+        &merchant,
+        &10_000_000,
+        &10_250_000,
+        &3600,
+        &MaybeBytes::None,
+        &MaybeBytes::None,
+        &0,
+    );
+    client.mark_paid(&admin, &id, &payer, &MaybeBytes::None);
+    client.request_refund(&payer, &id);
+    assert_eq!(client.get_invoice(&id).status, InvoiceStatus::RefundRequested);
+    client.approve_refund(&admin, &id);
+    assert_eq!(client.get_invoice(&id).status, InvoiceStatus::Refunded);
+}
+
+#[test]
+fn test_approve_refund_requires_admin() {
+    let (env, admin, client) = setup();
+    let merchant = Address::generate(&env);
+    let payer = Address::generate(&env);
+    let rogue = Address::generate(&env);
+    let id = client.create_invoice(
+        &merchant,
+        &10_000_000,
+        &10_250_000,
+        &3600,
+        &MaybeBytes::None,
+        &MaybeBytes::None,
+        &0,
+    );
+    client.mark_paid(&admin, &id, &payer, &MaybeBytes::None);
+    client.request_refund(&payer, &id);
+    let err = client.try_approve_refund(&rogue, &id).unwrap_err().unwrap();
+    assert_eq!(err, InvoiceError::Unauthorized);
+    assert_eq!(client.get_invoice(&id).status, InvoiceStatus::RefundRequested);
+}
+
+#[test]
+fn test_approve_refund_requires_refund_requested_status() {
+    let (env, admin, client) = setup();
+    let merchant = Address::generate(&env);
+    let payer = Address::generate(&env);
+    let id = client.create_invoice(
+        &merchant,
+        &10_000_000,
+        &10_250_000,
+        &3600,
+        &MaybeBytes::None,
+        &MaybeBytes::None,
+        &0,
+    );
+    client.mark_paid(&admin, &id, &payer, &MaybeBytes::None);
+    // Invoice is Paid, not RefundRequested → should fail.
+    let err = client.try_approve_refund(&admin, &id).unwrap_err().unwrap();
+    assert_eq!(err, InvoiceError::NotRefundRequested);
+    assert_eq!(client.get_invoice(&id).status, InvoiceStatus::Paid);
+}
