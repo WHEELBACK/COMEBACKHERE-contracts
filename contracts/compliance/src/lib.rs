@@ -40,6 +40,42 @@ impl ComplianceContract {
         Ok(())
     }
 
+    pub fn bulk_allow_addresses(
+        env: Env,
+        admin: Address,
+        addresses: Vec<Address>,
+    ) -> Result<(), ContractError> {
+        Self::require_admin(&env, &admin)?;
+        Self::require_not_paused(&env)?;
+        for address in addresses.iter() {
+            let was_allowed: bool = env
+                .storage()
+                .persistent()
+                .get(&DataKey::Allowed(address.clone()))
+                .unwrap_or(false);
+            env.storage()
+                .persistent()
+                .set(&DataKey::Allowed(address.clone()), &true);
+            env.storage()
+                .persistent()
+                .remove(&DataKey::AllowedUntil(address.clone()));
+            if !was_allowed {
+                let count: u64 = env
+                    .storage()
+                    .instance()
+                    .get(&DataKey::AllowCount)
+                    .unwrap_or(0u64);
+                env.storage()
+                    .instance()
+                    .set(&DataKey::AllowCount, &(count + 1));
+            }
+            Self::track_address(&env, &address);
+            env.events()
+                .publish((Symbol::new(&env, "address_allowed"),), address);
+        }
+        Ok(())
+    }
+
     pub fn bulk_check_addresses(env: Env, addresses: Vec<Address>) -> Vec<bool> {
         let mut results = Vec::new(&env);
         for address in addresses.iter() {
@@ -158,6 +194,24 @@ impl ComplianceContract {
             .get(&DataKey::Tier(address))
             .unwrap_or(0u8)
     }
+
+    pub fn bulk_block_addresses(
+        env: Env,
+        admin: Address,
+        addresses: Vec<Address>,
+    ) -> Result<(), ContractError> {
+        Self::require_admin(&env, &admin)?;
+        for address in addresses.iter() {
+            env.storage()
+                .persistent()
+                .set(&DataKey::Blocked(address.clone()), &true);
+            Self::track_address(&env, &address);
+            env.events()
+                .publish((Symbol::new(&env, "address_blocked"),), address);
+        }
+        Ok(())
+    }
+
 
     // Emergency policy: block_address and clear_address are permitted while paused
     // so the admin can remediate compromised addresses without unpausing first.

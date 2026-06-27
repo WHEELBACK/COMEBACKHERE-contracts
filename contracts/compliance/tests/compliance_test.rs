@@ -797,3 +797,13 @@ fn allow_address_after_allow_address_until_removes_expiry() {
     env.ledger().with_mut(|l| l.timestamp = expires_at + 9_999);
     assert!(client.is_allowed(&subject));
 }
+
+// ── #63 Block flag overrides allow flag in is_allowed ─────────────────────────
+
+#[test]
+fn block_flag_overrides_allow_flag_in_is_allowed() {
+    let (_env, admin, subject, client) = setup();
+    client.allow_address(&admin, &subject);
+    client.block_address(&admin, &subject, &None);
+    assert!(!client.is_allowed(&subject));
+}
