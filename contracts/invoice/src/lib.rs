@@ -5,7 +5,7 @@ mod invoice;
 mod validation;
 
 pub use events::InvoiceAmountUpdatedEvent;
-pub use invoice::{DataKey, Invoice, InvoiceError, InvoiceStatus, MaybeAddress, MaybeBytes, StatusTransition};
+pub use invoice::{BatchInvoiceParams, DataKey, Invoice, InvoiceError, InvoiceStatus, MaybeAddress, MaybeBytes};
 
 use soroban_sdk::{contract, contractimpl, Address, Env, Vec};
 use validation::{
@@ -153,6 +153,87 @@ impl InvoiceContract {
 
         events::invoice_created(&env, id, &invoice);
         Ok(id)
+    }
+
+    /// Create multiple invoices atomically in a single invocation.
+    /// All validations run on every element before any storage is written.
+    /// Returns a Vec of assigned IDs in the same order as the input params.
+    pub fn batch_create_invoice(
+        env: Env,
+        merchant: Address,
+        params: Vec<BatchInvoiceParams>,
+    ) -> Result<Vec<u64>, InvoiceError> {
+        merchant.require_auth();
+        require_not_paused(&env)?;
+
+        // Validate all params before touching storage (atomicity).
+        for p in params.iter() {
+            require_positive_amount(p.amount_usdc, p.gross_usdc)?;
+            require_usdc_precision(p.amount_usdc, p.gross_usdc)?;
+            require_valid_payment_link_hash(&p.payment_link_hash)?;
+            if p.expires_in_seconds == 0 {
+                return Err(InvoiceError::ZeroDuration);
+            }
+            require_expiry_not_too_long(p.expires_in_seconds)?;
+            if p.merchant_nonce != 0 {
+                let nonce_key = DataKey::MerchantNonce(merchant.clone(), p.merchant_nonce);
+                if env.storage().persistent().has(&nonce_key) {
+                    return Err(InvoiceError::DuplicateNonce);
+                }
+            }
+        }
+
+        let mut ids = Vec::new(&env);
+        for p in params.iter() {
+            let count: u64 = env
+                .storage()
+                .instance()
+                .get(&DataKey::InvoiceCount)
+                .unwrap_or(0);
+            let id = count + 1;
+            let expires_at = env
+                .ledger()
+                .timestamp()
+                .checked_add(p.expires_in_seconds)
+                .ok_or(InvoiceError::ExpiryOverflow)?;
+            let invoice = Invoice {
+                id,
+                merchant: merchant.clone(),
+                amount_usdc: p.amount_usdc,
+                gross_usdc: p.gross_usdc,
+                status: InvoiceStatus::Pending,
+                expires_at,
+                paid_at: None,
+                payer: MaybeAddress::None,
+                metadata_hash: p.metadata_hash.clone(),
+                payment_link_hash: p.payment_link_hash.clone(),
+                merchant_nonce: p.merchant_nonce,
+            };
+            env.storage()
+                .persistent()
+                .set(&DataKey::Invoice(id), &invoice);
+            env.storage().instance().set(&DataKey::InvoiceCount, &id);
+
+            if p.merchant_nonce != 0 {
+                env.storage().persistent().set(
+                    &DataKey::MerchantNonce(merchant.clone(), p.merchant_nonce),
+                    &true,
+                );
+            }
+
+            let idx_key = DataKey::MerchantInvoices(merchant.clone());
+            let mut merchant_ids: Vec<u64> = env
+                .storage()
+                .persistent()
+                .get(&idx_key)
+                .unwrap_or(Vec::new(&env));
+            merchant_ids.push_back(id);
+            env.storage().persistent().set(&idx_key, &merchant_ids);
+
+            events::invoice_created(&env, id, &invoice);
+            ids.push_back(id);
+        }
+        Ok(ids)
     }
 
     pub fn mark_paid(

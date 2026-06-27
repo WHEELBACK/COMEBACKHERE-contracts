@@ -31,8 +31,6 @@ pub enum InvoiceError {
     NoPendingAdmin = 16,
     /// payment_link_hash was provided but is not exactly 32 bytes.
     InvalidPaymentLinkHash = 17,
-    /// approve_refund called on an invoice not in RefundRequested status.
-    NotRefundRequested = 18,
 }
 
 #[contracttype]
@@ -79,6 +77,18 @@ pub struct Invoice {
     pub metadata_hash: MaybeBytes,
     pub payment_link_hash: MaybeBytes,
     /// Merchant-supplied nonce for storefront idempotency (0 = no nonce).
+    pub merchant_nonce: u64,
+}
+
+/// Parameters for a single invoice within a batch_create_invoice call.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct BatchInvoiceParams {
+    pub amount_usdc: i128,
+    pub gross_usdc: i128,
+    pub expires_in_seconds: u64,
+    pub metadata_hash: MaybeBytes,
+    pub payment_link_hash: MaybeBytes,
     pub merchant_nonce: u64,
 }
 
