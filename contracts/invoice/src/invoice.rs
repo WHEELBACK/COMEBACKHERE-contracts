@@ -23,6 +23,14 @@ pub enum InvoiceError {
     AmountPrecision = 12,
     /// Merchant nonce has already been used for a previous invoice.
     DuplicateNonce = 13,
+    /// expires_in_seconds exceeds MAX_EXPIRY_SECONDS.
+    ExpiryTooLong = 14,
+    /// Provided metadata_hash does not match the stored hash on the invoice.
+    MetadataMismatch = 15,
+    /// No pending admin transfer to accept.
+    NoPendingAdmin = 16,
+    /// payment_link_hash was provided but is not exactly 32 bytes.
+    InvalidPaymentLinkHash = 17,
 }
 
 #[contracttype]
@@ -35,6 +43,8 @@ pub enum InvoiceStatus {
     RefundRequested,
     /// Escrow funds have been released to the merchant after payment confirmation.
     Released,
+    /// Refund has been approved by admin; terminal status for disputed invoices.
+    Refunded,
 }
 
 // contracttype enum wrappers for optional complex types; Option<Address> and
@@ -70,15 +80,41 @@ pub struct Invoice {
     pub merchant_nonce: u64,
 }
 
+/// Parameters for a single invoice within a batch_create_invoice call.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct BatchInvoiceParams {
+    pub amount_usdc: i128,
+    pub gross_usdc: i128,
+    pub expires_in_seconds: u64,
+    pub metadata_hash: MaybeBytes,
+    pub payment_link_hash: MaybeBytes,
+    pub merchant_nonce: u64,
+}
+
+/// A single status transition recorded in an invoice's audit log.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct StatusTransition {
+    pub from: InvoiceStatus,
+    pub to: InvoiceStatus,
+    pub timestamp: u64,
+}
+
 #[contracttype]
 #[derive(Clone)]
 pub enum DataKey {
     Invoice(u64),
     InvoiceCount,
     Admin,
+    PendingAdmin,
     Paused,
     /// Configurable grace window (seconds) added to expires_at during mark_paid.
     GraceWindow,
     /// Tracks used merchant nonces: (merchant_address, nonce) → bool.
     MerchantNonce(Address, u64),
+    /// Secondary index: merchant address → Vec<u64> of invoice IDs.
+    MerchantInvoices(Address),
+    /// Ordered audit log of status transitions for an invoice.
+    InvoiceHistory(u64),
 }

@@ -16,13 +16,15 @@
 use crate::invoice::Invoice;
 use soroban_sdk::{contracttype, Address, Env, Symbol};
 
+/// Emitted when an amendment changes an invoice's amount fields.
 #[contracttype]
-#[derive(Clone)]
-pub struct EscrowReleasedEvent {
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct InvoiceAmountUpdatedEvent {
     pub id: u64,
-    pub merchant: Address,
-    pub amount_usdc: i128,
-    pub released_at: u64,
+    pub old_amount_usdc: i128,
+    pub new_amount_usdc: i128,
+    pub old_gross_usdc: i128,
+    pub new_gross_usdc: i128,
 }
 
 pub fn invoice_created(env: &Env, id: u64, invoice: &Invoice) {
@@ -52,6 +54,11 @@ pub fn invoice_refund_requested(env: &Env, id: u64, invoice: &Invoice) {
     );
 }
 
+pub fn refund_approved(env: &Env, id: u64, invoice: &Invoice) {
+    env.events()
+        .publish((Symbol::new(env, "refund_approved"), id), invoice.clone());
+}
+
 pub fn escrow_released(env: &Env, id: u64, invoice: &Invoice) {
     let payload = EscrowReleasedEvent {
         id,
@@ -71,4 +78,9 @@ pub fn contract_paused(env: &Env, admin: &Address) {
 pub fn contract_unpaused(env: &Env, admin: &Address) {
     env.events()
         .publish((Symbol::new(env, "contract_unpaused"),), admin);
+}
+
+pub fn invoice_amended(env: &Env, event: &InvoiceAmountUpdatedEvent) {
+    env.events()
+        .publish((Symbol::new(env, "invoice_amended"), event.id), event.clone());
 }

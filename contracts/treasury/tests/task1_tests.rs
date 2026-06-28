@@ -6,7 +6,7 @@
 use soroban_sdk::{
     contract, contractimpl,
     testutils::{Address as _, Events},
-    Address, Env, Symbol,
+    Address, Env, FromVal, Symbol,
 };
 use treasury::{SettlementStatus, TreasuryContract, TreasuryContractClient};
 
@@ -81,11 +81,8 @@ fn double_cancel_panics() {
 // ─── #117 Event ordering snapshots ───────────────────────────────────────────
 
 fn event_symbol(env: &Env, topics: &soroban_sdk::Vec<soroban_sdk::Val>) -> String {
-    let sym: Symbol = topics
-        .get_unchecked(0)
-        .try_into()
-        .unwrap_or_else(|_| Symbol::new(env, ""));
-    sym.to_string()
+    let val = topics.get_unchecked(0);
+    Symbol::from_val(env, &val).to_string()
 }
 
 #[test]

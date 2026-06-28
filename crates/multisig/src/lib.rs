@@ -1,4 +1,5 @@
-use soroban_sdk::{contracterror, contracttype, Address, Vec};
+#![no_std]
+use soroban_sdk::{contracterror, contracttype, Address, Env, Vec};
 
 #[contracterror]
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
@@ -19,6 +20,7 @@ pub enum TreasuryError {
     RotationNotFound = 13,
     RotationAlreadyExecuted = 14,
     SettlementOnHold = 15,
+    DisputeNotExpired = 16,
 }
 
 // Issue #48: reason codes attached to a held settlement; None means not on hold
@@ -41,6 +43,7 @@ pub enum SettlementStatus {
     PartiallyExecuted,
     OnHold,
     Cancelled,
+    Expired,
 }
 
 #[contracttype]
@@ -49,6 +52,7 @@ pub enum DisputeStatus {
     Raised,
     ResolvedClaimant,
     ResolvedCounterparty,
+    Expired,
 }
 
 #[contracttype]
@@ -61,6 +65,7 @@ pub struct Settlement {
     pub approval_weight: u32,
     pub status: SettlementStatus,
     pub hold_reason: SettlementHoldReason,
+    pub proposed_at: u64,
 }
 
 #[contracttype]
@@ -75,6 +80,7 @@ pub struct Dispute {
     pub resolution_approvals: Vec<Address>,
     pub resolution_weight: u32,
     pub resolution_for_claimant: bool,
+    pub dispute_expires_at: u64,
 }
 
 #[contracttype]
@@ -111,4 +117,22 @@ pub enum DataKey {
     RotationCount,
     SignerRotation(u64),
     MerchantPayoutAddress(Address),
+    SignerList,
+}
+
+/// Returns the approval weight assigned to `signer`, or `0` if not registered.
+pub fn signer_weight(env: &Env, signer: &Address) -> u32 {
+    env.storage()
+        .instance()
+        .get(&DataKey::Signer(signer.clone()))
+        .unwrap_or(0)
+}
+
+/// Requires `signer` to authenticate and have a non-zero weight in the signer registry.
+/// Panics: `UnauthorizedSigner`.
+pub fn require_authorized_signer(env: &Env, signer: &Address) {
+    signer.require_auth();
+    if signer_weight(env, signer) == 0 {
+        panic!("UnauthorizedSigner");
+    }
 }

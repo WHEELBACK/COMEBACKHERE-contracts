@@ -1,15 +1,15 @@
 [package]
-name = "protocol-integration-tests"
-version = "0.1.0"
+name = "comebackhere-tests"
+version = "1.0.0"
 edition = "2021"
 publish = false
 
-[lib]
-path = "lib.rs"
-name = "protocol_integration_tests"
+[features]
+default = ["testutils"]
+testutils = ["soroban-sdk/testutils"]
 
-[dev-dependencies]
-soroban-sdk = { workspace = true, features = ["testutils"] }
+[dependencies]
+soroban-sdk.workspace = true
 invoice = { package = "comebackhere-invoice", path = "../contracts/invoice" }
 treasury = { package = "comebackhere-treasury", path = "../contracts/treasury" }
 compliance = { package = "comebackhere-compliance", path = "../contracts/compliance" }

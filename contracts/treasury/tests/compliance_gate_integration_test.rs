@@ -202,3 +202,118 @@ fn settlement_rejected_when_compliance_paused_and_unable_to_pass() {
         .is_err());
     assert_eq!(token.balance(&merchant), 0);
 }
+
+#[test]
+fn settlement_rejected_when_merchant_blocked() {
+    let (env, admin, merchant, compliance_id, compliance, treasury_id, treasury, token_id) =
+        setup();
+
+    // First allow the merchant so compliance is initially passing.
+    compliance.allow_address(&admin, &merchant);
+
+    // Then explicitly block — block_address is permitted while paused or unpaused
+    // and overrides any existing allow status.
+    compliance.block_address(&admin, &merchant);
+
+    let settlement_id = treasury.propose_settlement(&admin, &merchant, &10_000_000);
+
+    let token = TestTokenContractClient::new(&env, &token_id);
+    token.mint(&treasury_id, &10_000_000);
+
+    let workflow_id = env.register_contract(None, SettlementWorkflow);
+    let workflow = SettlementWorkflowClient::new(&env, &workflow_id);
+    let err = workflow
+        .try_execute_with_compliance(
+            &compliance_id,
+            &treasury_id,
+            &settlement_id,
+            &token_id,
+            &merchant,
+        )
+        .unwrap_err()
+        .unwrap();
+    assert_eq!(err, WorkflowError::ComplianceFailed);
+    assert_eq!(token.balance(&merchant), 0);
+}
+
+#[test]
+fn blocked_merchant_rejected_even_when_already_settled() {
+    let (env, admin, merchant, compliance_id, compliance, treasury_id, treasury, token_id) =
+        setup();
+
+    // Allow merchant, create and execute a settlement successfully.
+    compliance.allow_address(&admin, &merchant);
+
+    let settlement_id = treasury.propose_settlement(&admin, &merchant, &10_000_000);
+
+    let token = TestTokenContractClient::new(&env, &token_id);
+    token.mint(&treasury_id, &10_000_000);
+
+    let workflow_id = env.register_contract(None, SettlementWorkflow);
+    let workflow = SettlementWorkflowClient::new(&env, &workflow_id);
+    treasury.set_signer(&admin, &workflow_id, &1);
+    assert!(workflow
+        .try_execute_with_compliance(
+            &compliance_id,
+            &treasury_id,
+            &settlement_id,
+            &token_id,
+            &merchant,
+        )
+        .is_ok());
+
+    // Now block the merchant and create a *new* settlement.
+    compliance.block_address(&admin, &merchant);
+
+    let settlement_id_2 = treasury.propose_settlement(&admin, &merchant, &5_000_000);
+    // Mint additional tokens
+    token.mint(&treasury_id, &5_000_000);
+
+    let err = workflow
+        .try_execute_with_compliance(
+            &compliance_id,
+            &treasury_id,
+            &settlement_id_2,
+            &token_id,
+            &merchant,
+        )
+        .unwrap_err()
+        .unwrap();
+    assert_eq!(err, WorkflowError::ComplianceFailed);
+    // Merchant did not receive the second settlement amount
+    assert_eq!(token.balance(&merchant), 10_000_000);
+}
+
+#[test]
+fn execute_settlement_fails_when_merchant_blocked_mid_flight() {
+    let (env, admin, merchant, compliance_id, compliance, treasury_id, treasury, token_id) =
+        setup();
+
+    // Merchant is allowed at proposal time.
+    compliance.allow_address(&admin, &merchant);
+    let settlement_id = treasury.propose_settlement(&admin, &merchant, &10_000_000);
+
+    let token = TestTokenContractClient::new(&env, &token_id);
+    token.mint(&treasury_id, &10_000_000);
+
+    // Block the merchant after the settlement is already proposed (mid-flight).
+    compliance.block_address(&admin, &merchant);
+
+    let workflow_id = env.register_contract(None, SettlementWorkflow);
+    let workflow = SettlementWorkflowClient::new(&env, &workflow_id);
+
+    // Execution must fail: compliance gate sees the block even though proposal was valid.
+    let err = workflow
+        .try_execute_with_compliance(
+            &compliance_id,
+            &treasury_id,
+            &settlement_id,
+            &token_id,
+            &merchant,
+        )
+        .unwrap_err()
+        .unwrap();
+    assert_eq!(err, WorkflowError::ComplianceFailed);
+    // Merchant received nothing.
+    assert_eq!(token.balance(&merchant), 0);
+}

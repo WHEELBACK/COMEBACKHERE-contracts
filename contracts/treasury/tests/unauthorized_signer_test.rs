@@ -121,7 +121,7 @@ fn unauthorized_signer_cannot_vote_on_dispute_resolution() {
     let merchant = Address::generate(&env);
     let claimant = Address::generate(&env);
     let settlement_id = client.propose_settlement(&admin, &merchant, &10_000_000);
-    let dispute_id = client.raise_dispute(&claimant, &settlement_id, &merchant, &5_000_000);
+    let dispute_id = client.raise_dispute(&claimant, &settlement_id, &merchant, &5_000_000, &u64::MAX);
     
     // Try to vote with an unauthorized signer
     let unauthorized = Address::generate(&env);
@@ -233,4 +233,63 @@ fn admin_is_automatically_authorized_signer() {
     let merchant = Address::generate(&env);
     let settlement_id = client.propose_settlement(&admin, &merchant, &10_000_000);
     assert_eq!(settlement_id, 1);
+}
+
+// #36 — comprehensive guard table: every entrypoint protected by require_authorized_signer must
+// reject a non-signer address.  The five tests below cover the five required entrypoints so that
+// adding a new entrypoint without the guard will surface as a missing entry here.
+
+#[test]
+#[should_panic(expected = "UnauthorizedSigner")]
+fn guard_table_propose_settlement_rejects_unauthorized() {
+    let env = Env::default();
+    let (client, _admin, _) = setup_treasury(&env, 2);
+    let merchant = Address::generate(&env);
+    client.propose_settlement(&Address::generate(&env), &merchant, &1_000_000);
+}
+
+#[test]
+#[should_panic(expected = "UnauthorizedSigner")]
+fn guard_table_approve_settlement_rejects_unauthorized() {
+    let env = Env::default();
+    let (client, admin, _contract_id) = setup_treasury(&env, 2);
+    let merchant = Address::generate(&env);
+    let settlement_id = client.propose_settlement(&admin, &merchant, &10_000_000);
+    let unauthorized = Address::generate(&env);
+    client.approve_settlement(&unauthorized, &settlement_id);
+}
+
+#[test]
+#[should_panic(expected = "UnauthorizedSigner")]
+fn guard_table_execute_settlement_rejects_unauthorized() {
+    let env = Env::default();
+    let (client, admin, _contract_id) = setup_treasury(&env, 1);
+    let merchant = Address::generate(&env);
+    let unauthorized = Address::generate(&env);
+    let token_contract = Address::generate(&env);
+    let settlement_id = client.propose_settlement(&admin, &merchant, &10_000_000);
+    client.execute_settlement(&unauthorized, &settlement_id, &token_contract);
+}
+
+#[test]
+#[should_panic(expected = "UnauthorizedSigner")]
+fn guard_table_propose_signer_rotation_rejects_unauthorized() {
+    let env = Env::default();
+    let (client, _admin, _) = setup_treasury(&env, 2);
+    let old_signer = Address::generate(&env);
+    let new_signer = Address::generate(&env);
+    let unauthorized = Address::generate(&env);
+    client.propose_signer_rotation(&unauthorized, &old_signer, &new_signer);
+}
+
+#[test]
+#[should_panic(expected = "UnauthorizedSigner")]
+fn guard_table_approve_signer_rotation_rejects_unauthorized() {
+    let env = Env::default();
+    let (client, admin, _contract_id) = setup_treasury(&env, 2);
+    let old_signer = Address::generate(&env);
+    let new_signer = Address::generate(&env);
+    let unauthorized = Address::generate(&env);
+    let rotation_id = client.propose_signer_rotation(&admin, &old_signer, &new_signer);
+    client.approve_signer_rotation(&unauthorized, &rotation_id);
 }
