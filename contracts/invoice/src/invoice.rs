@@ -31,6 +31,8 @@ pub enum InvoiceError {
     NoPendingAdmin = 16,
     /// payment_link_hash was provided but is not exactly 32 bytes.
     InvalidPaymentLinkHash = 17,
+    /// Invoice is not in RefundRequested status.
+    NotRefundRequested = 18,
 }
 
 #[contracttype]
@@ -117,4 +119,6 @@ pub enum DataKey {
     MerchantInvoices(Address),
     /// Ordered audit log of status transitions for an invoice.
     InvoiceHistory(u64),
+    /// Global set of pending invoice IDs for efficient expiry enumeration.
+    PendingIndex,
 }
