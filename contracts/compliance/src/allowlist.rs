@@ -9,6 +9,7 @@ pub enum DataKey {
     Allowed(Address),
     Blocked(Address),
     AllowedUntil(Address),
+    BlockedUntil(Address),
     BlockReason(Address),
     SchemaVersion,
     Paused,

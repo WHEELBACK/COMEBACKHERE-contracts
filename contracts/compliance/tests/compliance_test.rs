@@ -281,6 +281,16 @@ fn emits_address_cleared_event() {
     assert_eq!(last_event_symbol(&env), Symbol::new(&env, "address_cleared"));
 }
 
+// ── #79 Default-deny posture ──────────────────────────────────────────────────
+
+/// is_allowed must return false for an address that has never been added via
+/// allow_address or allow_address_until, confirming the default-deny posture.
+#[test]
+fn is_allowed_returns_false_for_address_never_added() {
+    let (_env, _admin, subject, client) = setup();
+    assert!(!client.is_allowed(&subject));
+}
+
 // ── #121 Allow/Block/Clear precedence matrix ─────────────────────────────────
 
 #[test]
@@ -796,4 +806,14 @@ fn allow_address_after_allow_address_until_removes_expiry() {
     // Even past the original expiry the address is still allowed.
     env.ledger().with_mut(|l| l.timestamp = expires_at + 9_999);
     assert!(client.is_allowed(&subject));
+}
+
+// ── #63 Block flag overrides allow flag in is_allowed ─────────────────────────
+
+#[test]
+fn block_flag_overrides_allow_flag_in_is_allowed() {
+    let (_env, admin, subject, client) = setup();
+    client.allow_address(&admin, &subject);
+    client.block_address(&admin, &subject, &None);
+    assert!(!client.is_allowed(&subject));
 }

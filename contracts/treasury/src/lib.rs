@@ -1,14 +1,11 @@
 #![no_std]
 
-mod multisig;
-mod settlement;
-
 pub use multisig::{
     DataKey, Dispute, DisputeStatus, RotationStatus, Settlement, SettlementHoldReason,
     SettlementStatus, SignerRotationProposal, TreasuryError,
 };
 
-use settlement::{require_authorized_signer, signer_weight};
+use multisig::{require_authorized_signer, signer_weight};
 use soroban_sdk::{contract, contractimpl, token, Address, Env, Symbol, Vec};
 
 const SETTLEMENT_TTL: u64 = 7 * 24 * 60 * 60;

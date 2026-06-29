@@ -5,13 +5,40 @@ mod invoice;
 mod validation;
 
 pub use events::InvoiceAmountUpdatedEvent;
-pub use invoice::{DataKey, Invoice, InvoiceError, InvoiceStatus, MaybeAddress, MaybeBytes};
+pub use invoice::{BatchInvoiceParams, DataKey, Invoice, InvoiceError, InvoiceStatus, MaybeAddress, MaybeBytes};
+use invoice::StatusTransition;
 
 use soroban_sdk::{contract, contractimpl, Address, Env, Vec};
 use validation::{
     require_admin, require_expiry_not_too_long, require_not_paused, require_positive_amount,
-    require_usdc_precision,
+    require_usdc_precision, require_valid_payment_link_hash,
 };
+
+fn pending_index_add(env: &Env, id: u64) {
+    let mut ids: Vec<u64> = env
+        .storage()
+        .persistent()
+        .get(&DataKey::PendingIndex)
+        .unwrap_or_else(|| Vec::new(env));
+    ids.push_back(id);
+    env.storage().persistent().set(&DataKey::PendingIndex, &ids);
+}
+
+fn pending_index_remove(env: &Env, id: u64) {
+    let ids: Vec<u64> = match env.storage().persistent().get(&DataKey::PendingIndex) {
+        Some(v) => v,
+        None => return,
+    };
+    let mut updated = Vec::new(env);
+    for existing in ids.iter() {
+        if existing != id {
+            updated.push_back(existing);
+        }
+    }
+    env.storage()
+        .persistent()
+        .set(&DataKey::PendingIndex, &updated);
+}
 
 fn append_history(env: &Env, id: u64, from: InvoiceStatus, to: InvoiceStatus) {
     let key = DataKey::InvoiceHistory(id);
@@ -74,6 +101,14 @@ impl InvoiceContract {
             .instance()
             .get(&DataKey::InvoiceCount)
             .unwrap_or(0u64)
+    }
+
+    /// Return all IDs currently in the pending index.
+    pub fn get_pending_ids(env: Env) -> Vec<u64> {
+        env.storage()
+            .persistent()
+            .get(&DataKey::PendingIndex)
+            .unwrap_or_else(|| Vec::new(&env))
     }
 
     // --- #58: merchant invoice nonce ---
@@ -168,23 +203,93 @@ impl InvoiceContract {
         ids.push_back(id);
         env.storage().persistent().set(&idx_key, &ids);
 
+        pending_index_add(&env, id);
         events::invoice_created(&env, id, &invoice);
         Ok(id)
     }
 
-    /// Mark a `Pending` invoice as `Paid`. Admin-only.
-    ///
-    /// - `id` — invoice to settle.
-    /// - `payer` — address of the paying party, stored on the invoice.
-    /// - `provided_metadata_hash` — when not `MaybeBytes::None`, must match the
-    ///   hash stored at creation time; prevents accidental cross-invoice settlement.
-    ///
-    /// Respects the grace window set via [`Self::set_grace_window`]: the ledger
-    /// timestamp must be strictly less than `expires_at + grace_window`.
-    ///
-    /// Errors: [`InvoiceError::Unauthorized`], [`InvoiceError::Paused`],
-    /// [`InvoiceError::NotFound`], [`InvoiceError::NotPending`],
-    /// [`InvoiceError::MetadataMismatch`], [`InvoiceError::Expired`].
+    /// Create multiple invoices atomically in a single invocation.
+    /// All validations run on every element before any storage is written.
+    /// Returns a Vec of assigned IDs in the same order as the input params.
+    pub fn batch_create_invoice(
+        env: Env,
+        merchant: Address,
+        params: Vec<BatchInvoiceParams>,
+    ) -> Result<Vec<u64>, InvoiceError> {
+        merchant.require_auth();
+        require_not_paused(&env)?;
+
+        // Validate all params before touching storage (atomicity).
+        for p in params.iter() {
+            require_positive_amount(p.amount_usdc, p.gross_usdc)?;
+            require_usdc_precision(p.amount_usdc, p.gross_usdc)?;
+            require_valid_payment_link_hash(&p.payment_link_hash)?;
+            if p.expires_in_seconds == 0 {
+                return Err(InvoiceError::ZeroDuration);
+            }
+            require_expiry_not_too_long(p.expires_in_seconds)?;
+            if p.merchant_nonce != 0 {
+                let nonce_key = DataKey::MerchantNonce(merchant.clone(), p.merchant_nonce);
+                if env.storage().persistent().has(&nonce_key) {
+                    return Err(InvoiceError::DuplicateNonce);
+                }
+            }
+        }
+
+        let mut ids = Vec::new(&env);
+        for p in params.iter() {
+            let count: u64 = env
+                .storage()
+                .instance()
+                .get(&DataKey::InvoiceCount)
+                .unwrap_or(0);
+            let id = count + 1;
+            let expires_at = env
+                .ledger()
+                .timestamp()
+                .checked_add(p.expires_in_seconds)
+                .ok_or(InvoiceError::ExpiryOverflow)?;
+            let invoice = Invoice {
+                id,
+                merchant: merchant.clone(),
+                amount_usdc: p.amount_usdc,
+                gross_usdc: p.gross_usdc,
+                status: InvoiceStatus::Pending,
+                expires_at,
+                paid_at: None,
+                payer: MaybeAddress::None,
+                metadata_hash: p.metadata_hash.clone(),
+                payment_link_hash: p.payment_link_hash.clone(),
+                merchant_nonce: p.merchant_nonce,
+            };
+            env.storage()
+                .persistent()
+                .set(&DataKey::Invoice(id), &invoice);
+            env.storage().instance().set(&DataKey::InvoiceCount, &id);
+
+            if p.merchant_nonce != 0 {
+                env.storage().persistent().set(
+                    &DataKey::MerchantNonce(merchant.clone(), p.merchant_nonce),
+                    &true,
+                );
+            }
+
+            let idx_key = DataKey::MerchantInvoices(merchant.clone());
+            let mut merchant_ids: Vec<u64> = env
+                .storage()
+                .persistent()
+                .get(&idx_key)
+                .unwrap_or(Vec::new(&env));
+            merchant_ids.push_back(id);
+            env.storage().persistent().set(&idx_key, &merchant_ids);
+
+            pending_index_add(&env, id);
+            events::invoice_created(&env, id, &invoice);
+            ids.push_back(id);
+        }
+        Ok(ids)
+    }
+
     pub fn mark_paid(
         env: Env,
         admin: Address,
@@ -231,6 +336,7 @@ impl InvoiceContract {
         env.storage()
             .persistent()
             .set(&DataKey::Invoice(id), &invoice);
+        pending_index_remove(&env, id);
         append_history(&env, id, InvoiceStatus::Pending, InvoiceStatus::Paid);
         events::invoice_paid(&env, id, &invoice);
         Ok(())
@@ -339,8 +445,64 @@ impl InvoiceContract {
         env.storage()
             .persistent()
             .set(&DataKey::Invoice(id), &invoice);
+        pending_index_remove(&env, id);
         append_history(&env, id, InvoiceStatus::Pending, InvoiceStatus::Cancelled);
         events::invoice_cancelled(&env, id, &invoice);
+        Ok(())
+    }
+
+    /// Amend a Pending invoice's amount fields before it has been paid or expired.
+    /// Only the merchant who created the invoice may call this.
+    pub fn amend_invoice(
+        env: Env,
+        merchant: Address,
+        id: u64,
+        new_amount_usdc: i128,
+        new_gross_usdc: i128,
+        new_expires_in_seconds: u64,
+    ) -> Result<(), InvoiceError> {
+        merchant.require_auth();
+        require_not_paused(&env)?;
+        require_positive_amount(new_amount_usdc, new_gross_usdc)?;
+        require_usdc_precision(new_amount_usdc, new_gross_usdc)?;
+        if new_expires_in_seconds == 0 {
+            return Err(InvoiceError::ZeroDuration);
+        }
+        require_expiry_not_too_long(new_expires_in_seconds)?;
+
+        let mut invoice: Invoice = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Invoice(id))
+            .ok_or(InvoiceError::NotFound)?;
+
+        if invoice.merchant != merchant {
+            return Err(InvoiceError::Unauthorized);
+        }
+        if invoice.status != InvoiceStatus::Pending {
+            return Err(InvoiceError::NotPending);
+        }
+
+        let event = InvoiceAmountUpdatedEvent {
+            id,
+            old_amount_usdc: invoice.amount_usdc,
+            new_amount_usdc,
+            old_gross_usdc: invoice.gross_usdc,
+            new_gross_usdc,
+        };
+
+        invoice.amount_usdc = new_amount_usdc;
+        invoice.gross_usdc = new_gross_usdc;
+        invoice.expires_at = env
+            .ledger()
+            .timestamp()
+            .checked_add(new_expires_in_seconds)
+            .ok_or(InvoiceError::ExpiryOverflow)?;
+
+        env.storage()
+            .persistent()
+            .set(&DataKey::Invoice(id), &invoice);
+        events::invoice_amended(&env, &event);
         Ok(())
     }
 
@@ -362,6 +524,7 @@ impl InvoiceContract {
                 if invoice.status == InvoiceStatus::Pending && now >= invoice.expires_at {
                     invoice.status = InvoiceStatus::Expired;
                     env.storage().persistent().set(&key, &invoice);
+                    pending_index_remove(&env, id);
                     append_history(&env, id, InvoiceStatus::Pending, InvoiceStatus::Expired);
                     events::invoice_expired(&env, id, &invoice);
                     expired_count += 1;
@@ -403,6 +566,30 @@ impl InvoiceContract {
             .set(&DataKey::Invoice(id), &invoice);
         append_history(&env, id, InvoiceStatus::Paid, InvoiceStatus::RefundRequested);
         events::invoice_refund_requested(&env, id, &invoice);
+        Ok(())
+    }
+
+    /// Approve a refund request. Admin-only. Transitions RefundRequested → Refunded.
+    pub fn approve_refund(env: Env, admin: Address, id: u64) -> Result<(), InvoiceError> {
+        require_admin(&env, &admin)?;
+        require_not_paused(&env)?;
+
+        let mut invoice: Invoice = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Invoice(id))
+            .ok_or(InvoiceError::NotFound)?;
+
+        if invoice.status != InvoiceStatus::RefundRequested {
+            return Err(InvoiceError::NotRefundRequested);
+        }
+
+        invoice.status = InvoiceStatus::Refunded;
+        env.storage()
+            .persistent()
+            .set(&DataKey::Invoice(id), &invoice);
+        append_history(&env, id, InvoiceStatus::RefundRequested, InvoiceStatus::Refunded);
+        events::refund_approved(&env, id, &invoice);
         Ok(())
     }
 

@@ -54,9 +54,20 @@ pub fn invoice_refund_requested(env: &Env, id: u64, invoice: &Invoice) {
     );
 }
 
-pub fn escrow_released(env: &Env, id: u64, invoice: &Invoice) {
+pub fn refund_approved(env: &Env, id: u64, invoice: &Invoice) {
     env.events()
-        .publish((Symbol::new(env, "escrow_released"), id), invoice.clone());
+        .publish((Symbol::new(env, "refund_approved"), id), invoice.clone());
+}
+
+pub fn escrow_released(env: &Env, id: u64, invoice: &Invoice) {
+    let payload = EscrowReleasedEvent {
+        id,
+        merchant: invoice.merchant.clone(),
+        amount_usdc: invoice.amount_usdc,
+        released_at: env.ledger().timestamp(),
+    };
+    env.events()
+        .publish((Symbol::new(env, "escrow_released"), id), payload);
 }
 
 pub fn contract_paused(env: &Env, admin: &Address) {
@@ -67,4 +78,9 @@ pub fn contract_paused(env: &Env, admin: &Address) {
 pub fn contract_unpaused(env: &Env, admin: &Address) {
     env.events()
         .publish((Symbol::new(env, "contract_unpaused"),), admin);
+}
+
+pub fn invoice_amended(env: &Env, event: &InvoiceAmountUpdatedEvent) {
+    env.events()
+        .publish((Symbol::new(env, "invoice_amended"), event.id), event.clone());
 }

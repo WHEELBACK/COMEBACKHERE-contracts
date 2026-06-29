@@ -14,6 +14,7 @@ testutils = ["soroban-sdk/testutils"]
 
 [dependencies]
 soroban-sdk.workspace = true
+multisig = { package = "comebackhere-multisig", path = "../../crates/multisig" }
 
 [dev-dependencies]
 derive_arbitrary.workspace = true

@@ -1,4 +1,4 @@
-use crate::invoice::{DataKey, InvoiceError, USDC_FACTOR};
+use crate::invoice::{DataKey, InvoiceError, MaybeBytes, USDC_FACTOR};
 use soroban_sdk::{Address, Env};
 
 /// Maximum allowed expiry duration: 5 years in seconds.
@@ -45,6 +45,16 @@ pub fn require_usdc_precision(amount_usdc: i128, gross_usdc: i128) -> Result<(),
 pub fn require_expiry_not_too_long(expires_in_seconds: u64) -> Result<(), InvoiceError> {
     if expires_in_seconds > MAX_EXPIRY_SECONDS {
         return Err(InvoiceError::ExpiryTooLong);
+    }
+    Ok(())
+}
+
+/// Reject a payment_link_hash that is provided but not exactly 32 bytes.
+pub fn require_valid_payment_link_hash(hash: &MaybeBytes) -> Result<(), InvoiceError> {
+    if let MaybeBytes::Some(bytes) = hash {
+        if bytes.len() != 32 {
+            return Err(InvoiceError::InvalidPaymentLinkHash);
+        }
     }
     Ok(())
 }
