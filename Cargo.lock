@@ -172,6 +172,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "comebackhere-multisig"
+version = "0.1.0"
+dependencies = [
+ "soroban-sdk",
+]
+
+[[package]]
 name = "comebackhere-tests"
 version = "1.0.0"
 dependencies = [
@@ -187,6 +194,7 @@ version = "1.0.0"
 dependencies = [
  "comebackhere-compliance",
  "comebackhere-invoice",
+ "comebackhere-multisig",
  "derive_arbitrary",
  "soroban-sdk",
 ]

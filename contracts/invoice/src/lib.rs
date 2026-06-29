@@ -6,12 +6,39 @@ mod validation;
 
 pub use events::InvoiceAmountUpdatedEvent;
 pub use invoice::{BatchInvoiceParams, DataKey, Invoice, InvoiceError, InvoiceStatus, MaybeAddress, MaybeBytes};
+use invoice::StatusTransition;
 
 use soroban_sdk::{contract, contractimpl, Address, Env, Vec};
 use validation::{
     require_admin, require_expiry_not_too_long, require_not_paused, require_positive_amount,
     require_usdc_precision, require_valid_payment_link_hash,
 };
+
+fn pending_index_add(env: &Env, id: u64) {
+    let mut ids: Vec<u64> = env
+        .storage()
+        .persistent()
+        .get(&DataKey::PendingIndex)
+        .unwrap_or_else(|| Vec::new(env));
+    ids.push_back(id);
+    env.storage().persistent().set(&DataKey::PendingIndex, &ids);
+}
+
+fn pending_index_remove(env: &Env, id: u64) {
+    let ids: Vec<u64> = match env.storage().persistent().get(&DataKey::PendingIndex) {
+        Some(v) => v,
+        None => return,
+    };
+    let mut updated = Vec::new(env);
+    for existing in ids.iter() {
+        if existing != id {
+            updated.push_back(existing);
+        }
+    }
+    env.storage()
+        .persistent()
+        .set(&DataKey::PendingIndex, &updated);
+}
 
 fn append_history(env: &Env, id: u64, from: InvoiceStatus, to: InvoiceStatus) {
     let key = DataKey::InvoiceHistory(id);
@@ -71,6 +98,14 @@ impl InvoiceContract {
             .instance()
             .get(&DataKey::InvoiceCount)
             .unwrap_or(0u64)
+    }
+
+    /// Return all IDs currently in the pending index.
+    pub fn get_pending_ids(env: Env) -> Vec<u64> {
+        env.storage()
+            .persistent()
+            .get(&DataKey::PendingIndex)
+            .unwrap_or_else(|| Vec::new(&env))
     }
 
     // --- #58: merchant invoice nonce ---
@@ -151,6 +186,7 @@ impl InvoiceContract {
         ids.push_back(id);
         env.storage().persistent().set(&idx_key, &ids);
 
+        pending_index_add(&env, id);
         events::invoice_created(&env, id, &invoice);
         Ok(id)
     }
@@ -230,6 +266,7 @@ impl InvoiceContract {
             merchant_ids.push_back(id);
             env.storage().persistent().set(&idx_key, &merchant_ids);
 
+            pending_index_add(&env, id);
             events::invoice_created(&env, id, &invoice);
             ids.push_back(id);
         }
@@ -282,6 +319,7 @@ impl InvoiceContract {
         env.storage()
             .persistent()
             .set(&DataKey::Invoice(id), &invoice);
+        pending_index_remove(&env, id);
         append_history(&env, id, InvoiceStatus::Pending, InvoiceStatus::Paid);
         events::invoice_paid(&env, id, &invoice);
         Ok(())
@@ -376,6 +414,7 @@ impl InvoiceContract {
         env.storage()
             .persistent()
             .set(&DataKey::Invoice(id), &invoice);
+        pending_index_remove(&env, id);
         append_history(&env, id, InvoiceStatus::Pending, InvoiceStatus::Cancelled);
         events::invoice_cancelled(&env, id, &invoice);
         Ok(())
@@ -454,6 +493,7 @@ impl InvoiceContract {
                 if invoice.status == InvoiceStatus::Pending && now >= invoice.expires_at {
                     invoice.status = InvoiceStatus::Expired;
                     env.storage().persistent().set(&key, &invoice);
+                    pending_index_remove(&env, id);
                     append_history(&env, id, InvoiceStatus::Pending, InvoiceStatus::Expired);
                     events::invoice_expired(&env, id, &invoice);
                     expired_count += 1;
