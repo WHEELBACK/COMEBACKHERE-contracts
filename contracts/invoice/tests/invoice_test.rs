@@ -1,6 +1,6 @@
 use invoice::{
-    EscrowReleasedEvent, InvoiceContract, InvoiceContractClient, InvoiceError, InvoiceStatus,
-    MaybeAddress, MaybeBytes,
+    DataKey, EscrowReleasedEvent, InvoiceContract, InvoiceContractClient, InvoiceError,
+    InvoiceStatus, MaybeAddress, MaybeBytes,
 };
 use soroban_sdk::{
     testutils::{Address as _, Events, Ledger},
@@ -283,7 +283,70 @@ fn test_initialize_requires_admin_auth() {
 fn test_initialize_cannot_be_called_twice() {
     let (env, _admin, client) = setup();
     let new_admin = Address::generate(&env);
-    assert!(client.try_initialize(&new_admin).is_err());
+    let err = client.try_initialize(&new_admin).unwrap_err().unwrap();
+    assert_eq!(err, InvoiceError::AlreadyInitialized);
+}
+
+#[test]
+fn test_initialize_without_admin_auth_rejected() {
+    let env = Env::default();
+    let admin = Address::generate(&env);
+    let id = env.register_contract(None, InvoiceContract);
+    let client = InvoiceContractClient::new(&env, &id);
+    // Mocking an empty auth set means admin's require_auth() has nothing to match.
+    let result = client.mock_auths(&[]).try_initialize(&admin);
+    assert!(result.is_err());
+}
+
+#[test]
+fn test_initialize_sets_all_storage_keys() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let admin = Address::generate(&env);
+    let contract_id = env.register_contract(None, InvoiceContract);
+    let client = InvoiceContractClient::new(&env, &contract_id);
+    client.initialize(&admin);
+
+    let env2 = env.clone();
+    env.as_contract(&contract_id, || {
+        let stored_admin: Address = env2.storage().instance().get(&DataKey::Admin).unwrap();
+        assert_eq!(stored_admin, admin);
+
+        let invoice_count: u64 = env2
+            .storage()
+            .instance()
+            .get(&DataKey::InvoiceCount)
+            .unwrap();
+        assert_eq!(invoice_count, 0u64);
+
+        let paused: bool = env2.storage().instance().get(&DataKey::Paused).unwrap();
+        assert!(!paused);
+    });
+}
+
+#[test]
+fn test_initialize_second_call_does_not_overwrite_admin() {
+    let (env, admin, client) = setup();
+    let new_admin = Address::generate(&env);
+    let err = client.try_initialize(&new_admin).unwrap_err().unwrap();
+    assert_eq!(err, InvoiceError::AlreadyInitialized);
+
+    // Rejected re-initialization must leave the original admin in place.
+    let merchant = Address::generate(&env);
+    let payer = Address::generate(&env);
+    let id = client.create_invoice(
+        &merchant,
+        &10_000_000,
+        &10_250_000,
+        &3600,
+        &MaybeBytes::None,
+        &MaybeBytes::None,
+        &0,
+    );
+    // Only the original admin (not new_admin) can act on admin-gated entrypoints.
+    assert!(client.try_mark_paid(&new_admin, &id, &payer, &MaybeBytes::None).is_err());
+    client.mark_paid(&admin, &id, &payer, &MaybeBytes::None);
+    assert_eq!(client.get_invoice(&id).status, InvoiceStatus::Paid);
 }
 
 #[test]
