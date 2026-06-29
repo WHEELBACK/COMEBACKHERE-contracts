@@ -11,7 +11,7 @@ fn setup() -> (Env, Address, Address, InvoiceContractClient<'static>) {
     (env, admin, contract_id, client)
 }
 
-// ID 0 (u64::MIN) is never assigned — lookup must panic (unwrap on missing key).
+// ID 0 (u64::MIN) is never assigned — lookup must return NotFound.
 #[test]
 #[should_panic]
 fn test_get_invoice_id_zero_panics() {
@@ -19,7 +19,7 @@ fn test_get_invoice_id_zero_panics() {
     client.get_invoice(&0u64);
 }
 
-// u64::MAX is never assigned; lookup must panic.
+// u64::MAX is never assigned; lookup must return NotFound.
 #[test]
 #[should_panic]
 fn test_get_invoice_id_u64_max_panics() {
@@ -27,7 +27,7 @@ fn test_get_invoice_id_u64_max_panics() {
     client.get_invoice(&u64::MAX);
 }
 
-// u64::MAX - 1 is also never assigned by default; lookup must panic.
+// u64::MAX - 1 is also never assigned by default; lookup must return NotFound.
 #[test]
 #[should_panic]
 fn test_get_invoice_id_u64_max_minus_one_panics() {
