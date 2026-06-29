@@ -60,8 +60,14 @@ pub fn refund_approved(env: &Env, id: u64, invoice: &Invoice) {
 }
 
 pub fn escrow_released(env: &Env, id: u64, invoice: &Invoice) {
+    let payload = EscrowReleasedEvent {
+        id,
+        merchant: invoice.merchant.clone(),
+        amount_usdc: invoice.amount_usdc,
+        released_at: env.ledger().timestamp(),
+    };
     env.events()
-        .publish((Symbol::new(env, "escrow_released"), id), invoice.clone());
+        .publish((Symbol::new(env, "escrow_released"), id), payload);
 }
 
 pub fn contract_paused(env: &Env, admin: &Address) {

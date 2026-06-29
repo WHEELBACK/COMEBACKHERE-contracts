@@ -1,9 +1,10 @@
 use invoice::{
-    InvoiceContract, InvoiceContractClient, InvoiceError, InvoiceStatus, MaybeAddress, MaybeBytes,
+    EscrowReleasedEvent, InvoiceContract, InvoiceContractClient, InvoiceError, InvoiceStatus,
+    MaybeAddress, MaybeBytes,
 };
 use soroban_sdk::{
-    testutils::{Address as _, Ledger},
-    Address, Env,
+    testutils::{Address as _, Events, Ledger},
+    Address, Env, Symbol, TryFromVal,
 };
 
 extern crate std;
@@ -733,9 +734,6 @@ fn test_mark_paid_blocked_when_paused() {
 
 
 // Issue #94: create_invoice must enforce merchant authorization.
-// Uses cancel_invoice (which has an explicit Unauthorized check) to prove that a
-// non-merchant/non-admin caller is rejected. Also verifies that the merchant's auth
-// was recorded by create_invoice, confirming require_auth() is enforced.
 #[test]
 fn test_create_invoice_unauthorized_merchant() {
     let (env, _admin, client) = setup();
@@ -750,13 +748,11 @@ fn test_create_invoice_unauthorized_merchant() {
         &MaybeBytes::None,
         &0,
     );
-
     let auths = env.auths();
     assert!(
         auths.iter().any(|(addr, _)| addr == &merchant),
         "create_invoice must require merchant authorization"
     );
-
     let err = client
         .try_cancel_invoice(&unauthorized, &id)
         .unwrap_err()
