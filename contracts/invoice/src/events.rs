@@ -59,6 +59,16 @@ pub fn refund_approved(env: &Env, id: u64, invoice: &Invoice) {
         .publish((Symbol::new(env, "refund_approved"), id), invoice.clone());
 }
 
+/// Minimal payload emitted when escrow is released for a paid invoice.
+#[contracttype]
+#[derive(Clone)]
+pub struct EscrowReleasedEvent {
+    pub id: u64,
+    pub merchant: Address,
+    pub amount_usdc: i128,
+    pub released_at: u64,
+}
+
 pub fn escrow_released(env: &Env, id: u64, invoice: &Invoice) {
     let payload = EscrowReleasedEvent {
         id,

@@ -4,7 +4,7 @@ mod events;
 mod invoice;
 mod validation;
 
-pub use events::InvoiceAmountUpdatedEvent;
+pub use events::{EscrowReleasedEvent, InvoiceAmountUpdatedEvent};
 pub use invoice::{BatchInvoiceParams, DataKey, Invoice, InvoiceError, InvoiceStatus, MaybeAddress, MaybeBytes};
 use invoice::StatusTransition;
 
