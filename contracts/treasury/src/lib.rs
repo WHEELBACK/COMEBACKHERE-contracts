@@ -29,6 +29,7 @@ impl TreasuryError {
             TreasuryError::RotationAlreadyExecuted => panic!("RotationAlreadyExecuted"),
             TreasuryError::SettlementOnHold => panic!("SettlementOnHold"),
             TreasuryError::DisputeNotExpired => panic!("DisputeNotExpired"),
+            TreasuryError::AlreadyOnHold => panic!("AlreadyOnHold"),
         }
     }
 }
@@ -83,6 +84,11 @@ impl TreasuryContract {
             env.storage().instance().set(&DataKey::SignerList, &updated);
         }
         env.events().publish((Symbol::new(&env, "signer_weight_set"), signer), weight);
+    }
+
+    /// Returns the current approval weight for `signer`, or `0` if not registered.
+    pub fn get_signer_weight(env: Env, signer: Address) -> u32 {
+        signer_weight(&env, &signer)
     }
 
     /// Proposes a new settlement of `amount` tokens payable to `merchant_address`.
@@ -458,14 +464,18 @@ impl TreasuryContract {
     pub fn deposit(env: Env, from: Address, token_contract: Address, amount: i128) {
         Self::require_not_paused(&env);
         from.require_auth();
-        if amount <= 0 { panic!("InvalidAmount"); }
-        let treasury = env.current_contract_address();
-        let token_client = token::Client::new(&env, &token_contract);
-        token_client.transfer(&from, &treasury, &amount);
-        let mut balance: i128 = env.storage().persistent().get(&DataKey::Balance(from.clone())).unwrap_or(0);
-        balance += amount;
-        env.storage().persistent().set(&DataKey::Balance(from.clone()), &balance);
-        env.events().publish((Symbol::new(&env, "deposit"), from), amount);
+        Self::deposit_one(&env, &from, &token_contract, amount);
+    }
+
+    /// Deposits multiple `(token_contract, amount)` pairs from `from` into the treasury.
+    /// Panics: `ContractPaused`, `InvalidAmount`.
+    /// Emits: `deposit` for each deposited token.
+    pub fn batch_deposit(env: Env, from: Address, deposits: Vec<(Address, i128)>) {
+        Self::require_not_paused(&env);
+        from.require_auth();
+        for (token_contract, amount) in deposits.iter() {
+            Self::deposit_one(&env, &from, &token_contract, amount);
+        }
     }
 
     /// Withdraws `amount` tokens from the treasury to `to` via `token_contract`.
@@ -593,6 +603,21 @@ impl TreasuryContract {
         proposal
     }
 
+    /// Cancels a pending signer rotation proposal (admin-only).
+    /// Panics: `Unauthorized`, `RotationNotFound`, `RotationAlreadyExecuted`.
+    /// Emits: `rotation_cancelled`.
+    pub fn cancel_rotation(env: Env, admin: Address, rotation_id: u64) -> SignerRotationProposal {
+        Self::require_admin(&env, &admin);
+        let mut proposal: SignerRotationProposal = env.storage().persistent()
+            .get(&DataKey::SignerRotation(rotation_id))
+            .unwrap_or_else(|| panic!("RotationNotFound"));
+        if proposal.status != RotationStatus::Pending { panic!("RotationAlreadyExecuted"); }
+        proposal.status = RotationStatus::Cancelled;
+        env.storage().persistent().set(&DataKey::SignerRotation(rotation_id), &proposal);
+        env.events().publish((Symbol::new(&env, "rotation_cancelled"), rotation_id), proposal.clone());
+        proposal
+    }
+
     /// Sets or updates the payout address for `merchant` (merchant-only, not paused).
     /// Emits: `merchant_payout_updated`.
     pub fn update_merchant_payout_address(env: Env, merchant: Address, new_payout_address: Address) {
@@ -608,18 +633,37 @@ impl TreasuryContract {
     }
 
     /// Places a pending settlement on hold with a `reason` code (admin-only).
-    /// Panics: `Unauthorized`, `SettlementNotFound`, `AlreadyExecuted`.
+    /// Errors: `SettlementNotFound`, `AlreadyOnHold`, `AlreadyExecuted`.
+    /// Panics: `Unauthorized`.
     /// Emits: `settlement_held`.
-    pub fn hold_settlement(env: Env, admin: Address, settlement_id: u64, reason: SettlementHoldReason) {
+    pub fn hold_settlement(
+        env: Env,
+        admin: Address,
+        settlement_id: u64,
+        reason: SettlementHoldReason,
+    ) -> Result<(), TreasuryError> {
         Self::require_admin(&env, &admin);
-        let mut settlement: Settlement = env.storage().persistent()
+        let mut settlement: Settlement = env
+            .storage()
+            .persistent()
             .get(&DataKey::Settlement(settlement_id))
-            .unwrap_or_else(|| panic!("SettlementNotFound"));
-        if settlement.status != SettlementStatus::Pending { panic!("AlreadyExecuted"); }
+            .ok_or(TreasuryError::SettlementNotFound)?;
+        if settlement.status == SettlementStatus::OnHold {
+            return Err(TreasuryError::AlreadyOnHold);
+        }
+        if settlement.status != SettlementStatus::Pending {
+            return Err(TreasuryError::AlreadyExecuted);
+        }
         settlement.status = SettlementStatus::OnHold;
         settlement.hold_reason = reason.clone();
-        env.storage().persistent().set(&DataKey::Settlement(settlement_id), &settlement);
-        env.events().publish((Symbol::new(&env, "settlement_held"), settlement_id), reason);
+        env.storage()
+            .persistent()
+            .set(&DataKey::Settlement(settlement_id), &settlement);
+        env.events().publish(
+            (Symbol::new(&env, "settlement_held"), settlement_id),
+            reason,
+        );
+        Ok(())
     }
 
     /// Releases a held settlement back to `Pending` status (admin-only).
@@ -646,6 +690,17 @@ impl TreasuryContract {
     fn require_not_paused(env: &Env) {
         let paused: bool = env.storage().instance().get(&DataKey::Paused).unwrap_or(false);
         if paused { panic!("ContractPaused"); }
+    }
+
+    fn deposit_one(env: &Env, from: &Address, token_contract: &Address, amount: i128) {
+        if amount <= 0 { panic!("InvalidAmount"); }
+        let treasury = env.current_contract_address();
+        let token_client = token::Client::new(env, token_contract);
+        token_client.transfer(from, &treasury, &amount);
+        let mut balance: i128 = env.storage().persistent().get(&DataKey::Balance(from.clone())).unwrap_or(0);
+        balance += amount;
+        env.storage().persistent().set(&DataKey::Balance(from.clone()), &balance);
+        env.events().publish((Symbol::new(env, "deposit"), from.clone()), amount);
     }
 }
 

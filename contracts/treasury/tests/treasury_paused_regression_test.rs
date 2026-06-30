@@ -1,4 +1,4 @@
-use soroban_sdk::{testutils::Address as _, Address, Env};
+use soroban_sdk::{testutils::Address as _, Address, Env, Vec};
 use treasury::{TreasuryContract, TreasuryContractClient};
 
 fn paused_setup(env: &Env) -> (TreasuryContractClient, Address) {
@@ -44,6 +44,17 @@ fn paused_rejects_deposit() {
     let (client, admin) = paused_setup(&env);
     let token = Address::generate(&env);
     client.deposit(&admin, &token, &1_000);
+}
+
+#[test]
+#[should_panic(expected = "ContractPaused")]
+fn paused_rejects_batch_deposit() {
+    let env = Env::default();
+    let (client, admin) = paused_setup(&env);
+    let token = Address::generate(&env);
+    let mut deposits = Vec::new(&env);
+    deposits.push_back((token, 1_000));
+    client.batch_deposit(&admin, &deposits);
 }
 
 #[test]

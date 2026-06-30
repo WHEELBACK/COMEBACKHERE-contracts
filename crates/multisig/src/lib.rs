@@ -21,6 +21,7 @@ pub enum TreasuryError {
     RotationAlreadyExecuted = 14,
     SettlementOnHold = 15,
     DisputeNotExpired = 16,
+    AlreadyOnHold = 17,
 }
 
 // Issue #48: reason codes attached to a held settlement; None means not on hold
@@ -88,6 +89,7 @@ pub struct Dispute {
 pub enum RotationStatus {
     Pending,
     Executed,
+    Cancelled,
 }
 
 #[contracttype]

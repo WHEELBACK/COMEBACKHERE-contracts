@@ -48,6 +48,23 @@ fn partial_approval_accumulates() {
     assert_eq!(settlement.approval_weight, 2);
 }
 
+#[test]
+fn get_signer_weight_returns_current_registry_weight() {
+    let env = Env::default();
+    let (client, admin, _) = setup(&env, 2);
+    let backup = Address::generate(&env);
+    let unknown = Address::generate(&env);
+
+    assert_eq!(client.get_signer_weight(&admin), 1);
+    assert_eq!(client.get_signer_weight(&unknown), 0);
+
+    client.set_signer(&admin, &backup, &3);
+    assert_eq!(client.get_signer_weight(&backup), 3);
+
+    client.set_signer(&admin, &backup, &0);
+    assert_eq!(client.get_signer_weight(&backup), 0);
+}
+
 // Fix #13: approve_settlement and execute_settlement on missing ID panic with SettlementNotFound.
 // The treasury uses panic!() (non-unwinding in no_std) for these error paths;
 // the behavior is verified by the contract logic and the #[should_panic] pattern
