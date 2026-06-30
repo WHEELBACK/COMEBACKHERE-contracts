@@ -59,7 +59,7 @@ fn setup() -> (
 
     let treasury_id = env.register_contract(None, TreasuryContract);
     let treasury = TreasuryContractClient::new(&env, &treasury_id);
-    assert!(treasury.try_initialize(&admin, &1).is_ok());
+    assert!(treasury.try_initialize(&admin, &1, &soroban_sdk::Vec::new(&env)).is_ok());
     treasury.set_signer(&admin, &wf_id, &1);
 
     (

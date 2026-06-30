@@ -39,10 +39,16 @@ pub struct TreasuryContract;
 #[contractimpl]
 impl TreasuryContract {
     /// Initialises the treasury with `admin` as owner and `threshold` as the multisig approval
-    /// weight required to execute settlements.
+    /// weight required to execute settlements. Accepts an initial `signers` list of `(Address, u32)`
+    /// pairs to bootstrap the full signer set in a single transaction.
     /// Errors: `AlreadyInitialized`, `ZeroThreshold`.
     /// Emits: `treasury_initialized`.
-    pub fn initialize(env: Env, admin: Address, threshold: u32) -> Result<(), TreasuryError> {
+    pub fn initialize(
+        env: Env,
+        admin: Address,
+        threshold: u32,
+        signers: Vec<(Address, u32)>,
+    ) -> Result<(), TreasuryError> {
         if env.storage().instance().has(&DataKey::Admin) {
             return Err(TreasuryError::AlreadyInitialized);
         }
@@ -58,6 +64,14 @@ impl TreasuryContract {
         env.storage().instance().set(&DataKey::Signer(admin.clone()), &1u32);
         let mut signer_list = Vec::new(&env);
         signer_list.push_back(admin.clone());
+        for (signer, weight) in signers.iter() {
+            env.storage()
+                .instance()
+                .set(&DataKey::Signer(signer.clone()), &weight);
+            if weight > 0 && !signer_list.contains(&signer) {
+                signer_list.push_back(signer.clone());
+            }
+        }
         env.storage().instance().set(&DataKey::SignerList, &signer_list);
         env.events().publish((Symbol::new(&env, "treasury_initialized"),), admin);
         Ok(())
