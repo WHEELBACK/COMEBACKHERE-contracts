@@ -40,7 +40,16 @@ fn test_get_invoice_id_u64_max_minus_one_panics() {
 fn test_first_invoice_id_is_one() {
     let (env, _, _, client) = setup();
     let merchant = Address::generate(&env);
-    let id = client.create_invoice(&merchant, &10_000_000, &10_000_000, &3600, &MaybeBytes::None, &MaybeBytes::None, &0, &MaybeAddress::None);
+    let id = client.create_invoice(
+        &merchant,
+        &10_000_000,
+        &10_000_000,
+        &3600,
+        &MaybeBytes::None,
+        &MaybeBytes::None,
+        &0,
+        &MaybeAddress::None,
+    );
     assert_eq!(id, 1u64);
 }
 
@@ -50,7 +59,16 @@ fn test_sequential_ids_increment_correctly() {
     let (env, _, _, client) = setup();
     let merchant = Address::generate(&env);
     for expected in 1u64..=10 {
-        let id = client.create_invoice(&merchant, &10_000_000, &10_000_000, &3600, &MaybeBytes::None, &MaybeBytes::None, &0, &MaybeAddress::None);
+        let id = client.create_invoice(
+            &merchant,
+            &10_000_000,
+            &10_000_000,
+            &3600,
+            &MaybeBytes::None,
+            &MaybeBytes::None,
+            &0,
+            &MaybeAddress::None,
+        );
         assert_eq!(id, expected);
     }
 }
@@ -67,7 +85,16 @@ fn test_invoice_at_large_boundary_id_retrievable() {
             .set(&DataKey::InvoiceCount, &(u64::MAX - 2));
     });
     let merchant = Address::generate(&env);
-    let id = client.create_invoice(&merchant, &10_000_000, &11_000_000, &3600, &MaybeBytes::None, &MaybeBytes::None, &0, &MaybeAddress::None);
+    let id = client.create_invoice(
+        &merchant,
+        &10_000_000,
+        &11_000_000,
+        &3600,
+        &MaybeBytes::None,
+        &MaybeBytes::None,
+        &0,
+        &MaybeAddress::None,
+    );
     assert_eq!(id, u64::MAX - 1);
     let inv = client.get_invoice(&id);
     assert_eq!(inv.id, u64::MAX - 1);
@@ -89,14 +116,32 @@ fn test_overflow_wrapping_at_u64_max_is_not_silent() {
     let merchant = Address::generate(&env);
 
     // First creation: counter was MAX-1, new id = MAX — should succeed.
-    let id = client.create_invoice(&merchant, &10_000_000, &10_000_000, &3600, &MaybeBytes::None, &MaybeBytes::None, &0, &MaybeAddress::None);
+    let id = client.create_invoice(
+        &merchant,
+        &10_000_000,
+        &10_000_000,
+        &3600,
+        &MaybeBytes::None,
+        &MaybeBytes::None,
+        &0,
+        &MaybeAddress::None,
+    );
     assert_eq!(id, u64::MAX);
 
     // Second creation: counter is now MAX, new id = MAX + 1 — must not silently
     // produce 0; the arithmetic overflow should be detected (panic in debug, or
     // wrapping to 0 which we also reject as a regression guard).
-    let result = client.try_create_invoice(&merchant, &10_000_000, &10_000_000, &3600, &MaybeBytes::None, &MaybeBytes::None, &0, &MaybeAddress::None);
-    if let Ok(wrapped_id) = result {
+    let result = client.try_create_invoice(
+        &merchant,
+        &10_000_000,
+        &10_000_000,
+        &3600,
+        &MaybeBytes::None,
+        &MaybeBytes::None,
+        &0,
+        &MaybeAddress::None,
+    );
+    if let Ok(Ok(wrapped_id)) = result {
         // If the runtime wraps instead of panicking, the ID must not be 0 —
         // a 0 ID would collide with the "no invoice" sentinel.
         assert_ne!(

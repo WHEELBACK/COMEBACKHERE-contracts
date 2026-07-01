@@ -1,11 +1,7 @@
 use compliance::{ComplianceContract, ComplianceContractClient};
-use invoice::{
-    InvoiceContract, InvoiceContractClient, InvoiceStatus, MaybeAddress, MaybeBytes,
-};
+use invoice::{InvoiceContract, InvoiceContractClient, InvoiceStatus, MaybeAddress, MaybeBytes};
 use soroban_sdk::{contract, contractimpl, testutils::Address as _, Address, Env};
-use treasury::{
-    SettlementStatus, TreasuryContract, TreasuryContractClient,
-};
+use treasury::{SettlementStatus, TreasuryContract, TreasuryContractClient};
 
 mod test_token {
     use soroban_sdk::{contract, contractimpl, Address, Env};
@@ -64,8 +60,6 @@ impl ComplianceGatedSettlement {
     }
 }
 
-use compliance_gated_settlement::{ComplianceGatedSettlement, ComplianceGatedSettlementClient};
-
 struct TestContext {
     _env: Env,
     admin: Address,
@@ -95,7 +89,7 @@ fn setup() -> TestContext {
 
     let treasury_id = env.register_contract(None, TreasuryContract);
     let treasury = TreasuryContractClient::new(&env, &treasury_id);
-    treasury.initialize(&admin, &2);
+    treasury.initialize(&admin, &2, &soroban_sdk::Vec::new(&env));
     treasury.set_signer(&admin, &admin, &2);
 
     let compliance_id = env.register_contract(None, ComplianceContract);
@@ -136,11 +130,18 @@ fn full_lifecycle_happy_path() {
         &MaybeBytes::None,
         &MaybeBytes::None,
         &0,
+        &MaybeAddress::None,
     );
     let inv = ctx.invoice.get_invoice(&inv_id);
     assert_eq!(inv.status, InvoiceStatus::Pending);
 
-    ctx.invoice.mark_paid(&ctx.admin, &inv_id, &ctx.payer);
+    ctx.invoice.mark_paid(
+        &ctx.admin,
+        &inv_id,
+        &ctx.payer,
+        &MaybeBytes::None,
+        &MaybeAddress::None,
+    );
     let inv = ctx.invoice.get_invoice(&inv_id);
     assert_eq!(inv.status, InvoiceStatus::Paid);
     assert_eq!(inv.payer, MaybeAddress::Some(ctx.payer.clone()));
@@ -159,14 +160,15 @@ fn full_lifecycle_happy_path() {
     let settlement = ctx.treasury.get_settlement(&settlement_id);
     assert_eq!(settlement.status, SettlementStatus::Pending);
 
+    // admin is both proposer and approver here, so approval_weight (2) is not
+    // double-counted — see #34 duplicate-approval-weight guarantee.
     ctx.treasury.approve_settlement(&ctx.admin, &settlement_id);
     let settlement = ctx.treasury.get_settlement(&settlement_id);
-    assert_eq!(settlement.approval_weight, 4);
+    assert_eq!(settlement.approval_weight, 2);
 
-    let wf_id = ctx
-        ._env
-        .register_contract(None, ComplianceGatedSettlement);
+    let wf_id = ctx._env.register_contract(None, ComplianceGatedSettlement);
     let wf = ComplianceGatedSettlementClient::new(&ctx._env, &wf_id);
+    ctx.treasury.set_signer(&ctx.admin, &wf_id, &1);
 
     wf.execute(
         &ctx.compliance_id,
@@ -194,8 +196,15 @@ fn full_lifecycle_rejected_when_compliance_fails() {
         &MaybeBytes::None,
         &MaybeBytes::None,
         &0,
+        &MaybeAddress::None,
     );
-    ctx.invoice.mark_paid(&ctx.admin, &inv_id, &ctx.payer);
+    ctx.invoice.mark_paid(
+        &ctx.admin,
+        &inv_id,
+        &ctx.payer,
+        &MaybeBytes::None,
+        &MaybeAddress::None,
+    );
     ctx.invoice.release_escrow(&ctx.admin, &inv_id);
 
     ctx.token.mint(&ctx.treasury_id, &10_000_000);
@@ -205,9 +214,7 @@ fn full_lifecycle_rejected_when_compliance_fails() {
         .propose_settlement(&ctx.admin, &ctx.merchant, &10_000_000);
     ctx.treasury.approve_settlement(&ctx.admin, &settlement_id);
 
-    let wf_id = ctx
-        ._env
-        .register_contract(None, ComplianceGatedSettlement);
+    let wf_id = ctx._env.register_contract(None, ComplianceGatedSettlement);
     let wf = ComplianceGatedSettlementClient::new(&ctx._env, &wf_id);
 
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {

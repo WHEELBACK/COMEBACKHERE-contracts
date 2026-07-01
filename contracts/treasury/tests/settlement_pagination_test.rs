@@ -13,10 +13,10 @@ fn setup_with_settlements(env: &Env, n: u64) -> (TreasuryContractClient, Address
     (client, admin)
 }
 
-fn setup_with_interspersed_executions(
-    env: &Env,
+fn setup_with_interspersed_executions<'a>(
+    env: &'a Env,
     pattern: &[bool],
-) -> (TreasuryContractClient, Address) {
+) -> (TreasuryContractClient<'a>, Address) {
     let admin = Address::generate(env);
     let contract_id = env.register_contract(None, TreasuryContract);
     let client = TreasuryContractClient::new(env, &contract_id);

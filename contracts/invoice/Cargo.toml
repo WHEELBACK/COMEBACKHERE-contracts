@@ -9,13 +9,11 @@ crate-type = ["cdylib", "rlib"]
 name = "invoice"
 
 [features]
-default = ["testutils"]
 testutils = ["soroban-sdk/testutils"]
 
 [dependencies]
 soroban-sdk.workspace = true
 
 [dev-dependencies]
-derive_arbitrary.workspace = true
 hex = "0.4"
 soroban-sdk = { workspace = true, features = ["testutils"] }

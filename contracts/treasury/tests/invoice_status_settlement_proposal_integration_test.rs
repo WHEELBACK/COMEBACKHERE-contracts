@@ -1,4 +1,4 @@
-use invoice::{InvoiceContract, InvoiceContractClient, InvoiceStatus, MaybeBytes};
+use invoice::{InvoiceContract, InvoiceContractClient, InvoiceStatus, MaybeAddress, MaybeBytes};
 use soroban_sdk::{
     contract, contracterror, contractimpl,
     testutils::{Address as _, Ledger},
@@ -59,7 +59,9 @@ fn setup() -> (
 
     let treasury_id = env.register_contract(None, TreasuryContract);
     let treasury = TreasuryContractClient::new(&env, &treasury_id);
-    assert!(treasury.try_initialize(&admin, &1, &soroban_sdk::Vec::new(&env)).is_ok());
+    assert!(treasury
+        .try_initialize(&admin, &1, &soroban_sdk::Vec::new(&env))
+        .is_ok());
     treasury.set_signer(&admin, &wf_id, &1);
 
     (
@@ -87,10 +89,20 @@ fn settlement_proposal_succeeds_when_invoice_paid() {
             &MaybeBytes::None,
             &MaybeBytes::None,
             &0,
+            &MaybeAddress::None,
         )
         .unwrap()
         .unwrap();
-    assert!(invoice.try_mark_paid(&admin, &inv_id, &payer).unwrap().is_ok());
+    assert!(invoice
+        .try_mark_paid(
+            &admin,
+            &inv_id,
+            &payer,
+            &MaybeBytes::None,
+            &MaybeAddress::None
+        )
+        .unwrap()
+        .is_ok());
 
     let wf = SettlementProposalWorkflowClient::new(&env, &wf_id);
     assert!(wf
@@ -110,6 +122,7 @@ fn settlement_proposal_rejected_when_invoice_pending() {
             &MaybeBytes::None,
             &MaybeBytes::None,
             &0,
+            &MaybeAddress::None,
         )
         .unwrap()
         .unwrap();
@@ -133,10 +146,20 @@ fn settlement_proposal_rejected_when_invoice_released() {
             &MaybeBytes::None,
             &MaybeBytes::None,
             &0,
+            &MaybeAddress::None,
         )
         .unwrap()
         .unwrap();
-    assert!(invoice.try_mark_paid(&admin, &inv_id, &payer).unwrap().is_ok());
+    assert!(invoice
+        .try_mark_paid(
+            &admin,
+            &inv_id,
+            &payer,
+            &MaybeBytes::None,
+            &MaybeAddress::None
+        )
+        .unwrap()
+        .is_ok());
     invoice.release_escrow(&admin, &inv_id);
     assert_eq!(invoice.get_invoice(&inv_id).status, InvoiceStatus::Released);
 
@@ -159,6 +182,7 @@ fn settlement_proposal_boundary_at_expiry_transition() {
             &MaybeBytes::None,
             &MaybeBytes::None,
             &0,
+            &MaybeAddress::None,
         )
         .unwrap()
         .unwrap();
@@ -169,7 +193,13 @@ fn settlement_proposal_boundary_at_expiry_transition() {
     assert_eq!(invoice.get_invoice(&inv_id).status, InvoiceStatus::Pending);
     let wf = SettlementProposalWorkflowClient::new(&env, &wf_id);
     let err = invoice
-        .try_mark_paid(&admin, &inv_id, &payer)
+        .try_mark_paid(
+            &admin,
+            &inv_id,
+            &payer,
+            &MaybeBytes::None,
+            &MaybeAddress::None,
+        )
         .unwrap_err()
         .unwrap();
     assert_eq!(err, invoice::InvoiceError::Expired);
@@ -177,7 +207,13 @@ fn settlement_proposal_boundary_at_expiry_transition() {
     // Before expiry (timestamp reset to 0) payment succeeds.
     env.ledger().with_mut(|l| l.timestamp = 0);
     assert!(invoice
-        .try_mark_paid(&admin, &inv_id, &payer)
+        .try_mark_paid(
+            &admin,
+            &inv_id,
+            &payer,
+            &MaybeBytes::None,
+            &MaybeAddress::None
+        )
         .unwrap()
         .is_ok());
     assert_eq!(invoice.get_invoice(&inv_id).status, InvoiceStatus::Paid);

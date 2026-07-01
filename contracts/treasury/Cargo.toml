@@ -9,7 +9,6 @@ crate-type = ["cdylib", "rlib"]
 name = "treasury"
 
 [features]
-default = ["testutils"]
 testutils = ["soroban-sdk/testutils"]
 
 [dependencies]
@@ -17,7 +16,6 @@ soroban-sdk.workspace = true
 multisig = { package = "comebackhere-multisig", path = "../../crates/multisig" }
 
 [dev-dependencies]
-derive_arbitrary.workspace = true
 soroban-sdk = { workspace = true, features = ["testutils"] }
 compliance = { package = "comebackhere-compliance", path = "../compliance" }
 invoice = { package = "comebackhere-invoice", path = "../invoice" }

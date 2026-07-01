@@ -1,4 +1,7 @@
-use invoice::{BatchInvoiceParams, InvoiceContract, InvoiceContractClient, InvoiceStatus, MaybeAddress, MaybeBytes};
+use invoice::{
+    BatchInvoiceParams, InvoiceContract, InvoiceContractClient, InvoiceStatus, MaybeAddress,
+    MaybeBytes,
+};
 use soroban_sdk::{testutils::Address as _, vec, Address, Env, Vec};
 
 const USDC: i128 = 10_000_000;
@@ -54,7 +57,16 @@ fn test_batch_ids_continue_from_existing_count() {
     let (env, _, client) = setup();
     let merchant = Address::generate(&env);
 
-    client.create_invoice(&merchant, &USDC, &USDC, &3600, &MaybeBytes::None, &MaybeBytes::None, &0, &MaybeAddress::None);
+    client.create_invoice(
+        &merchant,
+        &USDC,
+        &USDC,
+        &3600,
+        &MaybeBytes::None,
+        &MaybeBytes::None,
+        &0,
+        &MaybeAddress::None,
+    );
 
     let params = vec![&env, param(&env, USDC, USDC), param(&env, USDC, USDC)];
     let ids = client.batch_create_invoice(&merchant, &params);
@@ -87,11 +99,7 @@ fn test_batch_rejects_sub_usdc_precision() {
     let (env, _, client) = setup();
     let merchant = Address::generate(&env);
 
-    let params = vec![
-        &env,
-        param(&env, USDC, USDC),
-        param(&env, USDC - 1, USDC),
-    ];
+    let params = vec![&env, param(&env, USDC, USDC), param(&env, USDC - 1, USDC)];
     assert!(client.try_batch_create_invoice(&merchant, &params).is_err());
     assert_eq!(client.get_invoice_count(), 0);
 }
@@ -128,7 +136,16 @@ fn test_batch_rejects_nonce_already_used() {
     let (env, _, client) = setup();
     let merchant = Address::generate(&env);
 
-    client.create_invoice(&merchant, &USDC, &USDC, &3600, &MaybeBytes::None, &MaybeBytes::None, &7, &MaybeAddress::None);
+    client.create_invoice(
+        &merchant,
+        &USDC,
+        &USDC,
+        &3600,
+        &MaybeBytes::None,
+        &MaybeBytes::None,
+        &7,
+        &MaybeAddress::None,
+    );
 
     let mut p = param(&env, USDC, USDC);
     p.merchant_nonce = 7;

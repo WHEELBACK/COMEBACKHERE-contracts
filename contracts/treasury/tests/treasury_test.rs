@@ -155,7 +155,8 @@ fn dispute_can_be_raised_against_settlement() {
 
     let settlement_id = client.propose_settlement(&signer, &merchant, &10_000_000);
 
-    let dispute_id = client.raise_dispute(&claimant, &settlement_id, &merchant, &5_000_000, &u64::MAX);
+    let dispute_id =
+        client.raise_dispute(&claimant, &settlement_id, &merchant, &5_000_000, &u64::MAX);
     assert_eq!(dispute_id, 1);
 }
 
@@ -173,7 +174,8 @@ fn dispute_resolved_in_favor_of_claimant() {
     client.set_signer(&admin, &signer, &1);
 
     let settlement_id = client.propose_settlement(&signer, &merchant, &10_000_000);
-    let dispute_id = client.raise_dispute(&claimant, &settlement_id, &merchant, &5_000_000, &u64::MAX);
+    let dispute_id =
+        client.raise_dispute(&claimant, &settlement_id, &merchant, &5_000_000, &u64::MAX);
 
     client.resolve_dispute(&admin, &dispute_id, &true);
 }
@@ -192,7 +194,8 @@ fn dispute_resolved_in_favor_of_counterparty() {
     client.set_signer(&admin, &signer, &1);
 
     let settlement_id = client.propose_settlement(&signer, &merchant, &10_000_000);
-    let dispute_id = client.raise_dispute(&claimant, &settlement_id, &merchant, &5_000_000, &u64::MAX);
+    let dispute_id =
+        client.raise_dispute(&claimant, &settlement_id, &merchant, &5_000_000, &u64::MAX);
 
     client.resolve_dispute(&admin, &dispute_id, &false);
 }
@@ -222,7 +225,9 @@ fn test_initialize_rejects_zero_threshold() {
     let admin = Address::generate(&env);
     let id = env.register_contract(None, TreasuryContract);
     let client = TreasuryContractClient::new(&env, &id);
-    assert!(client.try_initialize(&admin, &0, &soroban_sdk::Vec::new(&env)).is_err());
+    assert!(client
+        .try_initialize(&admin, &0, &soroban_sdk::Vec::new(&env))
+        .is_err());
 }
 
 #[test]
@@ -233,5 +238,7 @@ fn test_initialize_rejects_reinit() {
     let id = env.register_contract(None, TreasuryContract);
     let client = TreasuryContractClient::new(&env, &id);
     client.initialize(&admin, &1, &soroban_sdk::Vec::new(&env));
-    assert!(client.try_initialize(&admin, &2, &soroban_sdk::Vec::new(&env)).is_err());
+    assert!(client
+        .try_initialize(&admin, &2, &soroban_sdk::Vec::new(&env))
+        .is_err());
 }

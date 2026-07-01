@@ -69,10 +69,7 @@ fn test_release_escrow_rejected_when_paused() {
     let payer = Address::generate(&env);
     client.mark_paid(&admin, &id, &payer, &MaybeBytes::None, &MaybeAddress::None);
     client.pause(&admin);
-    let err = client
-        .try_release_escrow(&admin, &id)
-        .unwrap_err()
-        .unwrap();
+    let err = client.try_release_escrow(&admin, &id).unwrap_err().unwrap();
     assert_eq!(err, InvoiceError::ContractPaused);
 }
 
@@ -81,10 +78,7 @@ fn test_cancel_invoice_rejected_when_paused() {
     let (env, admin, client) = setup();
     let id = make_invoice(&env, &client);
     client.pause(&admin);
-    let err = client
-        .try_cancel_invoice(&admin, &id)
-        .unwrap_err()
-        .unwrap();
+    let err = client.try_cancel_invoice(&admin, &id).unwrap_err().unwrap();
     assert_eq!(err, InvoiceError::ContractPaused);
 }
 
@@ -105,10 +99,7 @@ fn test_request_refund_rejected_when_paused() {
     );
     client.mark_paid(&admin, &id, &payer, &MaybeBytes::None, &MaybeAddress::None);
     client.pause(&admin);
-    let err = client
-        .try_request_refund(&payer, &id)
-        .unwrap_err()
-        .unwrap();
+    let err = client.try_request_refund(&payer, &id).unwrap_err().unwrap();
     assert_eq!(err, InvoiceError::ContractPaused);
 }
 
@@ -118,9 +109,6 @@ fn test_batch_expire_rejected_when_paused() {
     let id = make_invoice(&env, &client);
     client.pause(&admin);
     let ids = soroban_sdk::vec![&env, id];
-    let err = client
-        .try_batch_expire(&admin, &ids)
-        .unwrap_err()
-        .unwrap();
+    let err = client.try_batch_expire(&admin, &ids).unwrap_err().unwrap();
     assert_eq!(err, InvoiceError::ContractPaused);
 }

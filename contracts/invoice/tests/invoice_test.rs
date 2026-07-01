@@ -93,7 +93,15 @@ fn test_mark_paid_requires_admin() {
         &0,
         &MaybeAddress::None,
     );
-    assert!(client.try_mark_paid(&rogue_admin, &id, &payer, &MaybeBytes::None, &MaybeAddress::None).is_err());
+    assert!(client
+        .try_mark_paid(
+            &rogue_admin,
+            &id,
+            &payer,
+            &MaybeBytes::None,
+            &MaybeAddress::None
+        )
+        .is_err());
 }
 
 #[test]
@@ -112,7 +120,9 @@ fn test_expired_invoice_cannot_be_paid() {
         &MaybeAddress::None,
     );
     env.ledger().with_mut(|ledger| ledger.timestamp += 2);
-    assert!(client.try_mark_paid(&admin, &id, &payer, &MaybeBytes::None, &MaybeAddress::None).is_err());
+    assert!(client
+        .try_mark_paid(&admin, &id, &payer, &MaybeBytes::None, &MaybeAddress::None)
+        .is_err());
 }
 
 #[test]
@@ -150,7 +160,9 @@ fn test_pause_blocks_mark_paid() {
         &MaybeAddress::None,
     );
     client.pause(&admin);
-    assert!(client.try_mark_paid(&admin, &id, &payer, &MaybeBytes::None, &MaybeAddress::None).is_err());
+    assert!(client
+        .try_mark_paid(&admin, &id, &payer, &MaybeBytes::None, &MaybeAddress::None)
+        .is_err());
 }
 
 #[test]
@@ -169,7 +181,9 @@ fn test_double_payment_rejected() {
         &MaybeAddress::None,
     );
     client.mark_paid(&admin, &id, &payer, &MaybeBytes::None, &MaybeAddress::None);
-    assert!(client.try_mark_paid(&admin, &id, &payer, &MaybeBytes::None, &MaybeAddress::None).is_err());
+    assert!(client
+        .try_mark_paid(&admin, &id, &payer, &MaybeBytes::None, &MaybeAddress::None)
+        .is_err());
 }
 
 #[test]
@@ -357,7 +371,15 @@ fn test_initialize_second_call_does_not_overwrite_admin() {
         &MaybeAddress::None,
     );
     // Only the original admin (not new_admin) can act on admin-gated entrypoints.
-    assert!(client.try_mark_paid(&new_admin, &id, &payer, &MaybeBytes::None, &MaybeAddress::None).is_err());
+    assert!(client
+        .try_mark_paid(
+            &new_admin,
+            &id,
+            &payer,
+            &MaybeBytes::None,
+            &MaybeAddress::None
+        )
+        .is_err());
     client.mark_paid(&admin, &id, &payer, &MaybeBytes::None, &MaybeAddress::None);
     assert_eq!(client.get_invoice(&id).status, InvoiceStatus::Paid);
 }
@@ -424,7 +446,13 @@ fn test_event_stream_redis_webhook_compatibility() {
     assert_eq!(invoice.status, InvoiceStatus::Pending);
     assert_eq!(invoice.payer, MaybeAddress::None);
 
-    client.mark_paid(&admin, &invoice_id, &payer, &MaybeBytes::None, &MaybeAddress::None);
+    client.mark_paid(
+        &admin,
+        &invoice_id,
+        &payer,
+        &MaybeBytes::None,
+        &MaybeAddress::None,
+    );
     let paid_invoice = client.get_invoice(&invoice_id);
     assert_eq!(paid_invoice.status, InvoiceStatus::Paid);
     assert_eq!(paid_invoice.payer, MaybeAddress::Some(payer));
@@ -509,11 +537,11 @@ fn test_sub_usdc_amount_rejected() {
             &500_000,
             &10_000_000,
             &3600,
-        &MaybeBytes::None,
-        &MaybeBytes::None,
-        &0,
-        &MaybeAddress::None,
-    )
+            &MaybeBytes::None,
+            &MaybeBytes::None,
+            &0,
+            &MaybeAddress::None,
+        )
         .unwrap_err()
         .unwrap();
     assert_eq!(err, InvoiceError::AmountPrecision);
@@ -530,11 +558,11 @@ fn test_sub_usdc_gross_rejected() {
             &500_000,
             &500_000,
             &3600,
-        &MaybeBytes::None,
-        &MaybeBytes::None,
-        &0,
-        &MaybeAddress::None,
-    )
+            &MaybeBytes::None,
+            &MaybeBytes::None,
+            &0,
+            &MaybeAddress::None,
+        )
         .unwrap_err()
         .unwrap();
     assert_eq!(err, InvoiceError::AmountPrecision);
@@ -616,7 +644,13 @@ fn test_cancelled_invoice_cannot_be_marked_paid() {
     );
     client.cancel_invoice(&merchant, &invoice_id);
     let err = client
-        .try_mark_paid(&admin, &invoice_id, &payer, &MaybeBytes::None, &MaybeAddress::None)
+        .try_mark_paid(
+            &admin,
+            &invoice_id,
+            &payer,
+            &MaybeBytes::None,
+            &MaybeAddress::None,
+        )
         .unwrap_err()
         .unwrap();
     assert_eq!(err, InvoiceError::NotPending);
@@ -821,9 +855,10 @@ fn test_mark_paid_blocked_when_paused() {
         &MaybeAddress::None,
     );
     client.pause(&admin);
-    assert!(client.try_mark_paid(&admin, &id, &payer, &MaybeBytes::None, &MaybeAddress::None).is_err());
+    assert!(client
+        .try_mark_paid(&admin, &id, &payer, &MaybeBytes::None, &MaybeAddress::None)
+        .is_err());
 }
-
 
 // Issue #94: create_invoice must enforce merchant authorization.
 #[test]
@@ -922,11 +957,11 @@ fn test_duplicate_nonce_rejected() {
             &10_000_000,
             &10_000_000,
             &3600,
-        &MaybeBytes::None,
-        &MaybeBytes::None,
-        &42,
-        &MaybeAddress::None,
-    )
+            &MaybeBytes::None,
+            &MaybeBytes::None,
+            &42,
+            &MaybeAddress::None,
+        )
         .unwrap_err()
         .unwrap();
     assert_eq!(err, InvoiceError::DuplicateNonce);
@@ -1053,11 +1088,17 @@ fn test_request_refund_only_recorded_payer_can_call() {
     client.mark_paid(&admin, &id, &payer, &MaybeBytes::None, &MaybeAddress::None);
 
     // Random address is rejected.
-    let err = client.try_request_refund(&impostor, &id).unwrap_err().unwrap();
+    let err = client
+        .try_request_refund(&impostor, &id)
+        .unwrap_err()
+        .unwrap();
     assert_eq!(err, InvoiceError::Unauthorized);
 
     // Merchant is rejected despite owning the invoice.
-    let err = client.try_request_refund(&merchant, &id).unwrap_err().unwrap();
+    let err = client
+        .try_request_refund(&merchant, &id)
+        .unwrap_err()
+        .unwrap();
     assert_eq!(err, InvoiceError::Unauthorized);
 
     // Admin is rejected despite holding the highest privilege.
@@ -1066,7 +1107,10 @@ fn test_request_refund_only_recorded_payer_can_call() {
 
     // Only the address recorded at mark_paid time succeeds.
     client.request_refund(&payer, &id);
-    assert_eq!(client.get_invoice(&id).status, InvoiceStatus::RefundRequested);
+    assert_eq!(
+        client.get_invoice(&id).status,
+        InvoiceStatus::RefundRequested
+    );
 }
 
 // --- approve_refund tests ---
@@ -1088,7 +1132,10 @@ fn test_approve_refund_transitions_to_refunded() {
     );
     client.mark_paid(&admin, &id, &payer, &MaybeBytes::None, &MaybeAddress::None);
     client.request_refund(&payer, &id);
-    assert_eq!(client.get_invoice(&id).status, InvoiceStatus::RefundRequested);
+    assert_eq!(
+        client.get_invoice(&id).status,
+        InvoiceStatus::RefundRequested
+    );
     client.approve_refund(&admin, &id);
     assert_eq!(client.get_invoice(&id).status, InvoiceStatus::Refunded);
 }
@@ -1113,7 +1160,10 @@ fn test_approve_refund_requires_admin() {
     client.request_refund(&payer, &id);
     let err = client.try_approve_refund(&rogue, &id).unwrap_err().unwrap();
     assert_eq!(err, InvoiceError::Unauthorized);
-    assert_eq!(client.get_invoice(&id).status, InvoiceStatus::RefundRequested);
+    assert_eq!(
+        client.get_invoice(&id).status,
+        InvoiceStatus::RefundRequested
+    );
 }
 
 #[test]

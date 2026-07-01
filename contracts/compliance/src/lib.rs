@@ -181,7 +181,7 @@ impl ComplianceContract {
         env: Env,
         admin: Address,
         address: Address,
-        tier: u8,
+        tier: u32,
     ) -> Result<(), ContractError> {
         Self::require_admin(&env, &admin)?;
         Self::require_not_paused(&env)?;
@@ -201,11 +201,11 @@ impl ComplianceContract {
     }
 
     /// Returns the stored compliance tier for `address`, or `0` if none has been set.
-    pub fn get_address_tier(env: Env, address: Address) -> u8 {
+    pub fn get_address_tier(env: Env, address: Address) -> u32 {
         env.storage()
             .persistent()
             .get(&DataKey::Tier(address))
-            .unwrap_or(0u8)
+            .unwrap_or(0u32)
     }
 
     pub fn bulk_block_addresses(
@@ -224,7 +224,6 @@ impl ComplianceContract {
         }
         Ok(())
     }
-
 
     // Emergency policy: block_address and clear_address are permitted while paused
     // so the admin can remediate compromised addresses without unpausing first.
@@ -660,9 +659,7 @@ impl ComplianceContract {
             .unwrap_or(Vec::new(env));
         if !index.contains(address) {
             index.push_back(address.clone());
-            env.storage()
-                .instance()
-                .set(&DataKey::AddressIndex, &index);
+            env.storage().instance().set(&DataKey::AddressIndex, &index);
         }
     }
 }

@@ -91,6 +91,8 @@ pub fn contract_unpaused(env: &Env, admin: &Address) {
 }
 
 pub fn invoice_amended(env: &Env, event: &InvoiceAmountUpdatedEvent) {
-    env.events()
-        .publish((Symbol::new(env, "invoice_amended"), event.id), event.clone());
+    env.events().publish(
+        (Symbol::new(env, "invoice_amended"), event.id),
+        event.clone(),
+    );
 }

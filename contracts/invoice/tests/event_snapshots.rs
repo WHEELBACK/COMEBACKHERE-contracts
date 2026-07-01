@@ -1,4 +1,6 @@
-use invoice::{EscrowReleasedEvent, InvoiceContract, InvoiceContractClient, MaybeAddress, MaybeBytes};
+use invoice::{
+    EscrowReleasedEvent, InvoiceContract, InvoiceContractClient, MaybeAddress, MaybeBytes,
+};
 use soroban_sdk::{
     testutils::{Address as _, Ledger},
     xdr::ToXdr,

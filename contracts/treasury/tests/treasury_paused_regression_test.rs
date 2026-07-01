@@ -73,7 +73,7 @@ fn paused_rejects_raise_dispute() {
     let (client, _admin) = paused_setup(&env);
     let claimant = Address::generate(&env);
     let counterparty = Address::generate(&env);
-    client.raise_dispute(&claimant, &1, &counterparty, &1_000);
+    client.raise_dispute(&claimant, &1, &counterparty, &1_000, &500);
 }
 
 #[test]

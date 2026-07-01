@@ -40,28 +40,28 @@ use test_token::{TestToken, TestTokenClient};
 fn execute_settlement_uses_merchant_payout_override() {
     let env = Env::default();
     env.mock_all_auths();
-    
+
     let admin = Address::generate(&env);
     let merchant = Address::generate(&env);
     let payout_override = Address::generate(&env);
-    
+
     let treasury_id = env.register_contract(None, TreasuryContract);
     let treasury_client = TreasuryContractClient::new(&env, &treasury_id);
     treasury_client.initialize(&admin, &1, &soroban_sdk::Vec::new(&env));
-    
+
     let token_id = env.register_contract(None, TestToken);
     let test_token_client = TestTokenClient::new(&env, &token_id);
-    
+
     // Mint tokens to treasury
     test_token_client.mint(&treasury_id, &10_000_000);
-    
+
     // Update merchant payout address to override
     treasury_client.update_merchant_payout_address(&merchant, &payout_override);
-    
+
     // Propose and execute settlement
     let settlement_id = treasury_client.propose_settlement(&admin, &merchant, &10_000_000);
     treasury_client.execute_settlement(&admin, &settlement_id, &token_id);
-    
+
     // Verify tokens were sent to payout override, not merchant
     assert_eq!(test_token_client.balance(&payout_override), 10_000_000);
     assert_eq!(test_token_client.balance(&merchant), 0);

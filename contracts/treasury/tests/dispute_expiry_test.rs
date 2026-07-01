@@ -2,7 +2,9 @@ use soroban_sdk::{
     testutils::{Address as _, Ledger as _},
     Address, Env,
 };
-use treasury::{DisputeStatus, SettlementHoldReason, SettlementStatus, TreasuryContract, TreasuryContractClient};
+use treasury::{
+    DisputeStatus, SettlementHoldReason, SettlementStatus, TreasuryContract, TreasuryContractClient,
+};
 
 fn setup(env: &Env) -> (TreasuryContractClient, Address) {
     let admin = Address::generate(env);

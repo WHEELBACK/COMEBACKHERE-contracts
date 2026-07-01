@@ -48,7 +48,7 @@ fn deposit_withdraw_roundtrip() {
     let treasury_id = env.register_contract(None, TreasuryContract);
     let treasury_client = TreasuryContractClient::new(&env, &treasury_id);
     treasury_client.initialize(&admin, &1, &soroban_sdk::Vec::new(&env));
-    
+
     let token_id = env.register_contract(None, TestToken);
     let test_token_client = TestTokenClient::new(&env, &token_id);
 
@@ -87,7 +87,7 @@ fn batch_deposit_transfers_multiple_tokens_to_treasury() {
 
     let treasury_id = env.register_contract(None, TreasuryContract);
     let treasury_client = TreasuryContractClient::new(&env, &treasury_id);
-    treasury_client.initialize(&admin, &1);
+    treasury_client.initialize(&admin, &1, &Vec::new(&env));
 
     let usdc_id = env.register_contract(None, TestToken);
     let eurc_id = env.register_contract(None, TestToken);
@@ -118,7 +118,7 @@ fn batch_deposit_rejects_invalid_amount() {
     let depositor = Address::generate(&env);
     let treasury_id = env.register_contract(None, TreasuryContract);
     let treasury_client = TreasuryContractClient::new(&env, &treasury_id);
-    treasury_client.initialize(&admin, &1);
+    treasury_client.initialize(&admin, &1, &Vec::new(&env));
 
     let token_id = env.register_contract(None, TestToken);
     let mut deposits = Vec::new(&env);

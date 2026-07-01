@@ -19,7 +19,16 @@ fn setup() -> (Env, Address, InvoiceContractClient<'static>) {
 }
 
 fn make_invoice(_env: &Env, client: &InvoiceContractClient, merchant: &Address) -> u64 {
-    client.create_invoice(merchant, &10_000_000, &10_250_000, &3600, &MaybeBytes::None, &MaybeBytes::None, &0, &MaybeAddress::None)
+    client.create_invoice(
+        merchant,
+        &10_000_000,
+        &10_250_000,
+        &3600,
+        &MaybeBytes::None,
+        &MaybeBytes::None,
+        &0,
+        &MaybeAddress::None,
+    )
 }
 
 // --- add behaviour ---
@@ -99,8 +108,8 @@ fn test_batch_expire_removes_expired_ids_from_pending_index() {
 fn test_batch_expire_leaves_unexpired_ids_in_index() {
     let (env, admin, client) = setup();
     let merchant = Address::generate(&env);
-    let id_soon = make_invoice(&env, &client, &merchant);   // expires in 3600s
-    // Create a long-lived invoice
+    let id_soon = make_invoice(&env, &client, &merchant); // expires in 3600s
+                                                          // Create a long-lived invoice
     let id_long = client.create_invoice(
         &merchant,
         &10_000_000,

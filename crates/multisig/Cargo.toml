@@ -10,7 +10,6 @@ publish = false
 name = "multisig"
 
 [features]
-default = ["testutils"]
 testutils = ["soroban-sdk/testutils"]
 
 [dependencies]

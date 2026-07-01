@@ -1,5 +1,14 @@
 use compliance::{ComplianceContract, ComplianceContractClient, ContractError};
-use soroban_sdk::{testutils::{Address as _, Events, Ledger}, Address, Env, Symbol};
+use soroban_sdk::{
+    testutils::{Address as _, Events, Ledger},
+    Address, Env, FromVal, Symbol,
+};
+
+fn last_event_symbol(env: &Env) -> Symbol {
+    let events = env.events().all();
+    let (_, topics, _) = events.last().unwrap();
+    Symbol::from_val(env, &topics.get_unchecked(0))
+}
 
 fn setup() -> (Env, Address, Address, ComplianceContractClient<'static>) {
     let env = Env::default();
@@ -250,8 +259,11 @@ fn reinitialize_is_rejected() {
 fn emits_address_allowed_event() {
     let (env, admin, subject, client) = setup();
     client.allow_address(&admin, &subject);
+    assert_eq!(
+        last_event_symbol(&env),
+        Symbol::new(&env, "address_allowed")
+    );
     assert!(client.is_allowed(&subject));
-    assert_eq!(last_event_symbol(&env), Symbol::new(&env, "address_allowed"));
 }
 
 // Verification: address_blocked event schema
@@ -263,8 +275,11 @@ fn emits_address_blocked_event() {
     client.allow_address(&admin, &subject);
     assert!(client.is_allowed(&subject));
     client.block_address(&admin, &subject, &None);
+    assert_eq!(
+        last_event_symbol(&env),
+        Symbol::new(&env, "address_blocked")
+    );
     assert!(!client.is_allowed(&subject));
-    assert_eq!(last_event_symbol(&env), Symbol::new(&env, "address_blocked"));
 }
 
 // Verification: address_cleared event schema
@@ -277,8 +292,11 @@ fn emits_address_cleared_event() {
     client.block_address(&admin, &subject, &None);
     assert!(!client.is_allowed(&subject));
     client.clear_address(&admin, &subject);
+    assert_eq!(
+        last_event_symbol(&env),
+        Symbol::new(&env, "address_cleared")
+    );
     assert!(client.is_allowed(&subject));
-    assert_eq!(last_event_symbol(&env), Symbol::new(&env, "address_cleared"));
 }
 
 // ── #79 Default-deny posture ──────────────────────────────────────────────────
