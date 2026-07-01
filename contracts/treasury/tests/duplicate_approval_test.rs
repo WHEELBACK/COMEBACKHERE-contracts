@@ -80,8 +80,13 @@ fn weighted_signer_duplicate_approval_does_not_double_count_weight() {
 
     // Second approval from the same signer must not increment the weight again.
     let s2 = client.approve_settlement(&heavy, &sid);
-    assert_eq!(s2.approval_weight, weight_after_first,
-        "approval_weight must not increase on duplicate approve from same signer");
-    assert_eq!(s2.approvals.len(), 1,
-        "approvals vec must not grow on duplicate approve");
+    assert_eq!(
+        s2.approval_weight, weight_after_first,
+        "approval_weight must not increase on duplicate approve from same signer"
+    );
+    assert_eq!(
+        s2.approvals.len(),
+        1,
+        "approvals vec must not grow on duplicate approve"
+    );
 }

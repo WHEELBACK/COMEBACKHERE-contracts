@@ -1,12 +1,20 @@
 #![no_std]
+// The soroban-sdk #[contractimpl] macro expands each contract method into
+// additional generated items (e.g. the argument-spec helper) whose span
+// clippy attributes to the macro invocation rather than the annotated
+// function, so a function-level #[allow] doesn't suppress it — see
+// create_invoice's 8-argument signature.
+#![allow(clippy::too_many_arguments)]
 
 mod events;
 mod invoice;
 mod validation;
 
 pub use events::{EscrowReleasedEvent, InvoiceAmountUpdatedEvent};
-pub use invoice::{BatchInvoiceParams, DataKey, Invoice, InvoiceError, InvoiceStatus, MaybeAddress, MaybeBytes};
 use invoice::StatusTransition;
+pub use invoice::{
+    BatchInvoiceParams, DataKey, Invoice, InvoiceError, InvoiceStatus, MaybeAddress, MaybeBytes,
+};
 
 use soroban_sdk::{contract, contractimpl, Address, Env, Vec};
 use validation::{
@@ -54,7 +62,6 @@ fn append_history(env: &Env, id: u64, from: InvoiceStatus, to: InvoiceStatus) {
     });
     env.storage().persistent().set(&key, &history);
 }
-
 
 #[contract]
 pub struct InvoiceContract;
@@ -205,6 +212,7 @@ impl InvoiceContract {
         require_not_paused(&env)?;
 
         // Validate all params before touching storage (atomicity).
+        let mut batch_nonces: Vec<u64> = Vec::new(&env);
         for p in params.iter() {
             require_positive_amount(p.amount_usdc, p.gross_usdc)?;
             require_usdc_precision(p.amount_usdc, p.gross_usdc)?;
@@ -215,9 +223,12 @@ impl InvoiceContract {
             require_expiry_not_too_long(p.expires_in_seconds)?;
             if p.merchant_nonce != 0 {
                 let nonce_key = DataKey::MerchantNonce(merchant.clone(), p.merchant_nonce);
-                if env.storage().persistent().has(&nonce_key) {
+                if env.storage().persistent().has(&nonce_key)
+                    || batch_nonces.contains(p.merchant_nonce)
+                {
                     return Err(InvoiceError::DuplicateNonce);
                 }
+                batch_nonces.push_back(p.merchant_nonce);
             }
         }
 
@@ -535,7 +546,12 @@ impl InvoiceContract {
         env.storage()
             .persistent()
             .set(&DataKey::Invoice(id), &invoice);
-        append_history(&env, id, InvoiceStatus::Paid, InvoiceStatus::RefundRequested);
+        append_history(
+            &env,
+            id,
+            InvoiceStatus::Paid,
+            InvoiceStatus::RefundRequested,
+        );
         events::invoice_refund_requested(&env, id, &invoice);
         Ok(())
     }
@@ -559,7 +575,12 @@ impl InvoiceContract {
         env.storage()
             .persistent()
             .set(&DataKey::Invoice(id), &invoice);
-        append_history(&env, id, InvoiceStatus::RefundRequested, InvoiceStatus::Refunded);
+        append_history(
+            &env,
+            id,
+            InvoiceStatus::RefundRequested,
+            InvoiceStatus::Refunded,
+        );
         events::refund_approved(&env, id, &invoice);
         Ok(())
     }

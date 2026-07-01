@@ -1,11 +1,7 @@
 use invoice::{
-    InvoiceContract, InvoiceContractClient, InvoiceError, InvoiceStatus, MaybeBytes,
+    InvoiceContract, InvoiceContractClient, InvoiceError, InvoiceStatus, MaybeAddress, MaybeBytes,
 };
-use soroban_sdk::{
-    contract, contracterror, contractimpl,
-    testutils::Address as _,
-    Address, Env,
-};
+use soroban_sdk::{contract, contracterror, contractimpl, testutils::Address as _, Address, Env};
 use treasury::{TreasuryContract, TreasuryContractClient};
 
 #[contracterror]
@@ -30,7 +26,16 @@ impl PauseAwareSettlementWorkflow {
         let invoice = InvoiceContractClient::new(&env, &invoice_id);
         // Try to mark the invoice as paid. If the invoice contract is paused
         // this will fail and the settlement proposal is never submitted.
-        if invoice.try_mark_paid(&admin, &invoice_num, &payer).is_err() {
+        if invoice
+            .try_mark_paid(
+                &admin,
+                &invoice_num,
+                &payer,
+                &MaybeBytes::None,
+                &MaybeAddress::None,
+            )
+            .is_err()
+        {
             return Err(PauseWorkflowError::InvoicePaused);
         }
         let inv = invoice.get_invoice(&invoice_num);
@@ -52,7 +57,10 @@ fn setup() -> (
     Address,
 ) {
     let env = Env::default();
-    env.mock_all_auths();
+    // Admin's require_auth() happens inside a nested cross-contract call
+    // (invoice.mark_paid, invoked from the workflow contract), not tied to
+    // the root invocation, so non-root auth must be allowed here.
+    env.mock_all_auths_allowing_non_root_auth();
 
     let admin = Address::generate(&env);
     let merchant = Address::generate(&env);
@@ -66,7 +74,9 @@ fn setup() -> (
 
     let treasury_id = env.register_contract(None, TreasuryContract);
     let treasury = TreasuryContractClient::new(&env, &treasury_id);
-    assert!(treasury.try_initialize(&admin, &1, &soroban_sdk::Vec::new(&env)).is_ok());
+    assert!(treasury
+        .try_initialize(&admin, &1, &soroban_sdk::Vec::new(&env))
+        .is_ok());
     treasury.set_signer(&admin, &wf_id, &1);
 
     (
@@ -96,6 +106,7 @@ fn pay_and_propose_succeeds_when_not_paused() {
             &MaybeBytes::None,
             &MaybeBytes::None,
             &0,
+            &MaybeAddress::None,
         )
         .unwrap()
         .unwrap();
@@ -123,6 +134,7 @@ fn pay_and_propose_fails_when_invoice_contract_paused() {
             &MaybeBytes::None,
             &MaybeBytes::None,
             &0,
+            &MaybeAddress::None,
         )
         .unwrap()
         .unwrap();
@@ -132,7 +144,13 @@ fn pay_and_propose_fails_when_invoice_contract_paused() {
 
     // mark_paid directly should fail with ContractPaused
     let err = invoice
-        .try_mark_paid(&admin, &inv_id, &payer)
+        .try_mark_paid(
+            &admin,
+            &inv_id,
+            &payer,
+            &MaybeBytes::None,
+            &MaybeAddress::None,
+        )
         .unwrap_err()
         .unwrap();
     assert_eq!(err, InvoiceError::ContractPaused);
@@ -146,10 +164,7 @@ fn pay_and_propose_fails_when_invoice_contract_paused() {
     assert_eq!(err, PauseWorkflowError::InvoicePaused);
 
     // Invoice status remains unchanged.
-    assert_eq!(
-        invoice.get_invoice(&inv_id).status,
-        InvoiceStatus::Pending
-    );
+    assert_eq!(invoice.get_invoice(&inv_id).status, InvoiceStatus::Pending);
 }
 
 #[test]
@@ -166,6 +181,7 @@ fn unpause_restores_workflow() {
             &MaybeBytes::None,
             &MaybeBytes::None,
             &0,
+            &MaybeAddress::None,
         )
         .unwrap()
         .unwrap();

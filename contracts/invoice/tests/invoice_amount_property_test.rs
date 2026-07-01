@@ -1,7 +1,7 @@
 // Fuzz-style property tests for require_positive_amount and require_usdc_precision.
 // Covers zero, negative, sub-USDC-factor, and above-7-decimal-precision inputs
 // systematically via parametric tables.
-use invoice::{InvoiceContract, InvoiceContractClient};
+use invoice::{InvoiceContract, InvoiceContractClient, MaybeAddress, MaybeBytes};
 use soroban_sdk::{testutils::Address as _, Address, Env};
 
 /// USDC_FACTOR as known from invoice::invoice: 1 USDC = 10_000_000 stroops.
@@ -43,7 +43,17 @@ fn prop_zero_and_negative_amounts_rejected() {
         let (env, c) = client();
         let merchant = Address::generate(&env);
         assert!(
-            c.try_create_invoice(&merchant, &amount, &gross, &3600).is_err(),
+            c.try_create_invoice(
+                &merchant,
+                &amount,
+                &gross,
+                &3600,
+                &MaybeBytes::None,
+                &MaybeBytes::None,
+                &0,
+                &MaybeAddress::None
+            )
+            .is_err(),
             "expected rejection for zero/negative amount={amount} gross={gross}"
         );
     }
@@ -67,7 +77,17 @@ fn prop_gross_less_than_amount_rejected() {
         let (env, c) = client();
         let merchant = Address::generate(&env);
         assert!(
-            c.try_create_invoice(&merchant, &amount, &gross, &3600).is_err(),
+            c.try_create_invoice(
+                &merchant,
+                &amount,
+                &gross,
+                &3600,
+                &MaybeBytes::None,
+                &MaybeBytes::None,
+                &0,
+                &MaybeAddress::None
+            )
+            .is_err(),
             "expected rejection when gross < amount: amount={amount} gross={gross}"
         );
     }
@@ -105,7 +125,17 @@ fn prop_below_usdc_factor_rejected() {
         let (env, c) = client();
         let merchant = Address::generate(&env);
         assert!(
-            c.try_create_invoice(&merchant, &v, &USDC_FACTOR, &3600).is_err(),
+            c.try_create_invoice(
+                &merchant,
+                &v,
+                &USDC_FACTOR,
+                &3600,
+                &MaybeBytes::None,
+                &MaybeBytes::None,
+                &0,
+                &MaybeAddress::None
+            )
+            .is_err(),
             "expected AmountPrecision rejection for amount={v} (below USDC_FACTOR)"
         );
 
@@ -113,7 +143,17 @@ fn prop_below_usdc_factor_rejected() {
         let (env, c) = client();
         let merchant = Address::generate(&env);
         assert!(
-            c.try_create_invoice(&merchant, &USDC_FACTOR, &v, &3600).is_err(),
+            c.try_create_invoice(
+                &merchant,
+                &USDC_FACTOR,
+                &v,
+                &3600,
+                &MaybeBytes::None,
+                &MaybeBytes::None,
+                &0,
+                &MaybeAddress::None
+            )
+            .is_err(),
             "expected AmountPrecision rejection for gross={v} (below USDC_FACTOR)"
         );
     }
@@ -126,11 +166,11 @@ fn prop_below_usdc_factor_rejected() {
 #[test]
 fn prop_valid_amounts_accepted() {
     let cases: &[(i128, i128)] = &[
-        (USDC_FACTOR, USDC_FACTOR),              // exact minimum
-        (USDC_FACTOR, USDC_FACTOR + 1),          // gross one stroop above minimum
-        (USDC_FACTOR, 2 * USDC_FACTOR),          // gross = 2 USDC
-        (10 * USDC_FACTOR, 10 * USDC_FACTOR),    // 10 USDC
-        (100 * USDC_FACTOR, 100 * USDC_FACTOR),  // 100 USDC
+        (USDC_FACTOR, USDC_FACTOR),             // exact minimum
+        (USDC_FACTOR, USDC_FACTOR + 1),         // gross one stroop above minimum
+        (USDC_FACTOR, 2 * USDC_FACTOR),         // gross = 2 USDC
+        (10 * USDC_FACTOR, 10 * USDC_FACTOR),   // 10 USDC
+        (100 * USDC_FACTOR, 100 * USDC_FACTOR), // 100 USDC
         (i128::MAX / 2, i128::MAX / 2),
         (i128::MAX, i128::MAX),
     ];
@@ -139,7 +179,17 @@ fn prop_valid_amounts_accepted() {
         let (env, c) = client();
         let merchant = Address::generate(&env);
         assert!(
-            c.try_create_invoice(&merchant, &amount, &gross, &3600).is_ok(),
+            c.try_create_invoice(
+                &merchant,
+                &amount,
+                &gross,
+                &3600,
+                &MaybeBytes::None,
+                &MaybeBytes::None,
+                &0,
+                &MaybeAddress::None
+            )
+            .is_ok(),
             "expected acceptance for amount={amount} gross={gross}"
         );
     }

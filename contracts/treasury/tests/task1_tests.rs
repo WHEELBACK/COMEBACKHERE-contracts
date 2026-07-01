@@ -67,7 +67,7 @@ fn approve_after_cancel_panics() {
 }
 
 #[test]
-#[should_panic(expected = "AlreadyExecuted")]
+#[should_panic(expected = "SettlementNotCancellable")]
 fn double_cancel_panics() {
     let env = Env::default();
     let (client, admin, _) = setup(&env, 1);
@@ -94,31 +94,15 @@ fn event_order_propose_approve_cancel() {
     client.set_signer(&admin, &backup, &1);
 
     let sid = client.propose_settlement(&admin, &merchant, &5_000_000);
+    let proposed_symbol = event_symbol(&env, &env.events().all().last().unwrap().1);
     client.approve_settlement(&backup, &sid);
+    let approved_symbol = event_symbol(&env, &env.events().all().last().unwrap().1);
     client.cancel_settlement(&admin, &sid);
+    let cancelled_symbol = event_symbol(&env, &env.events().all().last().unwrap().1);
 
-    let events = env.events().all();
-    let symbols: std::vec::Vec<String> = events
-        .iter()
-        .map(|(_, topics, _)| event_symbol(&env, &topics))
-        .collect();
-
-    // Find positions of the three key events
-    let proposed = symbols
-        .iter()
-        .position(|s| s == "settlement_proposed")
-        .unwrap();
-    let approved = symbols
-        .iter()
-        .position(|s| s == "settlement_approved")
-        .unwrap();
-    let cancelled = symbols
-        .iter()
-        .position(|s| s == "settlement_cancelled")
-        .unwrap();
-
-    assert!(proposed < approved, "proposed must come before approved");
-    assert!(approved < cancelled, "approved must come before cancelled");
+    assert_eq!(proposed_symbol, "settlement_proposed");
+    assert_eq!(approved_symbol, "settlement_approved");
+    assert_eq!(cancelled_symbol, "settlement_cancelled");
 }
 
 #[test]
@@ -129,24 +113,12 @@ fn event_order_propose_then_execute() {
     let token_id = env.register_contract(None, FakeToken);
 
     let sid = client.propose_settlement(&admin, &merchant, &1_000);
+    let proposed_symbol = event_symbol(&env, &env.events().all().last().unwrap().1);
     client.execute_settlement(&admin, &sid, &token_id);
+    let executed_symbol = event_symbol(&env, &env.events().all().last().unwrap().1);
 
-    let events = env.events().all();
-    let symbols: std::vec::Vec<String> = events
-        .iter()
-        .map(|(_, topics, _)| event_symbol(&env, &topics))
-        .collect();
-
-    let proposed = symbols
-        .iter()
-        .position(|s| s == "settlement_proposed")
-        .unwrap();
-    let executed = symbols
-        .iter()
-        .position(|s| s == "settlement_executed")
-        .unwrap();
-
-    assert!(proposed < executed, "proposed must come before executed");
+    assert_eq!(proposed_symbol, "settlement_proposed");
+    assert_eq!(executed_symbol, "settlement_executed");
 }
 
 // ─── #118 Signer rotation scenario coverage ──────────────────────────────────

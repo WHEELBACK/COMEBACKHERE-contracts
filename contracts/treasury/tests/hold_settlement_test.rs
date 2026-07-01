@@ -6,7 +6,7 @@ fn setup(env: &Env) -> (TreasuryContractClient, Address) {
     let admin = Address::generate(env);
     let id = env.register_contract(None, TreasuryContract);
     let client = TreasuryContractClient::new(env, &id);
-    client.initialize(&admin, &1);
+    client.initialize(&admin, &1, &soroban_sdk::Vec::new(env));
     (client, admin)
 }
 
@@ -18,13 +18,13 @@ fn hold_settlement_returns_already_on_hold_when_called_twice() {
 
     let sid = client.propose_settlement(&admin, &merchant, &10_000_000);
     assert_eq!(
-        client.hold_settlement(&admin, &sid, &SettlementHoldReason::AdminHold),
-        Ok(())
+        client.try_hold_settlement(&admin, &sid, &SettlementHoldReason::AdminHold),
+        Ok(Ok(()))
     );
 
     assert_eq!(
-        client.hold_settlement(&admin, &sid, &SettlementHoldReason::FraudCheck),
-        Err(TreasuryError::AlreadyOnHold)
+        client.try_hold_settlement(&admin, &sid, &SettlementHoldReason::FraudCheck),
+        Err(Ok(TreasuryError::AlreadyOnHold))
     );
 }
 
@@ -38,7 +38,7 @@ fn hold_settlement_still_returns_already_executed_for_other_non_pending_statuses
     client.cancel_settlement(&admin, &sid);
 
     assert_eq!(
-        client.hold_settlement(&admin, &sid, &SettlementHoldReason::AdminHold),
-        Err(TreasuryError::AlreadyExecuted)
+        client.try_hold_settlement(&admin, &sid, &SettlementHoldReason::AdminHold),
+        Err(Ok(TreasuryError::AlreadyExecuted))
     );
 }

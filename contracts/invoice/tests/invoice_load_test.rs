@@ -67,6 +67,9 @@ fn high_volume_invoice_creation_storage_budget() {
 #[test]
 fn batch_expire_1000_invoices() {
     let (env, admin, client) = setup();
+    // This test intentionally exceeds the default network resource budget to
+    // exercise storage/state correctness at high volume, not budget limits.
+    env.cost_estimate().budget().reset_unlimited();
     let merchant = Address::generate(&env);
 
     // Set timestamp so expires_at = 1001 for every invoice.

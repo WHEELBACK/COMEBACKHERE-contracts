@@ -9,7 +9,9 @@
 //   1. expires_at exactly, no grace window  → Expired
 //   2. expires_at + grace - 1               → Paid
 //   3. expires_at + grace                   → Expired
-use invoice::{InvoiceContract, InvoiceContractClient, InvoiceError, InvoiceStatus, MaybeAddress, MaybeBytes};
+use invoice::{
+    InvoiceContract, InvoiceContractClient, InvoiceError, InvoiceStatus, MaybeAddress, MaybeBytes,
+};
 use soroban_sdk::{
     testutils::{Address as _, Ledger},
     Address, Env,

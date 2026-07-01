@@ -40,7 +40,9 @@ fn execute_settlement_panics_when_token_not_in_allowlist() {
 
     client.add_allowed_token(&admin, &allowed_token);
     let sid = client.propose_settlement(&admin, &merchant, &10_000_000);
-    assert!(client.try_execute_settlement(&admin, &sid, &other_token).is_err());
+    assert!(client
+        .try_execute_settlement(&admin, &sid, &other_token)
+        .is_err());
 }
 
 #[test]
@@ -69,5 +71,7 @@ fn remove_allowed_token_prevents_execution() {
 
     let sid = client.propose_settlement(&admin, &merchant, &10_000_000);
     // token_a removed; allowlist still non-empty (token_b present) → rejected
-    assert!(client.try_execute_settlement(&admin, &sid, &token_a).is_err());
+    assert!(client
+        .try_execute_settlement(&admin, &sid, &token_a)
+        .is_err());
 }

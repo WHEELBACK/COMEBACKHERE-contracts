@@ -6,26 +6,28 @@ use treasury::{TreasuryContract, TreasuryContractClient};
 fn executed_rotation_prevents_further_approvals() {
     let env = Env::default();
     env.mock_all_auths();
-    
+
     let admin = Address::generate(&env);
     let signer1 = Address::generate(&env);
     let signer2 = Address::generate(&env);
     let new_signer = Address::generate(&env);
-    
+
     let treasury_id = env.register_contract(None, TreasuryContract);
     let treasury_client = TreasuryContractClient::new(&env, &treasury_id);
     treasury_client.initialize(&admin, &2, &soroban_sdk::Vec::new(&env));
-    
+
     // Set up signers with weight 1 each
     treasury_client.set_signer(&admin, &signer1, &1);
     treasury_client.set_signer(&admin, &signer2, &1);
-    
+
     // Propose rotation
     let rotation_id = treasury_client.propose_signer_rotation(&admin, &signer1, &new_signer);
-    
+
     // Approve from signer2 to reach threshold and execute
     treasury_client.approve_signer_rotation(&signer2, &rotation_id);
-    
-    // Try to approve again - should panic with RotationAlreadyExecuted
-    treasury_client.approve_signer_rotation(&signer1, &rotation_id);
+
+    // Try to approve again from a signer unaffected by the rotation (signer1 was
+    // the old_signer and lost its weight when the rotation executed, so reusing
+    // it here would hit UnauthorizedSigner instead of the intended check).
+    treasury_client.approve_signer_rotation(&signer2, &rotation_id);
 }

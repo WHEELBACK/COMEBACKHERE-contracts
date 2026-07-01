@@ -2,6 +2,7 @@
 name = "comebackhere-compliance"
 version = "1.0.0"
 edition = "2021"
+license.workspace = true
 publish = false
 
 [lib]
@@ -9,12 +10,10 @@ crate-type = ["cdylib", "rlib"]
 name = "compliance"
 
 [features]
-default = ["testutils"]
 testutils = ["soroban-sdk/testutils"]
 
 [dependencies]
 soroban-sdk.workspace = true
 
 [dev-dependencies]
-derive_arbitrary.workspace = true
 soroban-sdk = { workspace = true, features = ["testutils"] }

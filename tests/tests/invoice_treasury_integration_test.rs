@@ -62,10 +62,19 @@ fn setup() -> (
 
     let treasury_id = env.register_contract(None, TreasuryContract);
     let treasury = TreasuryContractClient::new(&env, &treasury_id);
-    treasury.initialize(&admin, &1);
+    treasury.initialize(&admin, &1, &soroban_sdk::Vec::new(&env));
 
     let token_id = env.register_contract(None, TestToken);
-    (env, admin, merchant, payer, invoice, treasury_id, treasury, token_id)
+    (
+        env,
+        admin,
+        merchant,
+        payer,
+        invoice,
+        treasury_id,
+        treasury,
+        token_id,
+    )
 }
 
 #[test]
@@ -80,11 +89,12 @@ fn invoice_created_paid_released() {
         &MaybeBytes::None,
         &MaybeBytes::None,
         &0,
+        &MaybeAddress::None,
     );
     let inv = invoice.get_invoice(&id);
     assert_eq!(inv.status, InvoiceStatus::Pending);
 
-    invoice.mark_paid(&admin, &id, &payer);
+    invoice.mark_paid(&admin, &id, &payer, &MaybeBytes::None, &MaybeAddress::None);
     let inv = invoice.get_invoice(&id);
     assert_eq!(inv.status, InvoiceStatus::Paid);
     assert_eq!(inv.payer, MaybeAddress::Some(payer.clone()));
@@ -125,16 +135,20 @@ fn end_to_end_invoice_to_settlement() {
         &MaybeBytes::None,
         &MaybeBytes::None,
         &0,
+        &MaybeAddress::None,
     );
 
-    invoice.mark_paid(&admin, &inv_id, &payer);
+    invoice.mark_paid(
+        &admin,
+        &inv_id,
+        &payer,
+        &MaybeBytes::None,
+        &MaybeAddress::None,
+    );
     assert_eq!(invoice.get_invoice(&inv_id).status, InvoiceStatus::Paid);
 
     invoice.release_escrow(&admin, &inv_id);
-    assert_eq!(
-        invoice.get_invoice(&inv_id).status,
-        InvoiceStatus::Released
-    );
+    assert_eq!(invoice.get_invoice(&inv_id).status, InvoiceStatus::Released);
 
     let token = TestTokenClient::new(&env, &token_id);
     token.mint(&treasury_id, &10_000_000);
