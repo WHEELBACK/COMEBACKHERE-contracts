@@ -123,6 +123,7 @@ impl InvoiceContract {
         metadata_hash: MaybeBytes,
         payment_link_hash: MaybeBytes,
         merchant_nonce: u64,
+        token_address: MaybeAddress,
     ) -> Result<u64, InvoiceError> {
         merchant.require_auth();
         require_not_paused(&env)?;
@@ -169,6 +170,7 @@ impl InvoiceContract {
             metadata_hash,
             payment_link_hash,
             merchant_nonce,
+            token_address,
         };
 
         env.storage()
@@ -244,6 +246,7 @@ impl InvoiceContract {
                 metadata_hash: p.metadata_hash.clone(),
                 payment_link_hash: p.payment_link_hash.clone(),
                 merchant_nonce: p.merchant_nonce,
+                token_address: p.token_address.clone(),
             };
             env.storage()
                 .persistent()
@@ -279,6 +282,7 @@ impl InvoiceContract {
         id: u64,
         payer: Address,
         provided_metadata_hash: MaybeBytes,
+        payment_token: MaybeAddress,
     ) -> Result<(), InvoiceError> {
         require_admin(&env, &admin)?;
         require_not_paused(&env)?;
@@ -297,6 +301,12 @@ impl InvoiceContract {
             && provided_metadata_hash != invoice.metadata_hash
         {
             return Err(InvoiceError::MetadataMismatch);
+        }
+
+        if let MaybeAddress::Some(expected) = &invoice.token_address {
+            if payment_token != MaybeAddress::Some(expected.clone()) {
+                return Err(InvoiceError::TokenMismatch);
+            }
         }
 
         // #55: apply grace window — payment is valid up to expires_at + grace_window

@@ -24,6 +24,7 @@ fn make_invoice(env: &Env, client: &InvoiceContractClient) -> u64 {
         &MaybeBytes::None,
         &MaybeBytes::None,
         &0,
+        &MaybeAddress::None,
     )
 }
 
@@ -41,6 +42,7 @@ fn test_create_invoice_rejected_when_paused() {
             &MaybeBytes::None,
             &MaybeBytes::None,
             &0,
+            &MaybeAddress::None,
         )
         .unwrap_err()
         .unwrap();
@@ -54,7 +56,7 @@ fn test_mark_paid_rejected_when_paused() {
     let payer = Address::generate(&env);
     client.pause(&admin);
     let err = client
-        .try_mark_paid(&admin, &id, &payer, &MaybeBytes::None)
+        .try_mark_paid(&admin, &id, &payer, &MaybeBytes::None, &MaybeAddress::None)
         .unwrap_err()
         .unwrap();
     assert_eq!(err, InvoiceError::ContractPaused);
@@ -65,7 +67,7 @@ fn test_release_escrow_rejected_when_paused() {
     let (env, admin, client) = setup();
     let id = make_invoice(&env, &client);
     let payer = Address::generate(&env);
-    client.mark_paid(&admin, &id, &payer, &MaybeBytes::None);
+    client.mark_paid(&admin, &id, &payer, &MaybeBytes::None, &MaybeAddress::None);
     client.pause(&admin);
     let err = client
         .try_release_escrow(&admin, &id)
@@ -99,8 +101,9 @@ fn test_request_refund_rejected_when_paused() {
         &MaybeBytes::None,
         &MaybeBytes::None,
         &0,
+        &MaybeAddress::None,
     );
-    client.mark_paid(&admin, &id, &payer, &MaybeBytes::None);
+    client.mark_paid(&admin, &id, &payer, &MaybeBytes::None, &MaybeAddress::None);
     client.pause(&admin);
     let err = client
         .try_request_refund(&payer, &id)

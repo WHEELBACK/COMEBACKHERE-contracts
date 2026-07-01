@@ -6,7 +6,7 @@ fn setup_treasury(env: &Env, threshold: u32) -> (TreasuryContractClient, Address
     let admin = Address::generate(env);
     let contract_id = env.register_contract(None, TreasuryContract);
     let client = TreasuryContractClient::new(env, &contract_id);
-    client.initialize(&admin, &threshold);
+    client.initialize(&admin, &threshold, &soroban_sdk::Vec::new(env));
     (client, admin, contract_id)
 }
 

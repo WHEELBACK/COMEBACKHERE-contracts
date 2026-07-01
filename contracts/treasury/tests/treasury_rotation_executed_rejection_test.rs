@@ -14,7 +14,7 @@ fn executed_rotation_prevents_further_approvals() {
     
     let treasury_id = env.register_contract(None, TreasuryContract);
     let treasury_client = TreasuryContractClient::new(&env, &treasury_id);
-    treasury_client.initialize(&admin, &2);
+    treasury_client.initialize(&admin, &2, &soroban_sdk::Vec::new(&env));
     
     // Set up signers with weight 1 each
     treasury_client.set_signer(&admin, &signer1, &1);

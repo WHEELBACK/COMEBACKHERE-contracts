@@ -1,4 +1,4 @@
-use invoice::{InvoiceContract, InvoiceContractClient, InvoiceStatus, MaybeBytes};
+use invoice::{InvoiceContract, InvoiceContractClient, InvoiceStatus, MaybeAddress, MaybeBytes};
 use soroban_sdk::{
     testutils::{Address as _, Ledger},
     Address, Env,
@@ -42,6 +42,7 @@ fn high_volume_invoice_creation_storage_budget() {
             &MaybeBytes::None,
             &MaybeBytes::None,
             &0,
+            &MaybeAddress::None,
         );
         assert_eq!(id, i);
         last_id = id;
@@ -83,6 +84,7 @@ fn batch_expire_1000_invoices() {
             &MaybeBytes::None,
             &MaybeBytes::None,
             &0,
+            &MaybeAddress::None,
         );
         assert_eq!(id, i);
         ids.push_back(id);

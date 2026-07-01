@@ -6,7 +6,7 @@ fn setup(env: &Env, threshold: u32) -> (TreasuryContractClient, Address, Address
     let merchant = Address::generate(env);
     let contract_id = env.register_contract(None, TreasuryContract);
     let client = TreasuryContractClient::new(env, &contract_id);
-    client.initialize(&admin, &threshold);
+    client.initialize(&admin, &threshold, &soroban_sdk::Vec::new(env));
     let token_id = env.register_stellar_asset_contract(admin.clone());
     soroban_sdk::token::StellarAssetClient::new(env, &token_id).mint(&contract_id, &100_000_000);
     (client, admin, merchant, token_id)
@@ -140,7 +140,7 @@ fn test_weighted_signer_satisfies_threshold_alone() {
     let merchant = Address::generate(&env);
     let contract_id = env.register_contract(None, TreasuryContract);
     let client = TreasuryContractClient::new(&env, &contract_id);
-    client.initialize(&admin, &5);
+    client.initialize(&admin, &5, &soroban_sdk::Vec::new(&env));
     // override admin weight to 5
     client.set_signer(&admin, &admin, &5);
     let token_id = env.register_stellar_asset_contract(admin.clone());
