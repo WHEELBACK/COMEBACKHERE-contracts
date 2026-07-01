@@ -1,5 +1,5 @@
 use invoice::{
-    BatchInvoiceParams, InvoiceContract, InvoiceContractClient, MaybeBytes,
+    BatchInvoiceParams, InvoiceContract, InvoiceContractClient, MaybeAddress, MaybeBytes,
 };
 use soroban_sdk::{
     testutils::{Address as _, Ledger},
@@ -19,7 +19,7 @@ fn setup() -> (Env, Address, InvoiceContractClient<'static>) {
 }
 
 fn make_invoice(_env: &Env, client: &InvoiceContractClient, merchant: &Address) -> u64 {
-    client.create_invoice(merchant, &10_000_000, &10_250_000, &3600, &MaybeBytes::None, &MaybeBytes::None, &0)
+    client.create_invoice(merchant, &10_000_000, &10_250_000, &3600, &MaybeBytes::None, &MaybeBytes::None, &0, &MaybeAddress::None)
 }
 
 // --- add behaviour ---
@@ -47,6 +47,7 @@ fn test_batch_create_adds_all_to_pending_index() {
             metadata_hash: MaybeBytes::None,
             payment_link_hash: MaybeBytes::None,
             merchant_nonce: 0,
+            token_address: MaybeAddress::None,
         });
     }
     let ids = client.batch_create_invoice(&merchant, &params);
@@ -62,7 +63,7 @@ fn test_mark_paid_removes_from_pending_index() {
     let merchant = Address::generate(&env);
     let payer = Address::generate(&env);
     let id = make_invoice(&env, &client, &merchant);
-    client.mark_paid(&admin, &id, &payer, &MaybeBytes::None);
+    client.mark_paid(&admin, &id, &payer, &MaybeBytes::None, &MaybeAddress::None);
     let pending = client.get_pending_ids();
     assert_eq!(pending.len(), 0);
 }
@@ -108,6 +109,7 @@ fn test_batch_expire_leaves_unexpired_ids_in_index() {
         &MaybeBytes::None,
         &MaybeBytes::None,
         &0,
+        &MaybeAddress::None,
     );
 
     // advance past the first invoice's expiry only
@@ -141,7 +143,7 @@ fn test_release_escrow_does_not_affect_pending_index() {
     let payer = Address::generate(&env);
     let id = make_invoice(&env, &client, &merchant);
 
-    client.mark_paid(&admin, &id, &payer, &MaybeBytes::None);
+    client.mark_paid(&admin, &id, &payer, &MaybeBytes::None, &MaybeAddress::None);
     // index already empty after mark_paid
     assert_eq!(client.get_pending_ids().len(), 0);
 
@@ -161,7 +163,7 @@ fn test_multiple_invoices_partial_removal() {
     let id3 = make_invoice(&env, &client, &merchant);
 
     // pay id2, cancel id1 — id3 stays pending
-    client.mark_paid(&admin, &id2, &payer, &MaybeBytes::None);
+    client.mark_paid(&admin, &id2, &payer, &MaybeBytes::None, &MaybeAddress::None);
     client.cancel_invoice(&merchant, &id1);
 
     let pending = client.get_pending_ids();

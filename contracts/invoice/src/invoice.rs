@@ -33,6 +33,8 @@ pub enum InvoiceError {
     InvalidPaymentLinkHash = 17,
     /// Invoice is not in RefundRequested status.
     NotRefundRequested = 18,
+    /// Provided payment token does not match the invoice's expected token.
+    TokenMismatch = 19,
 }
 
 #[contracttype]
@@ -80,6 +82,9 @@ pub struct Invoice {
     pub payment_link_hash: MaybeBytes,
     /// Merchant-supplied nonce for storefront idempotency (0 = no nonce).
     pub merchant_nonce: u64,
+    /// Optional token contract address for multi-currency invoices.
+    /// `None` means the invoice is denominated in the default (USDC).
+    pub token_address: MaybeAddress,
 }
 
 /// Parameters for a single invoice within a batch_create_invoice call.
@@ -92,6 +97,7 @@ pub struct BatchInvoiceParams {
     pub metadata_hash: MaybeBytes,
     pub payment_link_hash: MaybeBytes,
     pub merchant_nonce: u64,
+    pub token_address: MaybeAddress,
 }
 
 /// A single status transition recorded in an invoice's audit log.

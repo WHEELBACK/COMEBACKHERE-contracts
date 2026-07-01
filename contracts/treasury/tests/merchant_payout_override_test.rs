@@ -47,7 +47,7 @@ fn execute_settlement_uses_merchant_payout_override() {
     
     let treasury_id = env.register_contract(None, TreasuryContract);
     let treasury_client = TreasuryContractClient::new(&env, &treasury_id);
-    treasury_client.initialize(&admin, &1);
+    treasury_client.initialize(&admin, &1, &soroban_sdk::Vec::new(&env));
     
     let token_id = env.register_contract(None, TestToken);
     let test_token_client = TestTokenClient::new(&env, &token_id);

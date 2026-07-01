@@ -9,7 +9,7 @@
 //   1. expires_at exactly, no grace window  → Expired
 //   2. expires_at + grace - 1               → Paid
 //   3. expires_at + grace                   → Expired
-use invoice::{InvoiceContract, InvoiceContractClient, InvoiceError, InvoiceStatus, MaybeBytes};
+use invoice::{InvoiceContract, InvoiceContractClient, InvoiceError, InvoiceStatus, MaybeAddress, MaybeBytes};
 use soroban_sdk::{
     testutils::{Address as _, Ledger},
     Address, Env,
@@ -37,6 +37,7 @@ fn create_invoice_expiring_in(env: &Env, client: &InvoiceContractClient, expires
         &MaybeBytes::None,
         &MaybeBytes::None,
         &0,
+        &MaybeAddress::None,
     )
 }
 
@@ -52,7 +53,7 @@ fn test_payment_at_exact_expiry_no_grace_is_rejected() {
     // No grace window set (default = 0), effective_deadline = 100.
     env.ledger().with_mut(|l| l.timestamp = 100);
     let err = client
-        .try_mark_paid(&admin, &id, &payer, &MaybeBytes::None)
+        .try_mark_paid(&admin, &id, &payer, &MaybeBytes::None, &MaybeAddress::None)
         .unwrap_err()
         .unwrap();
     assert_eq!(err, InvoiceError::Expired);
@@ -70,7 +71,7 @@ fn test_payment_one_second_before_grace_deadline_succeeds() {
     let id = create_invoice_expiring_in(&env, &client, 100);
     client.set_grace_window(&admin, &30);
     env.ledger().with_mut(|l| l.timestamp = 129);
-    client.mark_paid(&admin, &id, &payer, &MaybeBytes::None);
+    client.mark_paid(&admin, &id, &payer, &MaybeBytes::None, &MaybeAddress::None);
     assert_eq!(client.get_invoice(&id).status, InvoiceStatus::Paid);
 }
 
@@ -84,7 +85,7 @@ fn test_payment_at_exact_grace_deadline_is_rejected() {
     client.set_grace_window(&admin, &30);
     env.ledger().with_mut(|l| l.timestamp = 130);
     let err = client
-        .try_mark_paid(&admin, &id, &payer, &MaybeBytes::None)
+        .try_mark_paid(&admin, &id, &payer, &MaybeBytes::None, &MaybeAddress::None)
         .unwrap_err()
         .unwrap();
     assert_eq!(err, InvoiceError::Expired);

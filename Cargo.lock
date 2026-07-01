@@ -168,6 +168,7 @@ name = "comebackhere-invoice"
 version = "1.0.0"
 dependencies = [
  "derive_arbitrary",
+ "hex",
  "soroban-sdk",
 ]
 

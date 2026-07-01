@@ -6,7 +6,7 @@ fn setup(env: &Env) -> (TreasuryContractClient, Address, u64) {
     let merchant = Address::generate(env);
     let contract_id = env.register_contract(None, TreasuryContract);
     let client = TreasuryContractClient::new(env, &contract_id);
-    client.initialize(&admin, &2);
+    client.initialize(&admin, &2, &soroban_sdk::Vec::new(env));
     let sid = client.propose_settlement(&admin, &merchant, &5_000_000);
     (client, admin, sid)
 }
@@ -65,7 +65,7 @@ fn weighted_signer_duplicate_approval_does_not_double_count_weight() {
     let merchant = Address::generate(&env);
     let contract_id = env.register_contract(None, TreasuryContract);
     let client = TreasuryContractClient::new(&env, &contract_id);
-    client.initialize(&admin, &3);
+    client.initialize(&admin, &3, &soroban_sdk::Vec::new(&env));
 
     // Register a signer with weight 5 — above-threshold weight to make the
     // double-count scenario meaningful.
