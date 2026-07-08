@@ -8,7 +8,7 @@ license = "MIT"
 repository = "https://github.com/dreamgeneX/COMEBACKHERE"
 
 [workspace.dependencies]
-soroban-sdk = { version = "22.0.0" }
+soroban-sdk = { version = "26.1.0" }
 stellar-xdr = "0.0.18"
 
 [profile.release]
