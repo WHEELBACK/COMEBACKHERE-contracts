@@ -126,3 +126,44 @@ fn batch_deposit_rejects_invalid_amount() {
 
     treasury_client.batch_deposit(&depositor, &deposits);
 }
+
+#[test]
+fn get_balance_reflects_deposits_and_withdrawals() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let admin = Address::generate(&env);
+    let depositor = Address::generate(&env);
+    let amount = 5_000_000i128;
+
+    let treasury_id = env.register_contract(None, TreasuryContract);
+    let treasury_client = TreasuryContractClient::new(&env, &treasury_id);
+    treasury_client.initialize(&admin, &1, &soroban_sdk::Vec::new(&env));
+
+    let token_id = env.register_contract(None, TestToken);
+    let test_token_client = TestTokenClient::new(&env, &token_id);
+
+    // Verify initial balance is 0 for never-deposited address
+    assert_eq!(treasury_client.get_balance(&depositor), 0);
+
+    // Mint tokens to depositor and deposit
+    test_token_client.mint(&depositor, &amount);
+    treasury_client.deposit(&depositor, &token_id, &amount);
+
+    // Verify balance after deposit
+    assert_eq!(treasury_client.get_balance(&depositor), amount);
+
+    // Withdraw partial amount
+    let partial = 2_000_000i128;
+    treasury_client.withdraw(&depositor, &token_id, &partial);
+
+    // Verify balance after withdrawal
+    assert_eq!(
+        treasury_client.get_balance(&depositor),
+        amount - partial
+    );
+
+    // Verify unrelated address still has 0 balance
+    let stranger = Address::generate(&env);
+    assert_eq!(treasury_client.get_balance(&stranger), 0);
+}

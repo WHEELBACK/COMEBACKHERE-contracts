@@ -51,6 +51,15 @@ impl TreasuryContract {
             .publish((Symbol::new(&env, "withdraw"), to), amount);
     }
 
+    /// Returns the recorded deposit balance for `address`, or 0 if never deposited.
+    /// Read-only, no authentication required.
+    pub fn get_balance(env: Env, address: Address) -> i128 {
+        env.storage()
+            .persistent()
+            .get(&DataKey::Balance(address))
+            .unwrap_or(0)
+    }
+
     /// Drains the full token balance of the treasury to `recipient` (admin-only, paused-only emergency drain).
     /// Panics: `Unauthorized`, `NotPaused`.
     /// Emits: `treasury_drained`.

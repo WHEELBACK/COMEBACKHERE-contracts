@@ -1,6 +1,6 @@
 use crate::{
-    require_admin, require_not_paused, DataKey, Settlement, SettlementHoldReason,
-    SettlementStatus, TreasuryContract,
+    require_admin, require_not_paused, DataKey, MAX_ALLOWED_TOKENS, Settlement,
+    SettlementHoldReason, SettlementStatus, TreasuryContract,
 };
 use multisig::{require_authorized_signer, signer_weight};
 use soroban_sdk::{contractimpl, token, Address, Env, Symbol, Vec};
@@ -419,6 +419,9 @@ impl TreasuryContract {
             .get(&DataKey::TokenAllowlist)
             .unwrap_or_else(|| Vec::new(&env));
         if !allowlist.contains(&token) {
+            if allowlist.len() >= MAX_ALLOWED_TOKENS {
+                panic!("AllowlistFull");
+            }
             allowlist.push_back(token.clone());
             env.storage()
                 .instance()
