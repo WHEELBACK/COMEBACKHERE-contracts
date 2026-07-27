@@ -5,8 +5,6 @@
     "mark_paid",
     "get_invoice",
     "get_invoice_status",
-    "batch_get_invoice_status",
-    "get_invoices_page",
     "cancel_invoice",
     "request_refund",
     "batch_expire",
@@ -14,18 +12,16 @@
     "unpause",
     "set_grace_window",
     "get_grace_window",
-    "release_escrow",
-    "approve_refund"
+    "release_escrow"
   ],
   "events": [
     "invoice_created",
     "invoice_paid",
     "invoice_expired",
     "invoice_cancelled",
-    "invoice_refund_requested",
+    "invoice_refund_req",
     "escrow_released",
     "contract_paused",
-    "contract_unpaused",
-    "refund_approved"
+    "contract_unpaused"
   ]
 }

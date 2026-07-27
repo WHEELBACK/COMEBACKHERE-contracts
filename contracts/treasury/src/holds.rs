@@ -40,6 +40,17 @@ impl TreasuryContract {
         Ok(())
     }
 
+    /// Returns the hold reason for a settlement without requiring authentication.
+    /// Panics: `SettlementNotFound`.
+    pub fn get_hold_reason(env: Env, settlement_id: u64) -> SettlementHoldReason {
+        let settlement: Settlement = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Settlement(settlement_id))
+            .unwrap_or_else(|| panic!("SettlementNotFound"));
+        settlement.hold_reason
+    }
+
     /// Releases a held settlement back to `Pending` status (admin-only).
     /// Panics: `Unauthorized`, `SettlementNotFound`, `NotOnHold`.
     /// Emits: `settlement_released`.

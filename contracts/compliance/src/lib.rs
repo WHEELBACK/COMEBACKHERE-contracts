@@ -1,9 +1,51 @@
 #![no_std]
 
-mod allowlist;
-pub use allowlist::{AddressState, AddressStatus, ComplianceError, DataKey};
+use soroban_sdk::{
+    contract, contracterror, contractimpl, contracttype, Address, Bytes, Env, Symbol, Vec,
+};
 
-use soroban_sdk::{contract, contracterror, contractimpl, Address, Bytes, Env, Symbol, Vec};
+#[contracttype]
+#[derive(Clone)]
+pub enum DataKey {
+    Admin,
+    PendingAdmin,
+    Operator,
+    Allowed(Address),
+    Blocked(Address),
+    AllowedUntil(Address),
+    BlockedUntil(Address),
+    BlockReason(Address),
+    SchemaVersion,
+    Paused,
+    AddressIndex,
+    AllowCount,
+    BlockCount,
+    Tier(Address),
+}
+
+#[contracttype]
+#[derive(Clone, PartialEq, Debug)]
+pub enum AddressState {
+    Allowed,
+    Blocked,
+    Expired,
+}
+
+#[contracterror]
+#[derive(Clone, Copy, Debug, PartialEq)]
+#[repr(u32)]
+pub enum ComplianceError {
+    AlreadyInitialized = 1,
+}
+
+#[contracttype]
+#[derive(Clone, Debug, PartialEq)]
+pub struct AddressStatus {
+    pub allowed: bool,
+    pub blocked: bool,
+    pub expires_at: Option<u64>,
+    pub is_currently_allowed: bool,
+}
 
 #[contracterror]
 #[derive(Copy, Clone, Debug, PartialEq)]
@@ -77,7 +119,7 @@ impl ComplianceContract {
                     .instance()
                     .set(&DataKey::AllowCount, &(count + 1));
             }
-            Self::track_address(&env, &address);
+            Self::track_address(&env, &address)?;
             env.events()
                 .publish((Symbol::new(&env, "address_allowed"),), address);
         }
@@ -133,6 +175,14 @@ impl ComplianceContract {
         true
     }
 
+    /// Returns whether `address` is explicitly blocked. No auth required.
+    pub fn is_blocked(env: Env, address: Address) -> bool {
+        env.storage()
+            .persistent()
+            .get(&DataKey::Blocked(address))
+            .unwrap_or(false)
+    }
+
     /// Permanently allow an address. Removes any existing expiry.
     ///
     /// # Parameters
@@ -170,7 +220,7 @@ impl ComplianceContract {
                 .instance()
                 .set(&DataKey::AllowCount, &(count + 1));
         }
-        Self::track_address(&env, &address);
+        Self::track_address(&env, &address)?;
         env.events()
             .publish((Symbol::new(&env, "address_allowed"),), address);
         Ok(())
@@ -202,7 +252,7 @@ impl ComplianceContract {
         env.storage()
             .persistent()
             .set(&DataKey::Tier(address.clone()), &tier);
-        Self::track_address(&env, &address);
+        Self::track_address(&env, &address)?;
         env.events()
             .publish((Symbol::new(&env, "address_allowed"),), address);
         Ok(())
@@ -229,7 +279,7 @@ impl ComplianceContract {
             env.storage()
                 .persistent()
                 .set(&DataKey::Blocked(address.clone()), &true);
-            Self::track_address(&env, &address);
+            Self::track_address(&env, &address)?;
             env.events()
                 .publish((Symbol::new(&env, "address_blocked"),), address);
         }
@@ -253,7 +303,7 @@ impl ComplianceContract {
                 .persistent()
                 .set(&DataKey::BlockReason(address.clone()), &r);
         }
-        Self::track_address(&env, &address);
+        Self::track_address(&env, &address)?;
         env.events()
             .publish((Symbol::new(&env, "address_blocked"),), address);
         Ok(())
@@ -279,7 +329,7 @@ impl ComplianceContract {
                 .persistent()
                 .set(&DataKey::BlockReason(address.clone()), &r);
         }
-        Self::track_address(&env, &address);
+        Self::track_address(&env, &address)?;
         env.events().publish(
             (Symbol::new(&env, "address_blocked_until"),),
             (address, unblock_at),
@@ -307,6 +357,13 @@ impl ComplianceContract {
     /// After `expires_at`, [`is_allowed`](Self::is_allowed) returns `false` even if
     /// the `Allowed` flag is set.
     ///
+    /// A `expires_at` that is already in the past (or equal to the current ledger
+    /// timestamp) is accepted rather than rejected: the address is recorded as
+    /// allowed, but [`is_allowed`](Self::is_allowed) evaluates the expiry lazily on
+    /// every read, so it immediately reports `false`. This is a deliberate silent
+    /// no-op-allow rather than an error, keeping the entrypoint idempotent for
+    /// callers that pass a computed/stale timestamp.
+    ///
     /// # Parameters
     /// - `admin`: Current administrator. Must authorize this call.
     /// - `address`: The address to allow temporarily.
@@ -332,7 +389,7 @@ impl ComplianceContract {
         env.storage()
             .persistent()
             .set(&DataKey::AllowedUntil(address.clone()), &expires_at);
-        Self::track_address(&env, &address);
+        Self::track_address(&env, &address)?;
         env.events().publish(
             (Symbol::new(&env, "address_allowed_until"),),
             (address, expires_at),
@@ -342,6 +399,12 @@ impl ComplianceContract {
 
     /// Initiate a two-step admin transfer. The pending admin must call
     /// [`accept_admin`](Self::accept_admin) to complete the handover.
+    ///
+    /// Calling this again before the pending admin accepts fully **supersedes** the
+    /// previous nomination — `PendingAdmin` is a plain overwrite, not a queue. So a
+    /// lost or compromised pending-admin key does not leave the contract stuck: the
+    /// current admin can simply call `transfer_admin` again with a fresh address to
+    /// replace it, with no separate expiry/timeout mechanism required.
     ///
     /// # Parameters
     /// - `admin`: Current administrator. Must authorize this call.
@@ -454,7 +517,7 @@ impl ComplianceContract {
                 .instance()
                 .set(&DataKey::AllowCount, &(count + 1));
         }
-        Self::track_address(&env, &address);
+        Self::track_address(&env, &address)?;
         env.events()
             .publish((Symbol::new(&env, "address_cleared"),), address);
         Ok(())
@@ -472,7 +535,7 @@ impl ComplianceContract {
         env.storage()
             .persistent()
             .remove(&DataKey::AllowedUntil(address.clone()));
-        Self::track_address(&env, &address);
+        Self::track_address(&env, &address)?;
         env.events()
             .publish((Symbol::new(&env, "address_revoked"),), address);
         Ok(())
@@ -519,6 +582,65 @@ impl ComplianceContract {
         env.storage()
             .persistent()
             .get::<_, u64>(&DataKey::AllowedUntil(address))
+    }
+
+    /// Sweep tracked addresses for lapsed time-bound allow entries.
+    ///
+    /// `is_allowed` checks `AllowedUntil` lazily on every read, so there is
+    /// otherwise no discrete moment at which an expiry "happens" and no event is
+    /// emitted when a time-bound allow naturally lapses. This entrypoint gives
+    /// callers/indexers an explicit point to trigger and observe that transition:
+    /// for every tracked address whose `AllowedUntil` has passed, it clears the
+    /// `Allowed` flag, removes the expiry, and publishes `("address_allow_expired",) → address`.
+    ///
+    /// Returns the number of addresses swept.
+    pub fn sweep_expired(env: Env, admin: Address) -> Result<u32, ContractError> {
+        Self::require_admin(&env, &admin)?;
+        let index: Vec<Address> = env
+            .storage()
+            .instance()
+            .get(&DataKey::AddressIndex)
+            .unwrap_or(Vec::new(&env));
+        let now = env.ledger().timestamp();
+        let mut swept = 0u32;
+        for addr in index.iter() {
+            let allowed: bool = env
+                .storage()
+                .persistent()
+                .get(&DataKey::Allowed(addr.clone()))
+                .unwrap_or(false);
+            if !allowed {
+                continue;
+            }
+            let expires_at: Option<u64> = env
+                .storage()
+                .persistent()
+                .get(&DataKey::AllowedUntil(addr.clone()));
+            if let Some(expires_at) = expires_at {
+                if now >= expires_at {
+                    env.storage()
+                        .persistent()
+                        .set(&DataKey::Allowed(addr.clone()), &false);
+                    env.storage()
+                        .persistent()
+                        .remove(&DataKey::AllowedUntil(addr.clone()));
+                    let count: u64 = env
+                        .storage()
+                        .instance()
+                        .get(&DataKey::AllowCount)
+                        .unwrap_or(0u64);
+                    env.storage()
+                        .instance()
+                        .set(&DataKey::AllowCount, &count.saturating_sub(1));
+                    env.events().publish(
+                        (Symbol::new(&env, "address_allow_expired"),),
+                        addr.clone(),
+                    );
+                    swept += 1;
+                }
+            }
+        }
+        Ok(swept)
     }
 
     /// Returns a paginated snapshot of all tracked addresses and their current state.
@@ -689,16 +811,24 @@ impl ComplianceContract {
     }
 
     /// Adds `address` to the instance-level AddressIndex if not already present.
-    fn track_address(env: &Env, address: &Address) {
+    ///
+    /// # Errors
+    /// - [`ContractError::AddressIndexFull`] if `address` is new and the index has
+    ///   already reached [`MAX_TRACKED_ADDRESSES`].
+    fn track_address(env: &Env, address: &Address) -> Result<(), ContractError> {
         let mut index: Vec<Address> = env
             .storage()
             .instance()
             .get(&DataKey::AddressIndex)
             .unwrap_or(Vec::new(env));
         if !index.contains(address) {
+            if index.len() >= MAX_TRACKED_ADDRESSES {
+                return Err(ContractError::AddressIndexFull);
+            }
             index.push_back(address.clone());
             env.storage().instance().set(&DataKey::AddressIndex, &index);
         }
+        Ok(())
     }
 }
 
