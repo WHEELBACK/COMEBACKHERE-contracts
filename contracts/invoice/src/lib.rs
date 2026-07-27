@@ -15,6 +15,7 @@ pub use events::{EscrowReleasedEvent, InvoiceAmountUpdatedEvent, InvoiceExpiryEx
 use invoice::StatusTransition;
 pub use invoice::{
     BatchInvoiceParams, DataKey, Invoice, InvoiceError, InvoiceStatus, MaybeAddress, MaybeBytes,
+    MAX_BATCH_EXPIRE, MAX_BATCH_SIZE,
 };
 
 use soroban_sdk::{contract, Address, Env, Vec};

@@ -7,6 +7,9 @@ pub const USDC_FACTOR: i128 = 10_000_000;
 /// batch_expire) per call, to bound per-invocation storage writes and gas.
 pub const MAX_BATCH_SIZE: u32 = 50;
 
+/// Maximum number of invoice IDs accepted by batch_expire per call.
+pub const MAX_BATCH_EXPIRE: u32 = 100;
+
 #[contracterror]
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 #[repr(u32)]
@@ -43,6 +46,8 @@ pub enum InvoiceError {
     BatchTooLarge = 20,
     /// create_invoice called again before CreationCooldown has elapsed for this merchant.
     CooldownActive = 21,
+    /// InvoiceCount overflow would wrap the next invoice ID.
+    InvoiceCountOverflow = 22,
 }
 
 #[contracttype]

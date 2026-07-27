@@ -47,7 +47,6 @@ impl InvoiceContract {
             if env.storage().persistent().has(&nonce_key) {
                 return Err(InvoiceError::DuplicateNonce);
             }
-            env.storage().persistent().set(&nonce_key, &true);
         }
 
         let count: u64 = env
@@ -55,12 +54,19 @@ impl InvoiceContract {
             .instance()
             .get(&DataKey::InvoiceCount)
             .unwrap_or(0);
-        let id = count + 1;
+        let id = count
+            .checked_add(1)
+            .ok_or(InvoiceError::InvoiceCountOverflow)?;
         let expires_at = env
             .ledger()
             .timestamp()
             .checked_add(expires_in_seconds)
             .ok_or(InvoiceError::ExpiryOverflow)?;
+        if merchant_nonce != 0 {
+            env.storage()
+                .persistent()
+                .set(&DataKey::MerchantNonce(merchant.clone(), merchant_nonce), &true);
+        }
         let invoice = Invoice {
             id,
             merchant: merchant.clone(),

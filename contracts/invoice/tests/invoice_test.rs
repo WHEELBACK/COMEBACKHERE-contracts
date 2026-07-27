@@ -722,6 +722,31 @@ fn test_cancel_invoice_unauthorized_rejected() {
 }
 
 #[test]
+fn test_payer_cannot_cancel_pending_invoice() {
+    let (env, _admin, client) = setup();
+    let merchant = Address::generate(&env);
+    let payer = Address::generate(&env);
+    let id = client.create_invoice(
+        &merchant,
+        &10_000_000,
+        &10_250_000,
+        &3600,
+        &MaybeBytes::None,
+        &MaybeBytes::None,
+        &0,
+        &MaybeAddress::None,
+    );
+
+    let err = client
+        .try_cancel_invoice(&payer, &id)
+        .unwrap_err()
+        .unwrap();
+
+    assert_eq!(err, InvoiceError::Unauthorized);
+    assert_eq!(client.get_invoice(&id).status, InvoiceStatus::Pending);
+}
+
+#[test]
 fn test_release_escrow_requires_paid_status() {
     let (env, admin, client) = setup();
     let merchant = Address::generate(&env);
