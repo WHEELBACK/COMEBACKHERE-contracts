@@ -4,7 +4,9 @@ use crate::validation::{
     require_usdc_precision, require_valid_payment_link_hash,
 };
 use crate::{append_history, pending_index_add, pending_index_remove};
-use crate::{DataKey, Invoice, InvoiceContract, InvoiceError, InvoiceStatus, MaybeAddress, MaybeBytes};
+use crate::{
+    DataKey, Invoice, InvoiceContract, InvoiceError, InvoiceStatus, MaybeAddress, MaybeBytes,
+};
 use soroban_sdk::{contractimpl, Address, Env, Vec};
 
 #[contractimpl]
@@ -389,6 +391,34 @@ impl InvoiceContract {
             InvoiceStatus::Refunded,
         );
         events::refund_approved(&env, id, &invoice);
+        Ok(())
+    }
+
+    /// Reject a refund request. Admin-only. Transitions RefundRequested → Paid.
+    pub fn reject_refund(env: Env, admin: Address, id: u64) -> Result<(), InvoiceError> {
+        require_admin(&env, &admin)?;
+        require_not_paused(&env)?;
+
+        let mut invoice: Invoice = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Invoice(id))
+            .ok_or(InvoiceError::NotFound)?;
+        if invoice.status != InvoiceStatus::RefundRequested {
+            return Err(InvoiceError::NotRefundRequested);
+        }
+
+        invoice.status = InvoiceStatus::Paid;
+        env.storage()
+            .persistent()
+            .set(&DataKey::Invoice(id), &invoice);
+        append_history(
+            &env,
+            id,
+            InvoiceStatus::RefundRequested,
+            InvoiceStatus::Paid,
+        );
+        events::refund_rejected(&env, id, &invoice);
         Ok(())
     }
 
