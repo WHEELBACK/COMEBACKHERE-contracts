@@ -2,6 +2,8 @@ use crate::{
     require_admin, require_not_paused, DataKey, Settlement, SettlementHoldReason,
     SettlementStatus, TreasuryContract,
 };
+#[allow(unused_imports)]
+use crate::{TreasuryContractArgs, TreasuryContractClient};
 use multisig::{require_authorized_signer, signer_weight};
 use soroban_sdk::{contractimpl, token, Address, Env, Symbol, Vec};
 

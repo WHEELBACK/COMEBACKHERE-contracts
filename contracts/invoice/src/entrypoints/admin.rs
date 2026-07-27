@@ -1,4 +1,6 @@
 use crate::{DataKey, InvoiceContract, InvoiceError};
+#[allow(unused_imports)]
+use crate::{InvoiceContractArgs, InvoiceContractClient};
 use crate::events;
 use crate::validation::require_admin;
 use soroban_sdk::{contractimpl, Address, Env};

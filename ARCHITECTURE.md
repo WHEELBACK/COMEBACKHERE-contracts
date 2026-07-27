@@ -129,3 +129,38 @@ Cancelled
 
 Pending ──batch_expire──► Expired  (when ledger.timestamp >= expires_at)
 ```
+
+---
+
+## Instruction / Gas Budget Baseline
+
+Measured on **soroban-sdk 22.0.11**, Rust **1.95.0**, native (non-WASM) test host on 2026-07-27.
+The full happy-path lifecycle covers:
+
+1. `Compliance::allow_address` — add merchant to allow-list
+2. `Invoice::create_invoice` — create a new invoice
+3. `Invoice::mark_paid` — mark invoice as paid
+4. `Invoice::release_escrow` — release escrow funds
+5. `Token::mint` — fund the treasury contract
+6. `Treasury::propose_settlement` — propose payout
+7. `Treasury::approve_settlement` — add approval weight
+8. `ComplianceGatedSettlement::execute` — cross-contract compliance check + `Treasury::execute_settlement` + `Token::transfer`
+
+| Metric | Measured | Assertion ceiling (+20 %) |
+|---|---|---|
+| **CPU instructions** | 261,833 | 314,200 |
+| **Memory bytes** | 46,107 | 55,329 |
+
+> **Note:** Native-host numbers are lower than on-chain WASM execution.
+> They are still meaningful regression guards — a large increase in the native numbers
+> almost always corresponds to a real cost increase on-chain.
+
+### Refreshing the baseline
+
+After any intentional feature change that increases cost, re-measure and update both
+the constants at the top of `tests/tests/full_lifecycle_smoke_test.rs` and the table
+above:
+
+```sh
+cargo test -- --nocapture full_lifecycle_budget_baseline
+```
