@@ -75,3 +75,21 @@ fn remove_allowed_token_prevents_execution() {
         .try_execute_settlement(&admin, &sid, &token_a)
         .is_err());
 }
+
+#[test]
+fn adding_beyond_max_allowed_tokens_is_rejected() {
+    let env = Env::default();
+    let (client, admin) = setup(&env);
+
+    // Add MAX_ALLOWED_TOKENS (20) tokens — all should succeed
+    for _ in 0..20 {
+        let token = Address::generate(&env);
+        client.add_allowed_token(&admin, &token);
+    }
+
+    // The 21st addition should panic
+    let extra_token = Address::generate(&env);
+    assert!(client
+        .try_add_allowed_token(&admin, &extra_token)
+        .is_err());
+}
