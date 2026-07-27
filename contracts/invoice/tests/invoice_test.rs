@@ -4,7 +4,7 @@ use invoice::{
 };
 use soroban_sdk::{
     testutils::{Address as _, Events, Ledger},
-    Address, Env, Symbol, TryFromVal,
+    vec, Address, Env, Symbol, TryFromVal,
 };
 
 extern crate std;
@@ -41,6 +41,42 @@ fn test_create_invoice_succeeds() {
     assert_eq!(invoice.gross_usdc, 10_250_000);
     assert_eq!(invoice.payer, MaybeAddress::None);
     assert_eq!(invoice.merchant_nonce, 0);
+}
+
+#[test]
+fn test_batch_get_invoice_status_returns_per_id_results() {
+    let (env, _admin, client) = setup();
+    let merchant = Address::generate(&env);
+    let first_id = client.create_invoice(
+        &merchant,
+        &10_000_000,
+        &10_250_000,
+        &3600,
+        &MaybeBytes::None,
+        &MaybeBytes::None,
+        &0,
+        &MaybeAddress::None,
+    );
+    let second_id = client.create_invoice(
+        &merchant,
+        &20_000_000,
+        &20_500_000,
+        &3600,
+        &MaybeBytes::None,
+        &MaybeBytes::None,
+        &0,
+        &MaybeAddress::None,
+    );
+
+    assert_eq!(
+        client.batch_get_invoice_status(&vec![&env, first_id, 999, second_id]),
+        vec![
+            &env,
+            Ok(InvoiceStatus::Pending),
+            Err(InvoiceError::NotFound),
+            Ok(InvoiceStatus::Pending)
+        ]
+    );
 }
 
 #[test]
@@ -730,6 +766,7 @@ fn test_abi_snapshot_matches_contract() {
         "mark_paid",
         "get_invoice",
         "get_invoice_status",
+        "batch_get_invoice_status",
         "get_invoices_page",
         "cancel_invoice",
         "request_refund",
@@ -951,6 +988,38 @@ fn test_duplicate_nonce_rejected() {
         &42,
         &MaybeAddress::None,
     );
+    let err = client
+        .try_create_invoice(
+            &merchant,
+            &10_000_000,
+            &10_000_000,
+            &3600,
+            &MaybeBytes::None,
+            &MaybeBytes::None,
+            &42,
+            &MaybeAddress::None,
+        )
+        .unwrap_err()
+        .unwrap();
+    assert_eq!(err, InvoiceError::DuplicateNonce);
+}
+
+#[test]
+fn test_nonce_cannot_be_reused_after_cancellation() {
+    let (env, _admin, client) = setup();
+    let merchant = Address::generate(&env);
+    let id = client.create_invoice(
+        &merchant,
+        &10_000_000,
+        &10_000_000,
+        &3600,
+        &MaybeBytes::None,
+        &MaybeBytes::None,
+        &42,
+        &MaybeAddress::None,
+    );
+    client.cancel_invoice(&merchant, &id);
+
     let err = client
         .try_create_invoice(
             &merchant,

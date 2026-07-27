@@ -5,6 +5,7 @@
     "mark_paid",
     "get_invoice",
     "get_invoice_status",
+    "batch_get_invoice_status",
     "get_invoices_page",
     "cancel_invoice",
     "request_refund",
