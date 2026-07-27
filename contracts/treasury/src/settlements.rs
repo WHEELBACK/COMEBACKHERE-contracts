@@ -7,6 +7,10 @@ use soroban_sdk::{contractimpl, token, Address, Env, Symbol, Vec};
 
 const SETTLEMENT_TTL: u64 = 7 * 24 * 60 * 60;
 
+/// Maximum number of settlement IDs accepted per batch call, consistent with
+/// the batch caps used elsewhere in the workspace (see #8/#21).
+const MAX_BATCH_SIZE: u32 = 50;
+
 #[contractimpl]
 impl TreasuryContract {
     /// Proposes a new settlement of `amount` tokens payable to `merchant_address`.
@@ -90,6 +94,47 @@ impl TreasuryContract {
             settlement.clone(),
         );
         settlement
+    }
+
+    /// Approves multiple pending settlements in one call, reducing transaction overhead for
+    /// high-volume signers. IDs that don't exist or aren't `Pending` are skipped rather than
+    /// aborting the whole batch; a single bad ID never rolls back the others' approvals.
+    /// Panics: `ContractPaused`, `UnauthorizedSigner`, `BatchTooLarge`, `WeightOverflow`.
+    /// Emits: `settlement_approved` for each settlement actually approved.
+    pub fn batch_approve_settlements(env: Env, signer: Address, ids: Vec<u64>) -> Vec<Settlement> {
+        require_not_paused(&env);
+        require_authorized_signer(&env, &signer);
+        if ids.len() > MAX_BATCH_SIZE {
+            panic!("BatchTooLarge");
+        }
+        let weight = signer_weight(&env, &signer);
+        let mut approved = Vec::new(&env);
+        for id in ids.iter() {
+            let settlement_opt: Option<Settlement> =
+                env.storage().persistent().get(&DataKey::Settlement(id));
+            if let Some(mut settlement) = settlement_opt {
+                if settlement.status == SettlementStatus::Pending {
+                    if !settlement.approvals.contains(&signer) {
+                        settlement.approval_weight = settlement
+                            .approval_weight
+                            .checked_add(weight)
+                            .unwrap_or_else(|| panic!("WeightOverflow"));
+                        settlement.approvals.push_back(signer.clone());
+                    }
+                    env.storage()
+                        .persistent()
+                        .set(&DataKey::Settlement(id), &settlement);
+                    env.events().publish(
+                        (Symbol::new(&env, "settlement_approved"), id),
+                        settlement.clone(),
+                    );
+                    approved.push_back(settlement);
+                }
+                // non-pending settlements are silently skipped
+            }
+            // missing settlement IDs are silently skipped
+        }
+        approved
     }
 
     /// Approves a pending settlement with a `partial_amount` cap; accumulates `signer`'s weight.
@@ -361,7 +406,10 @@ impl TreasuryContract {
             .unwrap_or_else(|| panic!("SettlementNotFound"))
     }
 
-    /// Expires a pending settlement whose TTL has elapsed (admin-only).
+    /// Expires a pending settlement once `SETTLEMENT_TTL` has elapsed since it was proposed.
+    /// Confirmed semantics (see #34): this is genuinely time-based — the TTL check below is
+    /// mandatory regardless of caller — and admin-gated for the call itself, mirroring the
+    /// invoice contract's `batch_expire` precedent rather than being open to any caller.
     /// Panics: `SettlementNotFound`, `AlreadyExecuted`, `TtlNotElapsed`.
     /// Emits: `settlement_expired`.
     pub fn expire_settlement(env: Env, admin: Address, settlement_id: u64) {
