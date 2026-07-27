@@ -76,6 +76,30 @@ fn deposit_withdraw_roundtrip() {
 }
 
 #[test]
+fn withdraw_all_drains_treasury_when_paused() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let admin = Address::generate(&env);
+    let recipient = Address::generate(&env);
+    let amount = 5_000_000i128;
+
+    let treasury_id = env.register_contract(None, TreasuryContract);
+    let treasury_client = TreasuryContractClient::new(&env, &treasury_id);
+    treasury_client.initialize(&admin, &1, &Vec::new(&env));
+
+    let token_id = env.register_contract(None, TestToken);
+    let test_token_client = TestTokenClient::new(&env, &token_id);
+    test_token_client.mint(&treasury_id, &amount);
+
+    treasury_client.pause(&admin);
+    treasury_client.withdraw_all(&admin, &token_id, &recipient);
+
+    assert_eq!(test_token_client.balance(&treasury_id), 0);
+    assert_eq!(test_token_client.balance(&recipient), amount);
+}
+
+#[test]
 fn batch_deposit_transfers_multiple_tokens_to_treasury() {
     let env = Env::default();
     env.mock_all_auths();

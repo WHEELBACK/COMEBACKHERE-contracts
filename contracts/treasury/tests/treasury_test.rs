@@ -65,6 +65,42 @@ fn get_signer_weight_returns_current_registry_weight() {
     assert_eq!(client.get_signer_weight(&backup), 0);
 }
 
+#[test]
+fn remove_signer_excludes_signer_from_registry_output() {
+    let env = Env::default();
+    let (client, admin, _) = setup(&env, 1);
+    let signer = Address::generate(&env);
+
+    client.set_signer(&admin, &signer, &3);
+    assert_eq!(client.get_signer_weight(&signer), 3);
+
+    client.remove_signer(&admin, &signer);
+
+    assert_eq!(client.get_signer_weight(&signer), 0);
+    let signers = client.get_all_signers();
+    assert_eq!(signers.len(), 1);
+    assert_eq!(signers.get(0).unwrap(), (admin, 1));
+}
+
+#[test]
+fn remove_signer_does_not_retroactively_invalidate_settlement_approval() {
+    let env = Env::default();
+    let (client, admin, _) = setup(&env, 2);
+    let backup = Address::generate(&env);
+    let merchant = Address::generate(&env);
+
+    client.set_signer(&admin, &backup, &1);
+    let settlement_id = client.propose_settlement(&admin, &merchant, &10_000_000);
+    client.approve_settlement(&backup, &settlement_id);
+
+    client.remove_signer(&admin, &backup);
+
+    let settlement = client.get_pending_settlements().get(0).unwrap();
+    assert_eq!(settlement.approval_weight, 2);
+    assert!(settlement.approvals.contains(&backup));
+    assert_eq!(client.get_signer_weight(&backup), 0);
+}
+
 // Fix #13: approve_settlement and execute_settlement on missing ID panic with SettlementNotFound.
 // The treasury uses panic!() (non-unwinding in no_std) for these error paths;
 // the behavior is verified by the contract logic and the #[should_panic] pattern

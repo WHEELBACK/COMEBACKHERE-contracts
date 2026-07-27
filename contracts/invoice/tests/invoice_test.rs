@@ -975,6 +975,46 @@ fn test_invoice_create_to_expired_flow() {
     assert_eq!(client.get_invoice(&id).status, InvoiceStatus::Expired);
 }
 
+#[test]
+fn test_batch_expire_skips_missing_and_non_pending_invoices() {
+    let (env, admin, client) = setup();
+    let merchant = Address::generate(&env);
+    let payer = Address::generate(&env);
+    let expired_id = client.create_invoice(
+        &merchant,
+        &10_000_000,
+        &10_250_000,
+        &1,
+        &MaybeBytes::None,
+        &MaybeBytes::None,
+        &0,
+        &MaybeAddress::None,
+    );
+    let paid_id = client.create_invoice(
+        &merchant,
+        &10_000_000,
+        &10_250_000,
+        &3600,
+        &MaybeBytes::None,
+        &MaybeBytes::None,
+        &0,
+        &MaybeAddress::None,
+    );
+    client.mark_paid(
+        &admin,
+        &paid_id,
+        &payer,
+        &MaybeBytes::None,
+        &MaybeAddress::None,
+    );
+
+    env.ledger().with_mut(|li| li.timestamp = 2);
+    let ids = soroban_sdk::vec![&env, 999, expired_id, paid_id];
+    assert_eq!(client.batch_expire(&admin, &ids), 1);
+    assert_eq!(client.get_invoice(&expired_id).status, InvoiceStatus::Expired);
+    assert_eq!(client.get_invoice(&paid_id).status, InvoiceStatus::Paid);
+}
+
 // Issue #91: e2e happy path — create invoice, admin marks paid, assert Paid status and payer recorded
 #[test]
 fn test_invoice_create_to_paid_escrow_flow() {
@@ -995,6 +1035,38 @@ fn test_invoice_create_to_paid_escrow_flow() {
     assert_eq!(paid.status, InvoiceStatus::Paid);
     assert_eq!(paid.payer, MaybeAddress::Some(payer));
     assert!(paid.paid_at.is_some());
+}
+
+#[test]
+fn test_mark_paid_rejects_wrong_payment_token() {
+    let (env, admin, client) = setup();
+    let merchant = Address::generate(&env);
+    let payer = Address::generate(&env);
+    let expected_token = Address::generate(&env);
+    let wrong_token = Address::generate(&env);
+    let id = client.create_invoice(
+        &merchant,
+        &10_000_000,
+        &10_250_000,
+        &3600,
+        &MaybeBytes::None,
+        &MaybeBytes::None,
+        &0,
+        &MaybeAddress::Some(expected_token),
+    );
+
+    let err = client
+        .try_mark_paid(
+            &admin,
+            &id,
+            &payer,
+            &MaybeBytes::None,
+            &MaybeAddress::Some(wrong_token),
+        )
+        .unwrap_err()
+        .unwrap();
+    assert_eq!(err, InvoiceError::TokenMismatch);
+    assert_eq!(client.get_invoice(&id).status, InvoiceStatus::Pending);
 }
 
 // --- #58: merchant nonce tests ---
