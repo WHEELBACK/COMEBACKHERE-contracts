@@ -24,17 +24,22 @@ impl TreasuryContract {
     }
 
     /// Withdraws `amount` tokens from the treasury to `to` via `token_contract`.
-    /// Confirmed reentrancy semantics (see #36): the balance is decremented and persisted
-    /// *before* the external `transfer` call (checks-effects-interactions). A malicious
-    /// `token_contract` that re-enters `withdraw` from its `transfer` callback observes the
-    /// already-decremented balance, so a double-spend of the same funds is not possible.
-    /// Panics: `ContractPaused`, `InvalidAmount`, `InsufficientBalance`.
+    /// Panics: `ContractPaused`, `InvalidAmount`, `InsufficientBalance`, `DestinationNotAllowed`.
     /// Emits: `withdraw`.
     pub fn withdraw(env: Env, to: Address, token_contract: Address, amount: i128) {
         require_not_paused(&env);
         to.require_auth();
         if amount <= 0 {
             panic!("InvalidAmount");
+        }
+        // Check withdrawal destination allowlist: if non-empty, `to` must be present.
+        let allowlist: Vec<Address> = env
+            .storage()
+            .instance()
+            .get(&DataKey::WithdrawalAllowlist)
+            .unwrap_or_else(|| Vec::new(&env));
+        if !allowlist.is_empty() && !allowlist.contains(&to) {
+            panic!("DestinationNotAllowed");
         }
         let mut balance: i128 = env
             .storage()
@@ -53,6 +58,15 @@ impl TreasuryContract {
         token_client.transfer(&treasury, &to, &amount);
         env.events()
             .publish((Symbol::new(&env, "withdraw"), to), amount);
+    }
+
+    /// Returns the recorded deposit balance for `address`, or 0 if never deposited.
+    /// Read-only, no authentication required.
+    pub fn get_balance(env: Env, address: Address) -> i128 {
+        env.storage()
+            .persistent()
+            .get(&DataKey::Balance(address))
+            .unwrap_or(0)
     }
 
     /// Drains the full token balance of the treasury to `recipient` (admin-only, paused-only emergency drain).

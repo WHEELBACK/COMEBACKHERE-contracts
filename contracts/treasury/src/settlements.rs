@@ -1,8 +1,8 @@
 use crate::{
-    require_admin, require_not_paused, DataKey, Settlement, SettlementHoldReason,
-    SettlementStatus, TreasuryContract,
+    require_admin, require_not_paused, DataKey, MAX_ALLOWED_TOKENS, Settlement,
+    SettlementHoldReason, SettlementStatus, TreasuryContract,
 };
-use multisig::{require_authorized_signer, signer_weight};
+use multisig::{meets_threshold, record_approval, require_authorized_signer};
 use soroban_sdk::{contractimpl, token, Address, Env, Symbol, Vec};
 
 const SETTLEMENT_TTL: u64 = 7 * 24 * 60 * 60;
@@ -35,8 +35,8 @@ impl TreasuryContract {
             .unwrap_or(0);
         let id = count + 1;
         let mut approvals = Vec::new(&env);
-        let weight = signer_weight(&env, &signer);
-        approvals.push_back(signer);
+        let mut weight = 0u32;
+        record_approval(&env, &mut approvals, &mut weight, &signer);
         let settlement = Settlement {
             id,
             merchant_address,
@@ -80,13 +80,12 @@ impl TreasuryContract {
         if settlement.status != SettlementStatus::Pending {
             panic!("AlreadyExecuted");
         }
-        if !settlement.approvals.contains(&signer) {
-            settlement.approval_weight = settlement
-                .approval_weight
-                .checked_add(signer_weight(&env, &signer))
-                .unwrap_or_else(|| panic!("WeightOverflow"));
-            settlement.approvals.push_back(signer);
-        }
+        record_approval(
+            &env,
+            &mut settlement.approvals,
+            &mut settlement.approval_weight,
+            &signer,
+        );
         env.storage()
             .persistent()
             .set(&DataKey::Settlement(settlement_id), &settlement);
@@ -160,13 +159,12 @@ impl TreasuryContract {
         if partial_amount <= 0 || partial_amount >= settlement.amount {
             panic!("InvalidAmount");
         }
-        if !settlement.approvals.contains(&signer) {
-            settlement.approval_weight = settlement
-                .approval_weight
-                .checked_add(signer_weight(&env, &signer))
-                .unwrap_or_else(|| panic!("WeightOverflow"));
-            settlement.approvals.push_back(signer);
-        }
+        record_approval(
+            &env,
+            &mut settlement.approvals,
+            &mut settlement.approval_weight,
+            &signer,
+        );
         env.storage()
             .persistent()
             .set(&DataKey::Settlement(settlement_id), &settlement);
@@ -213,7 +211,7 @@ impl TreasuryContract {
         if threshold == 0 {
             panic!("ThresholdNotConfigured");
         }
-        if settlement.approval_weight < threshold {
+        if !meets_threshold(settlement.approval_weight, threshold) {
             panic!("ThresholdNotMet");
         }
         if token_contract == env.current_contract_address() {
@@ -279,7 +277,7 @@ impl TreasuryContract {
         if threshold == 0 {
             panic!("ThresholdNotConfigured");
         }
-        if settlement.approval_weight < threshold {
+        if !meets_threshold(settlement.approval_weight, threshold) {
             panic!("ThresholdNotMet");
         }
         if token_contract == env.current_contract_address() {
@@ -473,6 +471,9 @@ impl TreasuryContract {
             .get(&DataKey::TokenAllowlist)
             .unwrap_or_else(|| Vec::new(&env));
         if !allowlist.contains(&token) {
+            if allowlist.len() >= MAX_ALLOWED_TOKENS {
+                panic!("AllowlistFull");
+            }
             allowlist.push_back(token.clone());
             env.storage()
                 .instance()
