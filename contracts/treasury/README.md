@@ -28,6 +28,7 @@ The Treasury contract manages funds and settlements using a multi-signature appr
 | `withdraw` | `to` | `to: Address, token_contract: Address, amount: i128` | `()` | `ContractPaused`, `Unauthorized`, `InvalidAmount`, `InsufficientBalance` |
 | `add_allowed_token` | `admin` | `admin: Address, token: Address` | `()` | `Unauthorized` |
 | `remove_allowed_token` | `admin` | `admin: Address, token: Address` | `()` | `Unauthorized` |
+| `get_balance` | None | `address: Address` | `i128` | None |
 | `get_allowed_tokens` | None | None | `Vec<Address>` | None |
 | `propose_signer_rotation` | `proposer` | `proposer: Address, old_signer: Address, new_signer: Address` | `u64` | `UnauthorizedSigner` |
 | `approve_signer_rotation` | `approver` | `approver: Address, rotation_id: u64` | `SignerRotationProposal` | `UnauthorizedSigner`, `RotationNotFound`, `RotationAlreadyExecuted` |
