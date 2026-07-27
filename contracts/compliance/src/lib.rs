@@ -1,3 +1,7 @@
+//! Compliance contract — active implementation of the admin-managed allowlist/blocklist.
+//! This crate is fully implemented and in use; it is not a stub pending removal.
+//! For the data types and storage keys, see `allowlist.rs`.
+
 #![no_std]
 
 mod allowlist;

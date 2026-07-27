@@ -1,3 +1,6 @@
+// Data types, errors, and DataKey variants for the compliance allowlist/blocklist.
+// This is the active implementation module — not a stub. It is used by `lib.rs`.
+
 use soroban_sdk::{contracterror, contracttype, Address};
 
 #[contracttype]

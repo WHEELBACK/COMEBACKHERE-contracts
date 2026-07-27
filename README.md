@@ -10,6 +10,13 @@ This repository owns invoice escrow state, payment validation, multi-sig treasur
 - `contracts/treasury` — 2-of-3 settlement approval workflow
 - `contracts/compliance` — admin-managed allow/block list
 
+## Documentation
+
+- [ARCHITECTURE.md](ARCHITECTURE.md) — contract design, DataKey storage reference, and cross-contract call map
+- [GLOSSARY.md](GLOSSARY.md) — definitions for protocol terms used across contracts and docs
+- [SECURITY.md](SECURITY.md) — vulnerability reporting and disclosure policy
+- [CONTRIBUTING.md](CONTRIBUTING.md) — branch, commit, and PR guidelines
+
 ## Development
 
 ```sh
