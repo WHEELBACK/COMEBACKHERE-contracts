@@ -11,3 +11,8 @@ repos:
         entry: cargo clippy -- -D warnings
         language: system
         pass_filenames: false
+      - id: check-enum-ordering
+        name: Check append-only enum ordering
+        entry: scripts/check-enum-ordering.sh
+        language: script
+        pass_filenames: false

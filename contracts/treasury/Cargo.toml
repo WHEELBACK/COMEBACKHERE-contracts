@@ -19,5 +19,6 @@ multisig = { package = "comebackhere-multisig", path = "../../crates/multisig" }
 [dev-dependencies]
 soroban-sdk = { workspace = true, features = ["testutils"] }
 compliance = { package = "comebackhere-compliance", path = "../compliance" }
+compliance-client = { package = "comebackhere-compliance-client", path = "../../crates/compliance-client" }
 invoice = { package = "comebackhere-invoice", path = "../invoice" }
 proptest = "1"
