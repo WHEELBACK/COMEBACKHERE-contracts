@@ -81,11 +81,11 @@ fn double_cancel_panics() {
 // ─── #117 Event ordering snapshots ───────────────────────────────────────────
 
 fn event_symbol(env: &Env, topics: &soroban_sdk::Vec<soroban_sdk::Val>) -> String {
-    let sym: Symbol = topics
-        .get_unchecked(0)
-        .try_into()
-        .unwrap_or_else(|_| Symbol::new(env, ""));
-    sym.to_string()
+    use soroban_sdk::TryFromVal;
+    let val = topics.get_unchecked(0);
+    Symbol::try_from_val(env, &val)
+        .unwrap_or_else(|_| Symbol::new(env, ""))
+        .to_string()
 }
 
 #[test]

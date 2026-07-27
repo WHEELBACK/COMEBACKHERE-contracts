@@ -21,7 +21,7 @@ fn test_zero_additional_approvals_panics() {
     let (client, admin, merchant, token_id) = setup(&env, 2);
     let sid = client.propose_settlement(&admin, &merchant, &10_000_000);
     // approval_weight = 1 (only proposer), threshold = 2 → must panic
-    client.execute_settlement(&sid, &token_id);
+    client.execute_settlement(&admin, &sid, &token_id);
 }
 
 // Approvals below threshold: two signers each with weight 1, threshold 3 → ThresholdNotMet.
@@ -36,7 +36,7 @@ fn test_below_threshold_panics() {
     let sid = client.propose_settlement(&admin, &merchant, &10_000_000);
     client.approve_settlement(&backup, &sid);
     // approval_weight = 2 (admin + backup), threshold = 3 → must panic
-    client.execute_settlement(&sid, &token_id);
+    client.execute_settlement(&admin, &sid, &token_id);
 }
 
 // threshold - 1 approvals: propose first, then accumulate threshold-1 approvals.
@@ -55,7 +55,7 @@ fn test_threshold_minus_one_approvals_panics() {
     client.approve_settlement(&signer_b, &sid);
     client.approve_settlement(&signer_c, &sid);
     // approval_weight = 3 (admin + b + c), threshold = 4 → must panic
-    client.execute_settlement(&sid, &token_id);
+    client.execute_settlement(&admin, &sid, &token_id);
 }
 
 // Exactly at threshold: approval_weight == threshold → execution succeeds.
@@ -70,7 +70,7 @@ fn test_exactly_at_threshold_succeeds() {
     let sid = client.propose_settlement(&admin, &merchant, &10_000_000);
     client.approve_settlement(&backup, &sid);
     // approval_weight = 2 == threshold = 2 → must succeed
-    client.execute_settlement(&sid, &token_id);
+    client.execute_settlement(&admin, &sid, &token_id);
     let pending = client.get_pending_settlements();
     assert_eq!(
         pending.len(),
@@ -87,7 +87,7 @@ fn test_threshold_one_proposer_satisfies_alone() {
     let (client, admin, merchant, token_id) = setup(&env, 1);
     let sid = client.propose_settlement(&admin, &merchant, &5_000_000);
     // approval_weight = 1 (admin), threshold = 1 → must execute cleanly
-    client.execute_settlement(&sid, &token_id);
+    client.execute_settlement(&admin, &sid, &token_id);
     let pending = client.get_pending_settlements();
     assert_eq!(pending.len(), 0);
 }
@@ -105,7 +105,7 @@ fn test_unanimous_threshold_partial_approvals_panics() {
     let sid = client.propose_settlement(&admin, &merchant, &10_000_000);
     // Only admin + signer_b approve (weight 2), signer_c absent → weight 2 < 3
     client.approve_settlement(&signer_b, &sid);
-    client.execute_settlement(&sid, &token_id);
+    client.execute_settlement(&admin, &sid, &token_id);
 }
 
 // Unanimous threshold: all three approve → execution succeeds.
@@ -122,7 +122,7 @@ fn test_unanimous_threshold_all_approved_succeeds() {
     client.approve_settlement(&signer_b, &sid);
     client.approve_settlement(&signer_c, &sid);
     // approval_weight = 3 == threshold = 3 → must succeed
-    client.execute_settlement(&sid, &token_id);
+    client.execute_settlement(&admin, &sid, &token_id);
     assert_eq!(
         client.get_pending_settlements().len(),
         0,
@@ -146,7 +146,7 @@ fn test_weighted_signer_satisfies_threshold_alone() {
     let token_id = env.register_stellar_asset_contract(admin.clone());
     soroban_sdk::token::StellarAssetClient::new(&env, &token_id).mint(&contract_id, &10_000_000);
     let sid = client.propose_settlement(&admin, &merchant, &10_000_000);
-    client.execute_settlement(&sid, &token_id);
+    client.execute_settlement(&admin, &sid, &token_id);
     let settlement = client.get_pending_settlements();
     assert_eq!(settlement.len(), 0);
 }
