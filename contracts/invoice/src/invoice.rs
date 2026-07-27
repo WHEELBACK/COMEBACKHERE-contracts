@@ -3,6 +3,10 @@ use soroban_sdk::{contracterror, contracttype, Address, Bytes};
 /// USDC on Stellar uses 7 decimal places: 1 USDC = 10_000_000 stroops.
 pub const USDC_FACTOR: i128 = 10_000_000;
 
+/// Maximum number of elements accepted by any batch entrypoint (batch_create_invoice,
+/// batch_expire) per call, to bound per-invocation storage writes and gas.
+pub const MAX_BATCH_SIZE: u32 = 50;
+
 #[contracterror]
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 #[repr(u32)]
@@ -23,6 +27,22 @@ pub enum InvoiceError {
     AmountPrecision = 12,
     /// Merchant nonce has already been used for a previous invoice.
     DuplicateNonce = 13,
+    /// expires_in_seconds exceeds MAX_EXPIRY_SECONDS.
+    ExpiryTooLong = 14,
+    /// Provided metadata_hash does not match the stored hash on the invoice.
+    MetadataMismatch = 15,
+    /// No pending admin transfer to accept.
+    NoPendingAdmin = 16,
+    /// payment_link_hash was provided but is not exactly 32 bytes.
+    InvalidPaymentLinkHash = 17,
+    /// Invoice is not in RefundRequested status.
+    NotRefundRequested = 18,
+    /// Provided payment token does not match the invoice's expected token.
+    TokenMismatch = 19,
+    /// Batch input exceeds MAX_BATCH_SIZE.
+    BatchTooLarge = 20,
+    /// create_invoice called again before CreationCooldown has elapsed for this merchant.
+    CooldownActive = 21,
 }
 
 #[contracttype]
@@ -35,6 +55,8 @@ pub enum InvoiceStatus {
     RefundRequested,
     /// Escrow funds have been released to the merchant after payment confirmation.
     Released,
+    /// Refund has been approved by admin; terminal status for disputed invoices.
+    Refunded,
 }
 
 // contracttype enum wrappers for optional complex types; Option<Address> and
@@ -68,6 +90,31 @@ pub struct Invoice {
     pub payment_link_hash: MaybeBytes,
     /// Merchant-supplied nonce for storefront idempotency (0 = no nonce).
     pub merchant_nonce: u64,
+    /// Optional token contract address for multi-currency invoices.
+    /// `None` means the invoice is denominated in the default (USDC).
+    pub token_address: MaybeAddress,
+}
+
+/// Parameters for a single invoice within a batch_create_invoice call.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct BatchInvoiceParams {
+    pub amount_usdc: i128,
+    pub gross_usdc: i128,
+    pub expires_in_seconds: u64,
+    pub metadata_hash: MaybeBytes,
+    pub payment_link_hash: MaybeBytes,
+    pub merchant_nonce: u64,
+    pub token_address: MaybeAddress,
+}
+
+/// A single status transition recorded in an invoice's audit log.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct StatusTransition {
+    pub from: InvoiceStatus,
+    pub to: InvoiceStatus,
+    pub timestamp: u64,
 }
 
 #[contracttype]
@@ -76,9 +123,20 @@ pub enum DataKey {
     Invoice(u64),
     InvoiceCount,
     Admin,
+    PendingAdmin,
     Paused,
     /// Configurable grace window (seconds) added to expires_at during mark_paid.
     GraceWindow,
     /// Tracks used merchant nonces: (merchant_address, nonce) → bool.
     MerchantNonce(Address, u64),
+    /// Secondary index: merchant address → Vec<u64> of invoice IDs.
+    MerchantInvoices(Address),
+    /// Ordered audit log of status transitions for an invoice.
+    InvoiceHistory(u64),
+    /// Global set of pending invoice IDs for efficient expiry enumeration.
+    PendingIndex,
+    /// Admin-tunable minimum seconds between successive create_invoice calls per merchant.
+    CreationCooldown,
+    /// Timestamp of the last successful create_invoice call for a given merchant.
+    LastCreatedAt(Address),
 }

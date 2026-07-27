@@ -6,7 +6,7 @@ fn setup(env: &Env, threshold: u32) -> (TreasuryContractClient, Address, Address
     let admin = Address::generate(env);
     let id = env.register_contract(None, TreasuryContract);
     let client = TreasuryContractClient::new(env, &id);
-    client.initialize(&admin, &threshold);
+    client.initialize(&admin, &threshold, &soroban_sdk::Vec::new(env));
     (client, admin, id)
 }
 
@@ -16,7 +16,7 @@ fn setup_multisig() -> (Env, Address, Address, Address) {
     let admin = Address::generate(&env);
     let contract_id = env.register_contract(None, TreasuryContract);
     let client = TreasuryContractClient::new(&env, &contract_id);
-    client.initialize(&admin, &2);
+    client.initialize(&admin, &2, &soroban_sdk::Vec::new(&env));
     let backup = Address::generate(&env);
     client.set_signer(&admin, &backup, &1);
     (env, admin, backup, contract_id)
@@ -46,6 +46,23 @@ fn partial_approval_accumulates() {
     assert_eq!(settlement.approvals.len(), 2);
     // approval_weight should be 2 (admin=1 + backup=1)
     assert_eq!(settlement.approval_weight, 2);
+}
+
+#[test]
+fn get_signer_weight_returns_current_registry_weight() {
+    let env = Env::default();
+    let (client, admin, _) = setup(&env, 2);
+    let backup = Address::generate(&env);
+    let unknown = Address::generate(&env);
+
+    assert_eq!(client.get_signer_weight(&admin), 1);
+    assert_eq!(client.get_signer_weight(&unknown), 0);
+
+    client.set_signer(&admin, &backup, &3);
+    assert_eq!(client.get_signer_weight(&backup), 3);
+
+    client.set_signer(&admin, &backup, &0);
+    assert_eq!(client.get_signer_weight(&backup), 0);
 }
 
 // Fix #13: approve_settlement and execute_settlement on missing ID panic with SettlementNotFound.
@@ -80,7 +97,7 @@ fn authorized_caller_can_pause() {
     let admin = Address::generate(&env);
     let id = env.register_contract(None, TreasuryContract);
     let client = TreasuryContractClient::new(&env, &id);
-    client.initialize(&admin, &2);
+    client.initialize(&admin, &2, &soroban_sdk::Vec::new(&env));
 
     client.pause(&admin);
 }
@@ -92,7 +109,7 @@ fn authorized_caller_can_unpause() {
     let admin = Address::generate(&env);
     let id = env.register_contract(None, TreasuryContract);
     let client = TreasuryContractClient::new(&env, &id);
-    client.initialize(&admin, &2);
+    client.initialize(&admin, &2, &soroban_sdk::Vec::new(&env));
 
     client.pause(&admin);
     client.unpause(&admin);
@@ -107,7 +124,7 @@ fn guarded_function_succeeds_after_unpause() {
     let merchant = Address::generate(&env);
     let id = env.register_contract(None, TreasuryContract);
     let client = TreasuryContractClient::new(&env, &id);
-    client.initialize(&admin, &2);
+    client.initialize(&admin, &2, &soroban_sdk::Vec::new(&env));
     client.set_signer(&admin, &signer, &1);
 
     // Create a settlement before pausing
@@ -133,12 +150,13 @@ fn dispute_can_be_raised_against_settlement() {
     let claimant = Address::generate(&env);
     let id = env.register_contract(None, TreasuryContract);
     let client = TreasuryContractClient::new(&env, &id);
-    client.initialize(&admin, &2);
+    client.initialize(&admin, &2, &soroban_sdk::Vec::new(&env));
     client.set_signer(&admin, &signer, &1);
 
     let settlement_id = client.propose_settlement(&signer, &merchant, &10_000_000);
 
-    let dispute_id = client.raise_dispute(&claimant, &settlement_id, &merchant, &5_000_000);
+    let dispute_id =
+        client.raise_dispute(&claimant, &settlement_id, &merchant, &5_000_000, &u64::MAX);
     assert_eq!(dispute_id, 1);
 }
 
@@ -152,11 +170,12 @@ fn dispute_resolved_in_favor_of_claimant() {
     let claimant = Address::generate(&env);
     let id = env.register_contract(None, TreasuryContract);
     let client = TreasuryContractClient::new(&env, &id);
-    client.initialize(&admin, &2);
+    client.initialize(&admin, &2, &soroban_sdk::Vec::new(&env));
     client.set_signer(&admin, &signer, &1);
 
     let settlement_id = client.propose_settlement(&signer, &merchant, &10_000_000);
-    let dispute_id = client.raise_dispute(&claimant, &settlement_id, &merchant, &5_000_000);
+    let dispute_id =
+        client.raise_dispute(&claimant, &settlement_id, &merchant, &5_000_000, &u64::MAX);
 
     client.resolve_dispute(&admin, &dispute_id, &true);
 }
@@ -171,11 +190,12 @@ fn dispute_resolved_in_favor_of_counterparty() {
     let claimant = Address::generate(&env);
     let id = env.register_contract(None, TreasuryContract);
     let client = TreasuryContractClient::new(&env, &id);
-    client.initialize(&admin, &2);
+    client.initialize(&admin, &2, &soroban_sdk::Vec::new(&env));
     client.set_signer(&admin, &signer, &1);
 
     let settlement_id = client.propose_settlement(&signer, &merchant, &10_000_000);
-    let dispute_id = client.raise_dispute(&claimant, &settlement_id, &merchant, &5_000_000);
+    let dispute_id =
+        client.raise_dispute(&claimant, &settlement_id, &merchant, &5_000_000, &u64::MAX);
 
     client.resolve_dispute(&admin, &dispute_id, &false);
 }
@@ -188,7 +208,7 @@ fn pause_and_unpause_emit_events() {
     let merchant = Address::generate(&env);
     let id = env.register_contract(None, TreasuryContract);
     let client = TreasuryContractClient::new(&env, &id);
-    client.initialize(&admin, &1);
+    client.initialize(&admin, &1, &soroban_sdk::Vec::new(&env));
     client.pause(&admin);
     client.unpause(&admin);
     // after unpause, proposals work again
@@ -205,7 +225,9 @@ fn test_initialize_rejects_zero_threshold() {
     let admin = Address::generate(&env);
     let id = env.register_contract(None, TreasuryContract);
     let client = TreasuryContractClient::new(&env, &id);
-    assert!(client.try_initialize(&admin, &0).is_err());
+    assert!(client
+        .try_initialize(&admin, &0, &soroban_sdk::Vec::new(&env))
+        .is_err());
 }
 
 #[test]
@@ -215,6 +237,8 @@ fn test_initialize_rejects_reinit() {
     let admin = Address::generate(&env);
     let id = env.register_contract(None, TreasuryContract);
     let client = TreasuryContractClient::new(&env, &id);
-    client.initialize(&admin, &1);
-    assert!(client.try_initialize(&admin, &2).is_err());
+    client.initialize(&admin, &1, &soroban_sdk::Vec::new(&env));
+    assert!(client
+        .try_initialize(&admin, &2, &soroban_sdk::Vec::new(&env))
+        .is_err());
 }

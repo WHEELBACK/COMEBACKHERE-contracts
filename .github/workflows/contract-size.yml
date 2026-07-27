@@ -1,0 +1,68 @@
+name: Contract Size
+
+on:
+  pull_request:
+    paths:
+      - "contracts/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+  push:
+    branches: [main]
+    paths:
+      - "contracts/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+
+env:
+  CARGO_TERM_COLOR: always
+  MAX_CONTRACT_SIZE: 65536 # 64 KB
+
+jobs:
+  check-size:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - name: Cache cargo build
+        uses: actions/cache@v4
+        with:
+          path: target
+          key: ${{ runner.os }}-contract-size-${{ hashFiles('Cargo.lock') }}
+
+      - name: Build contracts to WASM
+        run: |
+          set -e
+          echo "=== Building contracts ==="
+          for contract in contracts/*/; do
+            if [ -f "$contract/Cargo.toml" ]; then
+              name=$(basename "$contract")
+              echo "--- Building $name ---"
+              cargo build --package "comebackhere-$name" --target wasm32-unknown-unknown --release 2>&1
+            fi
+          done
+
+      - name: Report .wasm sizes
+        run: |
+          set -e
+          echo "### Contract WASM sizes" >> $GITHUB_STEP_SUMMARY
+          echo '| Contract | Size (bytes) | Status |' >> $GITHUB_STEP_SUMMARY
+          echo '|----------|-------------|--------|' >> $GITHUB_STEP_SUMMARY
+          EXIT_CODE=0
+          for wasm in target/wasm32-unknown-unknown/release/*.wasm; do
+            name=$(basename "$wasm" .wasm)
+            size=$(stat --format=%s "$wasm")
+            if [ "$size" -gt "$MAX_CONTRACT_SIZE" ]; then
+              status=":x: Exceeds ${MAX_CONTRACT_SIZE} bytes"
+              EXIT_CODE=1
+            else
+              status=":white_check_mark: OK"
+            fi
+            echo "| $name | $size | $status |" >> $GITHUB_STEP_SUMMARY
+            echo "$name: ${size} bytes"
+          done
+          exit $EXIT_CODE

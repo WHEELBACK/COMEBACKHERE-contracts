@@ -43,7 +43,14 @@ make update-abi-snapshots
 
 ## Toolchain
 
-Rust `1.95.0` with target `wasm32-unknown-unknown`. See `rust-toolchain.toml`.
+- **Rust**: `1.95.0` (see `rust-toolchain.toml`)
+- **Target**: `wasm32-unknown-unknown`
+- **Stellar CLI**: `20.0.0`
+
+Verify your setup by running:
+```sh
+./scripts/check-tools.sh
+```
 
 ## License
 

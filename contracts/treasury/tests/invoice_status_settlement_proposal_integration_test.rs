@@ -17,9 +17,8 @@ struct SettlementProposalWorkflow;
 
 #[contractimpl]
 impl SettlementProposalWorkflow {
-    // Verification note: Invoice status precondition for settlement proposal.
-    // A settlement proposal is only valid when the invoice is in `InvoiceStatus::Pending`.
-    // Any terminal/invalid state (e.g. Paid, Expired, Cancelled) must be rejected.
+    // A settlement proposal is only valid when the invoice is in `InvoiceStatus::Paid`.
+    // Any non-Paid state (e.g. Pending, Released) must be rejected.
     pub fn propose_settlement_for_invoice(
         env: Env,
         invoice_id: Address,
@@ -27,7 +26,7 @@ impl SettlementProposalWorkflow {
         invoice_num: u64,
     ) -> Result<u64, ProposalError> {
         let invoice = InvoiceContractClient::new(&env, &invoice_id).get_invoice(&invoice_num);
-        if invoice.status != InvoiceStatus::Pending {
+        if invoice.status != InvoiceStatus::Paid {
             return Err(ProposalError::InvalidInvoiceStatus);
         }
         let treasury = TreasuryContractClient::new(&env, &treasury_id);
@@ -60,7 +59,9 @@ fn setup() -> (
 
     let treasury_id = env.register_contract(None, TreasuryContract);
     let treasury = TreasuryContractClient::new(&env, &treasury_id);
-    assert!(treasury.try_initialize(&admin, &1).is_ok());
+    assert!(treasury
+        .try_initialize(&admin, &1, &soroban_sdk::Vec::new(&env))
+        .is_ok());
     treasury.set_signer(&admin, &wf_id, &1);
 
     (
@@ -76,12 +77,23 @@ fn setup() -> (
 }
 
 #[test]
-fn settlement_proposal_succeeds_when_invoice_pending() {
-    let (env, _admin, merchant, invoice_id, invoice, treasury_id, _treasury, wf_id) = setup();
+fn settlement_proposal_succeeds_when_invoice_paid() {
+    let (env, admin, merchant, invoice_id, invoice, treasury_id, _treasury, wf_id) = setup();
+    let payer = Address::generate(&env);
     let inv_id = invoice
         .try_create_invoice(&merchant, &10_000_000, &10_250_000, &3600, &MaybeBytes::None, &MaybeBytes::None, &0)
         .unwrap()
         .unwrap();
+    assert!(invoice
+        .try_mark_paid(
+            &admin,
+            &inv_id,
+            &payer,
+            &MaybeBytes::None,
+            &MaybeAddress::None
+        )
+        .unwrap()
+        .is_ok());
 
     let wf = SettlementProposalWorkflowClient::new(&env, &wf_id);
     assert!(wf
@@ -90,7 +102,30 @@ fn settlement_proposal_succeeds_when_invoice_pending() {
 }
 
 #[test]
-fn settlement_proposal_rejected_when_invoice_paid() {
+fn settlement_proposal_rejected_when_invoice_pending() {
+    let (env, _admin, merchant, invoice_id, invoice, treasury_id, _treasury, wf_id) = setup();
+    let inv_id = invoice
+        .try_create_invoice(
+            &merchant,
+            &10_000_000,
+            &10_250_000,
+            &3600,
+            &MaybeBytes::None,
+            &MaybeBytes::None,
+            &0,
+            &MaybeAddress::None,
+        )
+        .unwrap()
+        .unwrap();
+    // Invoice is still Pending — proposal must be rejected.
+    let wf = SettlementProposalWorkflowClient::new(&env, &wf_id);
+    assert!(wf
+        .try_propose_settlement_for_invoice(&invoice_id, &treasury_id, &inv_id)
+        .is_err());
+}
+
+#[test]
+fn settlement_proposal_rejected_when_invoice_released() {
     let (env, admin, merchant, invoice_id, invoice, treasury_id, _treasury, wf_id) = setup();
     let payer = Address::generate(&env);
     let inv_id = invoice
@@ -98,10 +133,17 @@ fn settlement_proposal_rejected_when_invoice_paid() {
         .unwrap()
         .unwrap();
     assert!(invoice
-        .try_mark_paid(&admin, &inv_id, &payer)
+        .try_mark_paid(
+            &admin,
+            &inv_id,
+            &payer,
+            &MaybeBytes::None,
+            &MaybeAddress::None
+        )
         .unwrap()
         .is_ok());
-    assert_eq!(invoice.get_invoice(&inv_id).status, InvoiceStatus::Paid);
+    invoice.release_escrow(&admin, &inv_id);
+    assert_eq!(invoice.get_invoice(&inv_id).status, InvoiceStatus::Released);
 
     let wf = SettlementProposalWorkflowClient::new(&env, &wf_id);
     assert!(wf
@@ -119,27 +161,38 @@ fn settlement_proposal_boundary_at_expiry_transition() {
         .unwrap();
     let inv = invoice.get_invoice(&inv_id);
 
-    // Boundary: at exact expiry timestamp, invoice is expired (>= check).
+    // Boundary: at exact expiry timestamp mark_paid is rejected with Expired.
     env.ledger().with_mut(|l| l.timestamp = inv.expires_at);
     assert_eq!(invoice.get_invoice(&inv_id).status, InvoiceStatus::Pending);
     let wf = SettlementProposalWorkflowClient::new(&env, &wf_id);
-    // mark_paid at exact expiry returns Expired
     let err = invoice
-        .try_mark_paid(&admin, &inv_id, &payer)
+        .try_mark_paid(
+            &admin,
+            &inv_id,
+            &payer,
+            &MaybeBytes::None,
+            &MaybeAddress::None,
+        )
         .unwrap_err()
         .unwrap();
     assert_eq!(err, invoice::InvoiceError::Expired);
 
-    // Advance past expiry and pay to transition to Paid, then verify proposal is rejected.
+    // Before expiry (timestamp reset to 0) payment succeeds.
     env.ledger().with_mut(|l| l.timestamp = 0);
     assert!(invoice
-        .try_mark_paid(&admin, &inv_id, &payer)
+        .try_mark_paid(
+            &admin,
+            &inv_id,
+            &payer,
+            &MaybeBytes::None,
+            &MaybeAddress::None
+        )
         .unwrap()
         .is_ok());
     assert_eq!(invoice.get_invoice(&inv_id).status, InvoiceStatus::Paid);
 
-    // Once the invoice transitions to a terminal/invalid state, proposal must be rejected.
+    // Once the invoice is Paid, a settlement proposal must succeed.
     assert!(wf
         .try_propose_settlement_for_invoice(&invoice_id, &treasury_id, &inv_id)
-        .is_err());
+        .is_ok());
 }

@@ -1,4 +1,4 @@
-use invoice::{InvoiceContract, InvoiceContractClient, InvoiceStatus, MaybeBytes};
+use invoice::{InvoiceContract, InvoiceContractClient, InvoiceStatus, MaybeAddress, MaybeBytes};
 use soroban_sdk::{
     testutils::{Address as _, Ledger},
     Address, Env,
@@ -42,6 +42,7 @@ fn high_volume_invoice_creation_storage_budget() {
             &MaybeBytes::None,
             &MaybeBytes::None,
             &0,
+            &MaybeAddress::None,
         );
         assert_eq!(id, i);
         last_id = id;
@@ -61,4 +62,40 @@ fn high_volume_invoice_creation_storage_budget() {
 
     assert_eq!(last_id, total);
     assert_eq!(observed_storage_entries, total);
+}
+
+#[test]
+fn batch_expire_1000_invoices() {
+    let (env, admin, client) = setup();
+    // This test intentionally exceeds the default network resource budget to
+    // exercise storage/state correctness at high volume, not budget limits.
+    env.cost_estimate().budget().reset_unlimited();
+    let merchant = Address::generate(&env);
+
+    // Set timestamp so expires_at = 1001 for every invoice.
+    env.ledger().with_mut(|l| l.timestamp = 1_000);
+
+    let total: u64 = 1_000;
+    let mut ids = soroban_sdk::Vec::new(&env);
+
+    for i in 1..=total {
+        let id = client.create_invoice(
+            &merchant,
+            &10_000_000,
+            &10_250_000,
+            &1, // expires_in_seconds = 1 → expires_at = 1001
+            &MaybeBytes::None,
+            &MaybeBytes::None,
+            &0,
+            &MaybeAddress::None,
+        );
+        assert_eq!(id, i);
+        ids.push_back(id);
+    }
+
+    // Advance past expiry.
+    env.ledger().with_mut(|l| l.timestamp = 2_000);
+
+    let expired = client.batch_expire(&admin, &ids);
+    assert_eq!(expired, total as u32);
 }
