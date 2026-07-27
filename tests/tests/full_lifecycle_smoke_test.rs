@@ -115,13 +115,16 @@ fn setup() -> TestContext {
     }
 }
 
+/// Walks the entire `ARCHITECTURE.md` payment lifecycle sequence diagram, in the
+/// exact documented order, asserting each contract's state after every step:
+/// create_invoice -> mark_paid -> propose_settlement -> approve_settlement ->
+/// is_allowed -> execute_settlement -> release_escrow.
 #[test]
 fn full_lifecycle_happy_path() {
     let ctx = setup();
 
-    ctx.compliance.allow_address(&ctx.admin, &ctx.merchant);
-    assert!(ctx.compliance.is_allowed(&ctx.merchant));
-
+    // Merchant->>Invoice: create_invoice(merchant, amount, expires_in)
+    // Note over Invoice: status = Pending
     let inv_id = ctx.invoice.create_invoice(
         &ctx.merchant,
         &10_000_000,
@@ -135,6 +138,9 @@ fn full_lifecycle_happy_path() {
     let inv = ctx.invoice.get_invoice(&inv_id);
     assert_eq!(inv.status, InvoiceStatus::Pending);
 
+    // Payer->>Invoice: (off-chain payment triggers admin)
+    // Invoice-->>Invoice: mark_paid(admin, id, payer)
+    // Note over Invoice: status = Paid
     ctx.invoice.mark_paid(
         &ctx.admin,
         &inv_id,
@@ -146,26 +152,38 @@ fn full_lifecycle_happy_path() {
     assert_eq!(inv.status, InvoiceStatus::Paid);
     assert_eq!(inv.payer, MaybeAddress::Some(ctx.payer.clone()));
 
-    ctx.invoice.release_escrow(&ctx.admin, &inv_id);
-    let inv = ctx.invoice.get_invoice(&inv_id);
-    assert_eq!(inv.status, invoice::InvoiceStatus::Released);
-
     ctx.token.mint(&ctx.treasury_id, &10_000_000);
     assert_eq!(ctx.token.balance(&ctx.treasury_id), 10_000_000);
     assert_eq!(ctx.token.balance(&ctx.merchant), 0);
 
+    // SettlementProposalWorkflow->>Invoice: get_invoice(id)
+    // Invoice-->>SettlementProposalWorkflow: Invoice{status=Paid}
+    // SettlementProposalWorkflow->>Treasury: propose_settlement(signer, merchant, amount)
+    // Note over Treasury: Settlement{status=Pending}
+    let inv = ctx.invoice.get_invoice(&inv_id);
+    assert_eq!(inv.status, InvoiceStatus::Paid);
     let settlement_id = ctx
         .treasury
         .propose_settlement(&ctx.admin, &ctx.merchant, &10_000_000);
     let settlement = ctx.treasury.get_settlement(&settlement_id);
     assert_eq!(settlement.status, SettlementStatus::Pending);
 
+    // Treasury-->>Treasury: approve_settlement(signer2, id)
+    // Note over Treasury: approval_weight >= threshold
     // admin is both proposer and approver here, so approval_weight (2) is not
     // double-counted — see #34 duplicate-approval-weight guarantee.
     ctx.treasury.approve_settlement(&ctx.admin, &settlement_id);
     let settlement = ctx.treasury.get_settlement(&settlement_id);
     assert_eq!(settlement.approval_weight, 2);
 
+    // SettlementWorkflow->>Compliance: is_allowed(merchant)
+    // Compliance-->>SettlementWorkflow: true
+    ctx.compliance.allow_address(&ctx.admin, &ctx.merchant);
+    assert!(ctx.compliance.is_allowed(&ctx.merchant));
+
+    // SettlementWorkflow->>Treasury: execute_settlement(signer, id, token)
+    // Treasury->>Token: transfer(treasury -> merchant, amount)
+    // Note over Treasury: Settlement{status=Executed}
     let wf_id = ctx._env.register_contract(None, ComplianceGatedSettlement);
     let wf = ComplianceGatedSettlementClient::new(&ctx._env, &wf_id);
     ctx.treasury.set_signer(&ctx.admin, &wf_id, &1);
@@ -182,6 +200,12 @@ fn full_lifecycle_happy_path() {
     assert_eq!(settlement.status, SettlementStatus::Executed);
     assert_eq!(ctx.token.balance(&ctx.treasury_id), 0);
     assert_eq!(ctx.token.balance(&ctx.merchant), 10_000_000);
+
+    // Invoice-->>Invoice: release_escrow(admin, id)
+    // Note over Invoice: status = Released
+    ctx.invoice.release_escrow(&ctx.admin, &inv_id);
+    let inv = ctx.invoice.get_invoice(&inv_id);
+    assert_eq!(inv.status, invoice::InvoiceStatus::Released);
 }
 
 #[test]
