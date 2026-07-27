@@ -24,13 +24,22 @@ impl TreasuryContract {
     }
 
     /// Withdraws `amount` tokens from the treasury to `to` via `token_contract`.
-    /// Panics: `ContractPaused`, `InvalidAmount`, `InsufficientBalance`.
+    /// Panics: `ContractPaused`, `InvalidAmount`, `InsufficientBalance`, `DestinationNotAllowed`.
     /// Emits: `withdraw`.
     pub fn withdraw(env: Env, to: Address, token_contract: Address, amount: i128) {
         require_not_paused(&env);
         to.require_auth();
         if amount <= 0 {
             panic!("InvalidAmount");
+        }
+        // Check withdrawal destination allowlist: if non-empty, `to` must be present.
+        let allowlist: Vec<Address> = env
+            .storage()
+            .instance()
+            .get(&DataKey::WithdrawalAllowlist)
+            .unwrap_or_else(|| Vec::new(&env));
+        if !allowlist.is_empty() && !allowlist.contains(&to) {
+            panic!("DestinationNotAllowed");
         }
         let mut balance: i128 = env
             .storage()
@@ -49,6 +58,55 @@ impl TreasuryContract {
         token_client.transfer(&treasury, &to, &amount);
         env.events()
             .publish((Symbol::new(&env, "withdraw"), to), amount);
+    }
+
+    /// Adds `address` to the withdrawal destination allowlist (admin-only).
+    /// Emits: `withdrawal_address_added`.
+    pub fn add_withdrawal_address(env: Env, admin: Address, address: Address) {
+        require_admin(&env, &admin);
+        let mut allowlist: Vec<Address> = env
+            .storage()
+            .instance()
+            .get(&DataKey::WithdrawalAllowlist)
+            .unwrap_or_else(|| Vec::new(&env));
+        if !allowlist.contains(&address) {
+            allowlist.push_back(address.clone());
+            env.storage()
+                .instance()
+                .set(&DataKey::WithdrawalAllowlist, &allowlist);
+            env.events()
+                .publish((Symbol::new(&env, "withdrawal_address_added"),), address);
+        }
+    }
+
+    /// Removes `address` from the withdrawal destination allowlist (admin-only).
+    /// Emits: `withdrawal_address_removed`.
+    pub fn remove_withdrawal_address(env: Env, admin: Address, address: Address) {
+        require_admin(&env, &admin);
+        let allowlist: Vec<Address> = env
+            .storage()
+            .instance()
+            .get(&DataKey::WithdrawalAllowlist)
+            .unwrap_or_else(|| Vec::new(&env));
+        let mut updated = Vec::new(&env);
+        for a in allowlist.iter() {
+            if a != address {
+                updated.push_back(a);
+            }
+        }
+        env.storage()
+            .instance()
+            .set(&DataKey::WithdrawalAllowlist, &updated);
+        env.events()
+            .publish((Symbol::new(&env, "withdrawal_address_removed"),), address);
+    }
+
+    /// Returns the current list of allowed withdrawal destination addresses.
+    pub fn get_withdrawal_allowlist(env: Env) -> Vec<Address> {
+        env.storage()
+            .instance()
+            .get(&DataKey::WithdrawalAllowlist)
+            .unwrap_or_else(|| Vec::new(&env))
     }
 
     /// Drains the full token balance of the treasury to `recipient` (admin-only, paused-only emergency drain).
