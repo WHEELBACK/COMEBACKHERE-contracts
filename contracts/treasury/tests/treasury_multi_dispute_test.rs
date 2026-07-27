@@ -74,3 +74,69 @@ fn both_disputes_resolved_same_direction_releases_hold() {
         SettlementStatus::Pending
     );
 }
+
+// Property test: for a fixed signer set voting the same resolution direction via
+// `vote_dispute_resolution`, the outcome (which vote index triggers resolution and
+// the resulting status) must not depend on the order signers vote in — only on the
+// configured threshold and the direction chosen.
+mod dispute_vote_ordering_proptest {
+    use super::*;
+    use proptest::prelude::*;
+    use treasury::DisputeStatus;
+
+    const SIGNER_COUNT: usize = 5;
+    const THRESHOLD: u32 = 3;
+
+    fn setup_multi_signer(env: &Env) -> (TreasuryContractClient<'static>, Address, Vec<Address>) {
+        env.mock_all_auths();
+        let admin = Address::generate(env);
+        let signers: Vec<Address> = (0..SIGNER_COUNT).map(|_| Address::generate(env)).collect();
+        let mut signer_pairs = soroban_sdk::Vec::new(env);
+        for signer in &signers {
+            signer_pairs.push_back((signer.clone(), 1u32));
+        }
+        let id = env.register_contract(None, TreasuryContract);
+        let client = TreasuryContractClient::new(env, &id);
+        client.initialize(&admin, &THRESHOLD, &signer_pairs);
+        (client, admin, signers)
+    }
+
+    proptest! {
+        #[test]
+        fn resolution_is_order_independent(
+            order_keys in proptest::collection::vec(0u32..1_000, SIGNER_COUNT),
+            in_favor_of_claimant in any::<bool>(),
+        ) {
+            let env = Env::default();
+            let (client, admin, signers) = setup_multi_signer(&env);
+            let merchant = Address::generate(&env);
+            let claimant = Address::generate(&env);
+
+            let sid = client.propose_settlement(&admin, &merchant, &10_000_000);
+            let dispute_id = client.raise_dispute(&claimant, &sid, &merchant, &5_000_000, &500);
+
+            let mut order: Vec<usize> = (0..SIGNER_COUNT).collect();
+            order.sort_by_key(|&i| order_keys[i]);
+
+            let mut resolved_after: Option<usize> = None;
+            for (cast, &idx) in order.iter().enumerate() {
+                client.vote_dispute_resolution(&signers[idx], &dispute_id, &in_favor_of_claimant);
+                if client.get_dispute(&dispute_id).status != DisputeStatus::Raised {
+                    resolved_after = Some(cast + 1);
+                    break;
+                }
+            }
+
+            // Resolution must trigger exactly once cumulative distinct-signer weight
+            // (1 per signer here) reaches THRESHOLD, regardless of vote order.
+            prop_assert_eq!(resolved_after, Some(THRESHOLD as usize));
+
+            let expected_status = if in_favor_of_claimant {
+                DisputeStatus::ResolvedClaimant
+            } else {
+                DisputeStatus::ResolvedCounterparty
+            };
+            prop_assert_eq!(client.get_dispute(&dispute_id).status, expected_status);
+        }
+    }
+}

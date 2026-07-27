@@ -1,9 +1,51 @@
 #![no_std]
 
-mod allowlist;
-pub use allowlist::{AddressState, AddressStatus, ComplianceError, DataKey};
+use soroban_sdk::{
+    contract, contracterror, contractimpl, contracttype, Address, Bytes, Env, Symbol, Vec,
+};
 
-use soroban_sdk::{contract, contracterror, contractimpl, Address, Bytes, Env, Symbol, Vec};
+#[contracttype]
+#[derive(Clone)]
+pub enum DataKey {
+    Admin,
+    PendingAdmin,
+    Operator,
+    Allowed(Address),
+    Blocked(Address),
+    AllowedUntil(Address),
+    BlockedUntil(Address),
+    BlockReason(Address),
+    SchemaVersion,
+    Paused,
+    AddressIndex,
+    AllowCount,
+    BlockCount,
+    Tier(Address),
+}
+
+#[contracttype]
+#[derive(Clone, PartialEq, Debug)]
+pub enum AddressState {
+    Allowed,
+    Blocked,
+    Expired,
+}
+
+#[contracterror]
+#[derive(Clone, Copy, Debug, PartialEq)]
+#[repr(u32)]
+pub enum ComplianceError {
+    AlreadyInitialized = 1,
+}
+
+#[contracttype]
+#[derive(Clone, Debug, PartialEq)]
+pub struct AddressStatus {
+    pub allowed: bool,
+    pub blocked: bool,
+    pub expires_at: Option<u64>,
+    pub is_currently_allowed: bool,
+}
 
 #[contracterror]
 #[derive(Copy, Clone, Debug, PartialEq)]
@@ -12,15 +54,12 @@ pub enum ContractError {
     Unauthorized = 1,
     ContractPaused = 2,
     AlreadyInitialized = 3,
-    AddressIndexFull = 4,
+    BatchTooLarge = 4,
 }
 
-/// Upper bound on the number of distinct addresses tracked in `DataKey::AddressIndex`.
-/// Once reached, operations that would track a *new* address are rejected with
-/// [`ContractError::AddressIndexFull`] instead of growing the index further — this
-/// caps unbounded storage-rent growth. Existing tracked addresses are unaffected.
-/// See `track_address`.
-const MAX_TRACKED_ADDRESSES: u32 = 50_000;
+/// Maximum number of addresses accepted per batch admin call, consistent with
+/// the batch caps used elsewhere in the workspace (see #8/#21/#29).
+pub const MAX_BATCH_SIZE: u32 = 50;
 
 #[contract]
 pub struct ComplianceContract;
@@ -55,6 +94,9 @@ impl ComplianceContract {
     ) -> Result<(), ContractError> {
         Self::require_admin(&env, &admin)?;
         Self::require_not_paused(&env)?;
+        if addresses.len() > MAX_BATCH_SIZE {
+            return Err(ContractError::BatchTooLarge);
+        }
         for address in addresses.iter() {
             let was_allowed: bool = env
                 .storage()
@@ -131,6 +173,14 @@ impl ComplianceContract {
             return env.ledger().timestamp() < expires_at;
         }
         true
+    }
+
+    /// Returns whether `address` is explicitly blocked. No auth required.
+    pub fn is_blocked(env: Env, address: Address) -> bool {
+        env.storage()
+            .persistent()
+            .get(&DataKey::Blocked(address))
+            .unwrap_or(false)
     }
 
     /// Permanently allow an address. Removes any existing expiry.
@@ -222,6 +272,9 @@ impl ComplianceContract {
         addresses: Vec<Address>,
     ) -> Result<(), ContractError> {
         Self::require_admin(&env, &admin)?;
+        if addresses.len() > MAX_BATCH_SIZE {
+            return Err(ContractError::BatchTooLarge);
+        }
         for address in addresses.iter() {
             env.storage()
                 .persistent()
@@ -303,6 +356,13 @@ impl ComplianceContract {
     ///
     /// After `expires_at`, [`is_allowed`](Self::is_allowed) returns `false` even if
     /// the `Allowed` flag is set.
+    ///
+    /// A `expires_at` that is already in the past (or equal to the current ledger
+    /// timestamp) is accepted rather than rejected: the address is recorded as
+    /// allowed, but [`is_allowed`](Self::is_allowed) evaluates the expiry lazily on
+    /// every read, so it immediately reports `false`. This is a deliberate silent
+    /// no-op-allow rather than an error, keeping the entrypoint idempotent for
+    /// callers that pass a computed/stale timestamp.
     ///
     /// # Parameters
     /// - `admin`: Current administrator. Must authorize this call.
@@ -524,57 +584,59 @@ impl ComplianceContract {
             .get::<_, u64>(&DataKey::AllowedUntil(address))
     }
 
-    /// Returns the `AllowedUntil` expiry timestamp (seconds since epoch) for `address`.
+    /// Sweep tracked addresses for lapsed time-bound allow entries.
     ///
-    /// Returns `None` for a permanent allow or an address that was never allowed.
-    pub fn get_allowlist_expiry(env: Env, address: Address) -> Option<u64> {
-        Self::get_allow_expiry(env, address)
-    }
-
-    /// Clears storage for entries in `addresses` whose `AllowedUntil` timestamp has
-    /// already passed, freeing the associated persistent-storage rent.
+    /// `is_allowed` checks `AllowedUntil` lazily on every read, so there is
+    /// otherwise no discrete moment at which an expiry "happens" and no event is
+    /// emitted when a time-bound allow naturally lapses. This entrypoint gives
+    /// callers/indexers an explicit point to trigger and observe that transition:
+    /// for every tracked address whose `AllowedUntil` has passed, it clears the
+    /// `Allowed` flag, removes the expiry, and publishes `("address_allow_expired",) → address`.
     ///
-    /// This is a housekeeping utility only: [`is_allowed`](Self::is_allowed) already
-    /// treats an expired `AllowedUntil` as not-allowed, so correctness does not depend
-    /// on calling this. Addresses with no expiry, or a still-future expiry, are left
-    /// untouched. Non-expired addresses passed in are simply skipped (not an error).
-    ///
-    /// # Parameters
-    /// - `admin`: Current administrator. Must authorize this call.
-    /// - `addresses`: Candidate addresses to check and sweep if expired.
-    ///
-    /// # Returns
-    /// The number of entries actually swept.
-    ///
-    /// # Errors
-    /// - [`ContractError::Unauthorized`] if `admin` is not the stored administrator.
-    ///
-    /// # Events
-    /// Publishes `("address_expiry_swept",) → address` for each entry swept.
-    pub fn sweep_expired(
-        env: Env,
-        admin: Address,
-        addresses: Vec<Address>,
-    ) -> Result<u32, ContractError> {
+    /// Returns the number of addresses swept.
+    pub fn sweep_expired(env: Env, admin: Address) -> Result<u32, ContractError> {
         Self::require_admin(&env, &admin)?;
+        let index: Vec<Address> = env
+            .storage()
+            .instance()
+            .get(&DataKey::AddressIndex)
+            .unwrap_or(Vec::new(&env));
         let now = env.ledger().timestamp();
         let mut swept = 0u32;
-        for address in addresses.iter() {
+        for addr in index.iter() {
+            let allowed: bool = env
+                .storage()
+                .persistent()
+                .get(&DataKey::Allowed(addr.clone()))
+                .unwrap_or(false);
+            if !allowed {
+                continue;
+            }
             let expires_at: Option<u64> = env
                 .storage()
                 .persistent()
-                .get(&DataKey::AllowedUntil(address.clone()));
+                .get(&DataKey::AllowedUntil(addr.clone()));
             if let Some(expires_at) = expires_at {
                 if now >= expires_at {
                     env.storage()
                         .persistent()
-                        .remove(&DataKey::AllowedUntil(address.clone()));
+                        .set(&DataKey::Allowed(addr.clone()), &false);
                     env.storage()
                         .persistent()
-                        .remove(&DataKey::Allowed(address.clone()));
+                        .remove(&DataKey::AllowedUntil(addr.clone()));
+                    let count: u64 = env
+                        .storage()
+                        .instance()
+                        .get(&DataKey::AllowCount)
+                        .unwrap_or(0u64);
+                    env.storage()
+                        .instance()
+                        .set(&DataKey::AllowCount, &count.saturating_sub(1));
+                    env.events().publish(
+                        (Symbol::new(&env, "address_allow_expired"),),
+                        addr.clone(),
+                    );
                     swept += 1;
-                    env.events()
-                        .publish((Symbol::new(&env, "address_expiry_swept"),), address);
                 }
             }
         }
@@ -606,6 +668,33 @@ impl ComplianceContract {
             let addr = index.get(i as u32).unwrap();
             let state = Self::address_state(&env, &addr);
             result.push_back((addr, state));
+        }
+        result
+    }
+
+    /// Returns a page of tracked addresses and their current state: skips the first
+    /// `start` entries and returns up to `limit`, following the same pagination
+    /// convention as treasury's `get_pending_settlements_page`.
+    pub fn export_snapshot_page(
+        env: Env,
+        admin: Address,
+        start: u64,
+        limit: u64,
+    ) -> Vec<(Address, AddressState)> {
+        Self::require_admin(&env, &admin).unwrap();
+        let index: Vec<Address> = env
+            .storage()
+            .instance()
+            .get(&DataKey::AddressIndex)
+            .unwrap_or(Vec::new(&env));
+        let mut result = Vec::new(&env);
+        let total = index.len() as u64;
+        let mut i = start;
+        while i < total && (result.len() as u64) < limit {
+            let addr = index.get(i as u32).unwrap();
+            let state = Self::address_state(&env, &addr);
+            result.push_back((addr, state));
+            i += 1;
         }
         result
     }

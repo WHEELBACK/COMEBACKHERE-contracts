@@ -750,7 +750,7 @@ fn test_abi_snapshot_matches_contract() {
         "invoice_paid",
         "invoice_expired",
         "invoice_cancelled",
-        "invoice_refund_req",
+        "invoice_refund_requested",
         "escrow_released",
         "contract_paused",
         "contract_unpaused",

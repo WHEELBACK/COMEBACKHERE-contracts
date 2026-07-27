@@ -49,7 +49,7 @@ pub fn invoice_cancelled(env: &Env, id: u64, invoice: &Invoice) {
 
 pub fn invoice_refund_requested(env: &Env, id: u64, invoice: &Invoice) {
     env.events().publish(
-        (Symbol::new(env, "invoice_refund_req"), id),
+        (Symbol::new(env, "invoice_refund_requested"), id),
         invoice.clone(),
     );
 }

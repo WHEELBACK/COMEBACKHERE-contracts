@@ -1,5 +1,7 @@
 // #20: Regression test — every state-mutating entrypoint returns ContractPaused after pause.
-use invoice::{InvoiceContract, InvoiceContractClient, InvoiceError, MaybeAddress, MaybeBytes};
+use invoice::{
+    InvoiceContract, InvoiceContractClient, InvoiceError, InvoiceStatus, MaybeAddress, MaybeBytes,
+};
 use soroban_sdk::{testutils::Address as _, Address, Env};
 
 extern crate std;
@@ -101,6 +103,7 @@ fn test_request_refund_rejected_when_paused() {
     client.pause(&admin);
     let err = client.try_request_refund(&payer, &id).unwrap_err().unwrap();
     assert_eq!(err, InvoiceError::ContractPaused);
+    assert_eq!(client.get_invoice(&id).status, InvoiceStatus::Paid);
 }
 
 #[test]
