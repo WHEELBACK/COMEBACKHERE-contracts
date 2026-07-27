@@ -175,6 +175,14 @@ impl ComplianceContract {
         true
     }
 
+    /// Returns whether `address` is explicitly blocked. No auth required.
+    pub fn is_blocked(env: Env, address: Address) -> bool {
+        env.storage()
+            .persistent()
+            .get(&DataKey::Blocked(address))
+            .unwrap_or(false)
+    }
+
     /// Permanently allow an address. Removes any existing expiry.
     ///
     /// # Parameters
