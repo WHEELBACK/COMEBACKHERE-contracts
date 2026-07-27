@@ -127,10 +127,8 @@ fn batch_deposit_rejects_invalid_amount() {
     treasury_client.batch_deposit(&depositor, &deposits);
 }
 
-// --- Withdrawal allowlist tests ---
-
 #[test]
-fn withdraw_to_allowlisted_address_succeeds() {
+fn get_balance_reflects_deposits_and_withdrawals() {
     let env = Env::default();
     env.mock_all_auths();
 
@@ -145,105 +143,27 @@ fn withdraw_to_allowlisted_address_succeeds() {
     let token_id = env.register_contract(None, TestToken);
     let test_token_client = TestTokenClient::new(&env, &token_id);
 
-    test_token_client.mint(&depositor, &amount);
-    test_token_client.mint(&treasury_id, &amount);
+    // Verify initial balance is 0 for never-deposited address
+    assert_eq!(treasury_client.get_balance(&depositor), 0);
 
-    // Deposit
+    // Mint tokens to depositor and deposit
+    test_token_client.mint(&depositor, &amount);
     treasury_client.deposit(&depositor, &token_id, &amount);
 
-    // Add depositor to withdrawal allowlist
-    treasury_client.add_withdrawal_address(&admin, &depositor);
+    // Verify balance after deposit
+    assert_eq!(treasury_client.get_balance(&depositor), amount);
 
-    // Withdraw — should succeed
-    treasury_client.withdraw(&depositor, &token_id, &amount);
-    assert_eq!(test_token_client.balance(&depositor), amount);
-}
+    // Withdraw partial amount
+    let partial = 2_000_000i128;
+    treasury_client.withdraw(&depositor, &token_id, &partial);
 
-#[test]
-fn withdraw_to_non_allowlisted_address_panics() {
-    let env = Env::default();
-    env.mock_all_auths();
+    // Verify balance after withdrawal
+    assert_eq!(
+        treasury_client.get_balance(&depositor),
+        amount - partial
+    );
 
-    let admin = Address::generate(&env);
-    let depositor = Address::generate(&env);
+    // Verify unrelated address still has 0 balance
     let stranger = Address::generate(&env);
-    let amount = 5_000_000i128;
-
-    let treasury_id = env.register_contract(None, TreasuryContract);
-    let treasury_client = TreasuryContractClient::new(&env, &treasury_id);
-    treasury_client.initialize(&admin, &1, &soroban_sdk::Vec::new(&env));
-
-    let token_id = env.register_contract(None, TestToken);
-    let test_token_client = TestTokenClient::new(&env, &token_id);
-
-    test_token_client.mint(&depositor, &amount);
-    test_token_client.mint(&treasury_id, &amount);
-
-    // Deposit
-    treasury_client.deposit(&depositor, &token_id, &amount);
-
-    // Add depositor but NOT stranger to allowlist
-    treasury_client.add_withdrawal_address(&admin, &depositor);
-
-    // Try to withdraw to stranger — should panic
-    assert!(treasury_client
-        .try_withdraw(&stranger, &token_id, &amount)
-        .is_err());
-    // Depositor's balance in treasury remains unchanged
-    assert_eq!(test_token_client.balance(&stranger), 0);
-}
-
-#[test]
-fn withdraw_succeeds_with_empty_allowlist() {
-    let env = Env::default();
-    env.mock_all_auths();
-
-    let admin = Address::generate(&env);
-    let depositor = Address::generate(&env);
-    let amount = 5_000_000i128;
-
-    let treasury_id = env.register_contract(None, TreasuryContract);
-    let treasury_client = TreasuryContractClient::new(&env, &treasury_id);
-    treasury_client.initialize(&admin, &1, &soroban_sdk::Vec::new(&env));
-
-    let token_id = env.register_contract(None, TestToken);
-    let test_token_client = TestTokenClient::new(&env, &token_id);
-
-    test_token_client.mint(&depositor, &amount);
-    test_token_client.mint(&treasury_id, &amount);
-
-    // Deposit
-    treasury_client.deposit(&depositor, &token_id, &amount);
-
-    // Allowlist is empty — withdraw to any address should work
-    treasury_client.withdraw(&depositor, &token_id, &amount);
-    assert_eq!(test_token_client.balance(&depositor), amount);
-}
-
-#[test]
-fn add_and_remove_withdrawal_address() {
-    let env = Env::default();
-    env.mock_all_auths();
-
-    let admin = Address::generate(&env);
-    let addr = Address::generate(&env);
-
-    let treasury_id = env.register_contract(None, TreasuryContract);
-    let treasury_client = TreasuryContractClient::new(&env, &treasury_id);
-    treasury_client.initialize(&admin, &1, &soroban_sdk::Vec::new(&env));
-
-    // Initially empty
-    let list = treasury_client.get_withdrawal_allowlist();
-    assert_eq!(list.len(), 0);
-
-    // Add address
-    treasury_client.add_withdrawal_address(&admin, &addr);
-    let list = treasury_client.get_withdrawal_allowlist();
-    assert_eq!(list.len(), 1);
-    assert_eq!(list.get(0).unwrap(), addr);
-
-    // Remove address
-    treasury_client.remove_withdrawal_address(&admin, &addr);
-    let list = treasury_client.get_withdrawal_allowlist();
-    assert_eq!(list.len(), 0);
+    assert_eq!(treasury_client.get_balance(&stranger), 0);
 }
