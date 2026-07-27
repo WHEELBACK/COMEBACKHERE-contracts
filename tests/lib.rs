@@ -19,6 +19,8 @@
 //! ```
 
 #[cfg(test)]
+mod fixtures;
+#[cfg(test)]
 mod invoice_treasury;
 #[cfg(test)]
 mod treasury_compliance;

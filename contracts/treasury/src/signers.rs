@@ -34,6 +34,33 @@ impl TreasuryContract {
             .publish((Symbol::new(&env, "signer_weight_set"), signer), weight);
     }
 
+    /// Removes `signer` from the active signer registry (admin-only).
+    ///
+    /// The signer is pruned from storage and excluded from `get_all_signers`.
+    /// Existing settlement approval snapshots are not changed, so removing a
+    /// signer does not retroactively invalidate in-flight approvals.
+    /// Emits: `signer_removed`.
+    pub fn remove_signer(env: Env, admin: Address, signer: Address) {
+        require_admin(&env, &admin);
+        env.storage()
+            .instance()
+            .remove(&DataKey::Signer(signer.clone()));
+        let list: Vec<Address> = env
+            .storage()
+            .instance()
+            .get(&DataKey::SignerList)
+            .unwrap_or_else(|| Vec::new(&env));
+        let mut updated = Vec::new(&env);
+        for s in list.iter() {
+            if s != signer {
+                updated.push_back(s);
+            }
+        }
+        env.storage().instance().set(&DataKey::SignerList, &updated);
+        env.events()
+            .publish((Symbol::new(&env, "signer_removed"),), signer);
+    }
+
     /// Returns the current approval weight for `signer`, or `0` if not registered.
     pub fn get_signer_weight(env: Env, signer: Address) -> u32 {
         signer_weight(&env, &signer)

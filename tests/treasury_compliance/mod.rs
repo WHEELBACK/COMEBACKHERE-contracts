@@ -5,11 +5,10 @@
 //! absent from, or explicitly blocked on, the compliance allowlist must be
 //! rejected without touching the treasury.
 
-use compliance::{ComplianceContract, ComplianceContractClient};
-use soroban_sdk::{
-    contract, contracterror, contractimpl, testutils::Address as _, Address, Env,
-};
-use treasury::{TreasuryContract, TreasuryContractClient};
+use crate::fixtures::setup_full_protocol;
+use compliance::ComplianceContractClient;
+use soroban_sdk::{contract, contracterror, contractimpl, Address, Env};
+use treasury::TreasuryContractClient;
 
 extern crate std;
 
@@ -54,30 +53,18 @@ type Setup = (
 
 fn setup() -> Setup {
     let env = Env::default();
-    env.mock_all_auths();
-
-    let admin = Address::generate(&env);
-    let merchant = Address::generate(&env);
-
     let workflow_id = env.register_contract(None, TreasuryComplianceWorkflow);
-
-    let compliance_contract_id = env.register_contract(None, ComplianceContract);
-    let compliance = ComplianceContractClient::new(&env, &compliance_contract_id);
-    compliance.initialize(&admin);
-
-    let treasury_contract_id = env.register_contract(None, TreasuryContract);
-    let treasury = TreasuryContractClient::new(&env, &treasury_contract_id);
-    treasury.initialize(&admin, &1);
-    treasury.set_signer(&admin, &workflow_id, &1);
+    let fixture = setup_full_protocol(&env);
+    fixture.treasury.set_signer(&fixture.admin, &workflow_id, &1);
 
     (
         env,
-        admin,
-        merchant,
-        compliance_contract_id,
-        compliance,
-        treasury_contract_id,
-        treasury,
+        fixture.admin,
+        fixture.merchant,
+        fixture.compliance_contract_id,
+        fixture.compliance,
+        fixture.treasury_contract_id,
+        fixture.treasury,
         workflow_id,
     )
 }
