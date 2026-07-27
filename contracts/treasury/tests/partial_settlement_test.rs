@@ -91,6 +91,21 @@ fn partially_execute_already_executed_panics() {
     assert_eq!(settlement.status, SettlementStatus::PartiallyExecuted);
 }
 
+#[test]
+#[should_panic(expected = "InvalidAmount")]
+fn cumulative_partial_approvals_exceeding_amount_panics() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, admin, _token_id, sid) = setup(&env, 10_000_000);
+    let signer_two = Address::generate(&env);
+    client.set_signer(&admin, &signer_two, &1);
+
+    // First approval covers just under half the settlement.
+    client.approve_partial_settlement(&admin, &sid, &5_000_000);
+    // Second approval pushes the cumulative approved total to amount + 1.
+    client.approve_partial_settlement(&signer_two, &sid, &5_000_001);
+}
+
 /// Full three-step partial settlement flow:
 /// 1. partially_execute_settlement succeeds and sets status to PartiallyExecuted
 /// 2. exactly partial_amount tokens are transferred to the merchant
