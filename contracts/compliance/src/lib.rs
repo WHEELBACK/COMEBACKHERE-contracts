@@ -12,7 +12,15 @@ pub enum ContractError {
     Unauthorized = 1,
     ContractPaused = 2,
     AlreadyInitialized = 3,
+    AddressIndexFull = 4,
 }
+
+/// Upper bound on the number of distinct addresses tracked in `DataKey::AddressIndex`.
+/// Once reached, operations that would track a *new* address are rejected with
+/// [`ContractError::AddressIndexFull`] instead of growing the index further — this
+/// caps unbounded storage-rent growth. Existing tracked addresses are unaffected.
+/// See `track_address`.
+const MAX_TRACKED_ADDRESSES: u32 = 50_000;
 
 #[contract]
 pub struct ComplianceContract;
@@ -69,7 +77,7 @@ impl ComplianceContract {
                     .instance()
                     .set(&DataKey::AllowCount, &(count + 1));
             }
-            Self::track_address(&env, &address);
+            Self::track_address(&env, &address)?;
             env.events()
                 .publish((Symbol::new(&env, "address_allowed"),), address);
         }
@@ -162,7 +170,7 @@ impl ComplianceContract {
                 .instance()
                 .set(&DataKey::AllowCount, &(count + 1));
         }
-        Self::track_address(&env, &address);
+        Self::track_address(&env, &address)?;
         env.events()
             .publish((Symbol::new(&env, "address_allowed"),), address);
         Ok(())
@@ -194,7 +202,7 @@ impl ComplianceContract {
         env.storage()
             .persistent()
             .set(&DataKey::Tier(address.clone()), &tier);
-        Self::track_address(&env, &address);
+        Self::track_address(&env, &address)?;
         env.events()
             .publish((Symbol::new(&env, "address_allowed"),), address);
         Ok(())
@@ -218,7 +226,7 @@ impl ComplianceContract {
             env.storage()
                 .persistent()
                 .set(&DataKey::Blocked(address.clone()), &true);
-            Self::track_address(&env, &address);
+            Self::track_address(&env, &address)?;
             env.events()
                 .publish((Symbol::new(&env, "address_blocked"),), address);
         }
@@ -242,7 +250,7 @@ impl ComplianceContract {
                 .persistent()
                 .set(&DataKey::BlockReason(address.clone()), &r);
         }
-        Self::track_address(&env, &address);
+        Self::track_address(&env, &address)?;
         env.events()
             .publish((Symbol::new(&env, "address_blocked"),), address);
         Ok(())
@@ -268,7 +276,7 @@ impl ComplianceContract {
                 .persistent()
                 .set(&DataKey::BlockReason(address.clone()), &r);
         }
-        Self::track_address(&env, &address);
+        Self::track_address(&env, &address)?;
         env.events().publish(
             (Symbol::new(&env, "address_blocked_until"),),
             (address, unblock_at),
@@ -321,7 +329,7 @@ impl ComplianceContract {
         env.storage()
             .persistent()
             .set(&DataKey::AllowedUntil(address.clone()), &expires_at);
-        Self::track_address(&env, &address);
+        Self::track_address(&env, &address)?;
         env.events().publish(
             (Symbol::new(&env, "address_allowed_until"),),
             (address, expires_at),
@@ -331,6 +339,12 @@ impl ComplianceContract {
 
     /// Initiate a two-step admin transfer. The pending admin must call
     /// [`accept_admin`](Self::accept_admin) to complete the handover.
+    ///
+    /// Calling this again before the pending admin accepts fully **supersedes** the
+    /// previous nomination — `PendingAdmin` is a plain overwrite, not a queue. So a
+    /// lost or compromised pending-admin key does not leave the contract stuck: the
+    /// current admin can simply call `transfer_admin` again with a fresh address to
+    /// replace it, with no separate expiry/timeout mechanism required.
     ///
     /// # Parameters
     /// - `admin`: Current administrator. Must authorize this call.
@@ -443,7 +457,7 @@ impl ComplianceContract {
                 .instance()
                 .set(&DataKey::AllowCount, &(count + 1));
         }
-        Self::track_address(&env, &address);
+        Self::track_address(&env, &address)?;
         env.events()
             .publish((Symbol::new(&env, "address_cleared"),), address);
         Ok(())
@@ -461,7 +475,7 @@ impl ComplianceContract {
         env.storage()
             .persistent()
             .remove(&DataKey::AllowedUntil(address.clone()));
-        Self::track_address(&env, &address);
+        Self::track_address(&env, &address)?;
         env.events()
             .publish((Symbol::new(&env, "address_revoked"),), address);
         Ok(())
@@ -508,6 +522,63 @@ impl ComplianceContract {
         env.storage()
             .persistent()
             .get::<_, u64>(&DataKey::AllowedUntil(address))
+    }
+
+    /// Returns the `AllowedUntil` expiry timestamp (seconds since epoch) for `address`.
+    ///
+    /// Returns `None` for a permanent allow or an address that was never allowed.
+    pub fn get_allowlist_expiry(env: Env, address: Address) -> Option<u64> {
+        Self::get_allow_expiry(env, address)
+    }
+
+    /// Clears storage for entries in `addresses` whose `AllowedUntil` timestamp has
+    /// already passed, freeing the associated persistent-storage rent.
+    ///
+    /// This is a housekeeping utility only: [`is_allowed`](Self::is_allowed) already
+    /// treats an expired `AllowedUntil` as not-allowed, so correctness does not depend
+    /// on calling this. Addresses with no expiry, or a still-future expiry, are left
+    /// untouched. Non-expired addresses passed in are simply skipped (not an error).
+    ///
+    /// # Parameters
+    /// - `admin`: Current administrator. Must authorize this call.
+    /// - `addresses`: Candidate addresses to check and sweep if expired.
+    ///
+    /// # Returns
+    /// The number of entries actually swept.
+    ///
+    /// # Errors
+    /// - [`ContractError::Unauthorized`] if `admin` is not the stored administrator.
+    ///
+    /// # Events
+    /// Publishes `("address_expiry_swept",) → address` for each entry swept.
+    pub fn sweep_expired(
+        env: Env,
+        admin: Address,
+        addresses: Vec<Address>,
+    ) -> Result<u32, ContractError> {
+        Self::require_admin(&env, &admin)?;
+        let now = env.ledger().timestamp();
+        let mut swept = 0u32;
+        for address in addresses.iter() {
+            let expires_at: Option<u64> = env
+                .storage()
+                .persistent()
+                .get(&DataKey::AllowedUntil(address.clone()));
+            if let Some(expires_at) = expires_at {
+                if now >= expires_at {
+                    env.storage()
+                        .persistent()
+                        .remove(&DataKey::AllowedUntil(address.clone()));
+                    env.storage()
+                        .persistent()
+                        .remove(&DataKey::Allowed(address.clone()));
+                    swept += 1;
+                    env.events()
+                        .publish((Symbol::new(&env, "address_expiry_swept"),), address);
+                }
+            }
+        }
+        Ok(swept)
     }
 
     /// Returns a paginated snapshot of all tracked addresses and their current state.
@@ -651,16 +722,24 @@ impl ComplianceContract {
     }
 
     /// Adds `address` to the instance-level AddressIndex if not already present.
-    fn track_address(env: &Env, address: &Address) {
+    ///
+    /// # Errors
+    /// - [`ContractError::AddressIndexFull`] if `address` is new and the index has
+    ///   already reached [`MAX_TRACKED_ADDRESSES`].
+    fn track_address(env: &Env, address: &Address) -> Result<(), ContractError> {
         let mut index: Vec<Address> = env
             .storage()
             .instance()
             .get(&DataKey::AddressIndex)
             .unwrap_or(Vec::new(env));
         if !index.contains(address) {
+            if index.len() >= MAX_TRACKED_ADDRESSES {
+                return Err(ContractError::AddressIndexFull);
+            }
             index.push_back(address.clone());
             env.storage().instance().set(&DataKey::AddressIndex, &index);
         }
+        Ok(())
     }
 }
 

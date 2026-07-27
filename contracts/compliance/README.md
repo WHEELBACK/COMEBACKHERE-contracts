@@ -16,3 +16,7 @@ The Compliance contract manages an allowlist of addresses permitted to interact 
 | `clear_address` | `admin` | `admin: Address, address: Address` | `Result<(), ContractError>` | `Unauthorized` |
 | `pause` | `admin` | `admin: Address` | `Result<(), ContractError>` | `Unauthorized` |
 | `unpause` | `admin` | `admin: Address` | `Result<(), ContractError>` | `Unauthorized` |
+| `get_allowlist_expiry` | None | `address: Address` | `Option<u64>` | None |
+| `sweep_expired` | `admin` | `admin: Address, addresses: Vec<Address>` | `Result<u32, ContractError>` | `Unauthorized` |
+
+Note: `allow_address`, `allow_address_with_tier`, `bulk_allow_addresses`, `block_address`, `block_address_until`, `bulk_block_addresses`, `clear_address`, and `revoke_allow` all track their address in an instance-level index (used by `export_snapshot`) capped at 50,000 distinct addresses; once full, tracking a *new* address returns `ContractError::AddressIndexFull`.
