@@ -1,4 +1,6 @@
-use invoice::{DataKey, InvoiceContract, InvoiceContractClient, MaybeAddress, MaybeBytes};
+use invoice::{
+    DataKey, InvoiceContract, InvoiceContractClient, InvoiceError, MaybeAddress, MaybeBytes,
+};
 use soroban_sdk::{testutils::Address as _, Address, Env};
 
 fn setup() -> (Env, Address, Address, InvoiceContractClient<'static>) {
@@ -129,25 +131,83 @@ fn test_overflow_wrapping_at_u64_max_is_not_silent() {
     assert_eq!(id, u64::MAX);
 
     // Second creation: counter is now MAX, new id = MAX + 1 — must not silently
-    // produce 0; the arithmetic overflow should be detected (panic in debug, or
-    // wrapping to 0 which we also reject as a regression guard).
-    let result = client.try_create_invoice(
-        &merchant,
-        &10_000_000,
-        &10_000_000,
-        &3600,
-        &MaybeBytes::None,
-        &MaybeBytes::None,
-        &0,
-        &MaybeAddress::None,
-    );
-    if let Ok(Ok(wrapped_id)) = result {
-        // If the runtime wraps instead of panicking, the ID must not be 0 —
-        // a 0 ID would collide with the "no invoice" sentinel.
-        assert_ne!(
-            wrapped_id, 0,
-            "overflow silently produced id=0 (collides with missing-invoice sentinel)"
-        );
-    }
-    // Err result (host panic / contract error) is also acceptable.
+    // produce 0.
+    let err = client
+        .try_create_invoice(
+            &merchant,
+            &10_000_000,
+            &10_000_000,
+            &3600,
+            &MaybeBytes::None,
+            &MaybeBytes::None,
+            &0,
+            &MaybeAddress::None,
+        )
+        .unwrap_err()
+        .unwrap();
+    assert_eq!(err, InvoiceError::InvoiceCountOverflow);
+    assert_eq!(client.get_invoice_count(), u64::MAX);
+}
+
+#[test]
+fn test_invoice_count_overflow_returns_error_without_wrapping() {
+    let (env, _, contract_id, client) = setup();
+    let env2 = env.clone();
+    env.as_contract(&contract_id, || {
+        env2.storage()
+            .instance()
+            .set(&DataKey::InvoiceCount, &u64::MAX);
+    });
+    let merchant = Address::generate(&env);
+
+    let err = client
+        .try_create_invoice(
+            &merchant,
+            &10_000_000,
+            &10_000_000,
+            &3600,
+            &MaybeBytes::None,
+            &MaybeBytes::None,
+            &0,
+            &MaybeAddress::None,
+        )
+        .unwrap_err()
+        .unwrap();
+
+    assert_eq!(err, InvoiceError::InvoiceCountOverflow);
+    assert_eq!(client.get_invoice_count(), u64::MAX);
+    assert!(client.try_get_invoice(&0).is_err());
+}
+
+#[test]
+fn test_batch_create_invoice_count_overflow_returns_error() {
+    let (env, _, contract_id, client) = setup();
+    let env2 = env.clone();
+    env.as_contract(&contract_id, || {
+        env2.storage()
+            .instance()
+            .set(&DataKey::InvoiceCount, &u64::MAX);
+    });
+    let merchant = Address::generate(&env);
+
+    let params = soroban_sdk::vec![
+        &env,
+        invoice::BatchInvoiceParams {
+            amount_usdc: 10_000_000,
+            gross_usdc: 10_000_000,
+            expires_in_seconds: 3600,
+            metadata_hash: MaybeBytes::None,
+            payment_link_hash: MaybeBytes::None,
+            merchant_nonce: 0,
+            token_address: MaybeAddress::None,
+        }
+    ];
+
+    let err = client
+        .try_batch_create_invoice(&merchant, &params)
+        .unwrap_err()
+        .unwrap();
+
+    assert_eq!(err, InvoiceError::InvoiceCountOverflow);
+    assert_eq!(client.get_invoice_count(), u64::MAX);
 }

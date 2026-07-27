@@ -18,6 +18,7 @@ use soroban_sdk::{
 };
 
 extern crate std;
+use proptest::prelude::*;
 
 fn setup() -> (Env, Address, InvoiceContractClient<'static>) {
     let env = Env::default();
@@ -92,4 +93,43 @@ fn test_payment_at_exact_grace_deadline_is_rejected() {
         .unwrap();
     assert_eq!(err, InvoiceError::Expired);
     assert_eq!(client.get_invoice(&id).status, InvoiceStatus::Pending);
+}
+
+proptest! {
+    #[test]
+    fn prop_mark_paid_grace_window_boundaries(
+        expires_in in 1u64..10_000,
+        grace_window in 0u64..10_000,
+    ) {
+        let cases = [
+            expires_in.saturating_sub(1),
+            expires_in,
+            expires_in + grace_window,
+            expires_in + grace_window + 1,
+        ];
+
+        for timestamp in cases {
+            let (env, admin, client) = setup();
+            let payer = Address::generate(&env);
+            let id = create_invoice_expiring_in(&env, &client, expires_in);
+            client.set_grace_window(&admin, &grace_window);
+            env.ledger().with_mut(|l| l.timestamp = timestamp);
+
+            let result = client.try_mark_paid(
+                &admin,
+                &id,
+                &payer,
+                &MaybeBytes::None,
+                &MaybeAddress::None,
+            );
+
+            if timestamp < expires_in + grace_window {
+                prop_assert!(result.is_ok(), "timestamp {timestamp} should be inside grace deadline {}", expires_in + grace_window);
+                prop_assert_eq!(client.get_invoice(&id).status, InvoiceStatus::Paid);
+            } else {
+                prop_assert_eq!(result.unwrap_err().unwrap(), InvoiceError::Expired);
+                prop_assert_eq!(client.get_invoice(&id).status, InvoiceStatus::Pending);
+            }
+        }
+    }
 }
