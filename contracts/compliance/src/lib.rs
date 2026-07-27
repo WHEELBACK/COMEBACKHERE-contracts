@@ -119,7 +119,7 @@ impl ComplianceContract {
                     .instance()
                     .set(&DataKey::AllowCount, &(count + 1));
             }
-            Self::track_address(&env, &address);
+            Self::track_address(&env, &address)?;
             env.events()
                 .publish((Symbol::new(&env, "address_allowed"),), address);
         }
@@ -220,7 +220,7 @@ impl ComplianceContract {
                 .instance()
                 .set(&DataKey::AllowCount, &(count + 1));
         }
-        Self::track_address(&env, &address);
+        Self::track_address(&env, &address)?;
         env.events()
             .publish((Symbol::new(&env, "address_allowed"),), address);
         Ok(())
@@ -252,7 +252,7 @@ impl ComplianceContract {
         env.storage()
             .persistent()
             .set(&DataKey::Tier(address.clone()), &tier);
-        Self::track_address(&env, &address);
+        Self::track_address(&env, &address)?;
         env.events()
             .publish((Symbol::new(&env, "address_allowed"),), address);
         Ok(())
@@ -279,7 +279,7 @@ impl ComplianceContract {
             env.storage()
                 .persistent()
                 .set(&DataKey::Blocked(address.clone()), &true);
-            Self::track_address(&env, &address);
+            Self::track_address(&env, &address)?;
             env.events()
                 .publish((Symbol::new(&env, "address_blocked"),), address);
         }
@@ -303,7 +303,7 @@ impl ComplianceContract {
                 .persistent()
                 .set(&DataKey::BlockReason(address.clone()), &r);
         }
-        Self::track_address(&env, &address);
+        Self::track_address(&env, &address)?;
         env.events()
             .publish((Symbol::new(&env, "address_blocked"),), address);
         Ok(())
@@ -329,7 +329,7 @@ impl ComplianceContract {
                 .persistent()
                 .set(&DataKey::BlockReason(address.clone()), &r);
         }
-        Self::track_address(&env, &address);
+        Self::track_address(&env, &address)?;
         env.events().publish(
             (Symbol::new(&env, "address_blocked_until"),),
             (address, unblock_at),
@@ -389,7 +389,7 @@ impl ComplianceContract {
         env.storage()
             .persistent()
             .set(&DataKey::AllowedUntil(address.clone()), &expires_at);
-        Self::track_address(&env, &address);
+        Self::track_address(&env, &address)?;
         env.events().publish(
             (Symbol::new(&env, "address_allowed_until"),),
             (address, expires_at),
@@ -399,6 +399,12 @@ impl ComplianceContract {
 
     /// Initiate a two-step admin transfer. The pending admin must call
     /// [`accept_admin`](Self::accept_admin) to complete the handover.
+    ///
+    /// Calling this again before the pending admin accepts fully **supersedes** the
+    /// previous nomination — `PendingAdmin` is a plain overwrite, not a queue. So a
+    /// lost or compromised pending-admin key does not leave the contract stuck: the
+    /// current admin can simply call `transfer_admin` again with a fresh address to
+    /// replace it, with no separate expiry/timeout mechanism required.
     ///
     /// # Parameters
     /// - `admin`: Current administrator. Must authorize this call.
@@ -511,7 +517,7 @@ impl ComplianceContract {
                 .instance()
                 .set(&DataKey::AllowCount, &(count + 1));
         }
-        Self::track_address(&env, &address);
+        Self::track_address(&env, &address)?;
         env.events()
             .publish((Symbol::new(&env, "address_cleared"),), address);
         Ok(())
@@ -529,7 +535,7 @@ impl ComplianceContract {
         env.storage()
             .persistent()
             .remove(&DataKey::AllowedUntil(address.clone()));
-        Self::track_address(&env, &address);
+        Self::track_address(&env, &address)?;
         env.events()
             .publish((Symbol::new(&env, "address_revoked"),), address);
         Ok(())
@@ -805,16 +811,24 @@ impl ComplianceContract {
     }
 
     /// Adds `address` to the instance-level AddressIndex if not already present.
-    fn track_address(env: &Env, address: &Address) {
+    ///
+    /// # Errors
+    /// - [`ContractError::AddressIndexFull`] if `address` is new and the index has
+    ///   already reached [`MAX_TRACKED_ADDRESSES`].
+    fn track_address(env: &Env, address: &Address) -> Result<(), ContractError> {
         let mut index: Vec<Address> = env
             .storage()
             .instance()
             .get(&DataKey::AddressIndex)
             .unwrap_or(Vec::new(env));
         if !index.contains(address) {
+            if index.len() >= MAX_TRACKED_ADDRESSES {
+                return Err(ContractError::AddressIndexFull);
+            }
             index.push_back(address.clone());
             env.storage().instance().set(&DataKey::AddressIndex, &index);
         }
+        Ok(())
     }
 }
 
