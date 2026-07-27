@@ -24,13 +24,22 @@ impl TreasuryContract {
     }
 
     /// Withdraws `amount` tokens from the treasury to `to` via `token_contract`.
-    /// Panics: `ContractPaused`, `InvalidAmount`, `InsufficientBalance`.
+    /// Panics: `ContractPaused`, `InvalidAmount`, `InsufficientBalance`, `DestinationNotAllowed`.
     /// Emits: `withdraw`.
     pub fn withdraw(env: Env, to: Address, token_contract: Address, amount: i128) {
         require_not_paused(&env);
         to.require_auth();
         if amount <= 0 {
             panic!("InvalidAmount");
+        }
+        // Check withdrawal destination allowlist: if non-empty, `to` must be present.
+        let allowlist: Vec<Address> = env
+            .storage()
+            .instance()
+            .get(&DataKey::WithdrawalAllowlist)
+            .unwrap_or_else(|| Vec::new(&env));
+        if !allowlist.is_empty() && !allowlist.contains(&to) {
+            panic!("DestinationNotAllowed");
         }
         let mut balance: i128 = env
             .storage()

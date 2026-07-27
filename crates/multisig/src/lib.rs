@@ -120,6 +120,7 @@ pub enum DataKey {
     SignerRotation(u64),
     MerchantPayoutAddress(Address),
     SignerList,
+    WithdrawalAllowlist,
     LastRotationProposal(Address),
 }
 
