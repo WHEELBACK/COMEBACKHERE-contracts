@@ -11,10 +11,11 @@ mod events;
 mod invoice;
 mod validation;
 
-pub use events::{EscrowReleasedEvent, InvoiceAmountUpdatedEvent};
+pub use events::{EscrowReleasedEvent, InvoiceAmountUpdatedEvent, InvoiceExpiryExtendedEvent};
 use invoice::StatusTransition;
 pub use invoice::{
     BatchInvoiceParams, DataKey, Invoice, InvoiceError, InvoiceStatus, MaybeAddress, MaybeBytes,
+    MAX_BATCH_EXPIRE, MAX_BATCH_SIZE,
 };
 
 use soroban_sdk::{contract, Address, Env, Vec};

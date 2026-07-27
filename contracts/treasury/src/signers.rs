@@ -1,5 +1,5 @@
 use crate::{require_admin, DataKey, RotationStatus, SignerRotationProposal, TreasuryContract};
-use multisig::{require_authorized_signer, signer_weight};
+use multisig::{meets_threshold, record_approval, require_authorized_signer, signer_weight};
 use soroban_sdk::{contractimpl, Address, Env, Symbol, Vec};
 
 #[contractimpl]
@@ -100,9 +100,9 @@ impl TreasuryContract {
             .get(&DataKey::RotationCount)
             .unwrap_or(0);
         let id = count + 1;
-        let weight = signer_weight(&env, &proposer);
         let mut approvals = Vec::new(&env);
-        approvals.push_back(proposer);
+        let mut weight = 0u32;
+        record_approval(&env, &mut approvals, &mut weight, &proposer);
         let proposal = SignerRotationProposal {
             id,
             old_signer,
@@ -137,16 +137,18 @@ impl TreasuryContract {
         if proposal.status != RotationStatus::Pending {
             panic!("RotationAlreadyExecuted");
         }
-        if !proposal.approvals.contains(&approver) {
-            proposal.approval_weight += signer_weight(&env, &approver);
-            proposal.approvals.push_back(approver);
-        }
+        record_approval(
+            &env,
+            &mut proposal.approvals,
+            &mut proposal.approval_weight,
+            &approver,
+        );
         let threshold: u32 = env
             .storage()
             .instance()
             .get(&DataKey::Threshold)
             .unwrap_or(1);
-        if proposal.approval_weight >= threshold {
+        if meets_threshold(proposal.approval_weight, threshold) {
             let old_weight = signer_weight(&env, &proposal.old_signer);
             env.storage()
                 .instance()

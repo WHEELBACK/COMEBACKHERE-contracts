@@ -9,6 +9,9 @@ publish = false
 [lib]
 name = "compliance_client"
 
+[features]
+testutils = []
+
 [dependencies]
 soroban-sdk.workspace = true
 compliance = { package = "comebackhere-compliance", path = "../../contracts/compliance" }

@@ -17,4 +17,5 @@ soroban-sdk.workspace = true
 
 [dev-dependencies]
 hex = "0.4"
+proptest = "1"
 soroban-sdk = { workspace = true, features = ["testutils"] }
