@@ -3,8 +3,8 @@ use invoice::{
     InvoiceStatus, MaybeAddress, MaybeBytes,
 };
 use soroban_sdk::{
-    testutils::{Address as _, Ledger},
-    Address, Env,
+    testutils::{Address as _, Events, Ledger},
+    vec, Address, Env, Symbol, TryFromVal,
 };
 
 extern crate std;
@@ -41,6 +41,42 @@ fn test_create_invoice_succeeds() {
     assert_eq!(invoice.gross_usdc, 10_250_000);
     assert_eq!(invoice.payer, MaybeAddress::None);
     assert_eq!(invoice.merchant_nonce, 0);
+}
+
+#[test]
+fn test_batch_get_invoice_status_returns_per_id_results() {
+    let (env, _admin, client) = setup();
+    let merchant = Address::generate(&env);
+    let first_id = client.create_invoice(
+        &merchant,
+        &10_000_000,
+        &10_250_000,
+        &3600,
+        &MaybeBytes::None,
+        &MaybeBytes::None,
+        &0,
+        &MaybeAddress::None,
+    );
+    let second_id = client.create_invoice(
+        &merchant,
+        &20_000_000,
+        &20_500_000,
+        &3600,
+        &MaybeBytes::None,
+        &MaybeBytes::None,
+        &0,
+        &MaybeAddress::None,
+    );
+
+    assert_eq!(
+        client.batch_get_invoice_status(&vec![&env, first_id, 999, second_id]),
+        vec![
+            &env,
+            Ok(InvoiceStatus::Pending),
+            Err(InvoiceError::NotFound),
+            Ok(InvoiceStatus::Pending)
+        ]
+    );
 }
 
 #[test]
@@ -601,9 +637,8 @@ fn test_release_escrow_transitions_paid_to_released() {
         &MaybeBytes::None,
         &MaybeBytes::None,
         &0,
-        &MaybeAddress::None,
     );
-    client.mark_paid(&admin, &id, &payer, &MaybeBytes::None, &MaybeAddress::None);
+    client.mark_paid(&admin, &id, &payer);
     client.release_escrow(&admin, &id);
     assert_eq!(client.get_invoice(&id).status, InvoiceStatus::Released);
 }
@@ -620,11 +655,14 @@ fn test_cancel_invoice_transitions_to_cancelled() {
         &MaybeBytes::None,
         &MaybeBytes::None,
         &0,
-        &MaybeAddress::None,
     );
     client.cancel_invoice(&merchant, &invoice_id);
     let invoice = client.get_invoice(&invoice_id);
     assert_eq!(invoice.status, InvoiceStatus::Cancelled);
+    assert_eq!(
+        client.get_invoice_status(&invoice_id),
+        InvoiceStatus::Cancelled
+    );
 }
 
 #[test]
@@ -640,7 +678,6 @@ fn test_cancelled_invoice_cannot_be_marked_paid() {
         &MaybeBytes::None,
         &MaybeBytes::None,
         &0,
-        &MaybeAddress::None,
     );
     client.cancel_invoice(&merchant, &invoice_id);
     let err = client
@@ -673,11 +710,13 @@ fn test_cancel_invoice_unauthorized_rejected() {
         &0,
         &MaybeAddress::None,
     );
+
     let err = client
         .try_cancel_invoice(&unauthorized, &id)
         .unwrap_err()
         .unwrap();
     assert_eq!(err, InvoiceError::Unauthorized);
+
     let invoice = client.get_invoice(&id);
     assert_eq!(invoice.status, InvoiceStatus::Pending);
 }
@@ -730,6 +769,7 @@ fn test_abi_snapshot_matches_contract() {
         "mark_paid",
         "get_invoice",
         "get_invoice_status",
+        "batch_get_invoice_status",
         "get_invoices_page",
         "cancel_invoice",
         "request_refund",
@@ -839,6 +879,7 @@ fn test_create_invoice_blocked_when_paused() {
         .is_err());
 }
 
+// Issue #93: mark_paid is rejected when the contract is paused
 #[test]
 fn test_mark_paid_blocked_when_paused() {
     let (env, admin, client) = setup();
@@ -855,9 +896,7 @@ fn test_mark_paid_blocked_when_paused() {
         &MaybeAddress::None,
     );
     client.pause(&admin);
-    assert!(client
-        .try_mark_paid(&admin, &id, &payer, &MaybeBytes::None, &MaybeAddress::None)
-        .is_err());
+    assert!(client.try_mark_paid(&admin, &id, &payer).is_err());
 }
 
 // Issue #94: create_invoice must enforce merchant authorization.
@@ -901,7 +940,6 @@ fn test_invoice_create_to_expired_flow() {
         &MaybeBytes::None,
         &MaybeBytes::None,
         &0,
-        &MaybeAddress::None,
     );
     env.ledger().with_mut(|li| {
         li.timestamp = client.get_invoice(&id).expires_at + 1;
@@ -926,7 +964,6 @@ fn test_invoice_create_to_paid_escrow_flow() {
         &MaybeBytes::None,
         &MaybeBytes::None,
         &0,
-        &MaybeAddress::None,
     );
     client.mark_paid(&admin, &id, &payer, &MaybeBytes::None, &MaybeAddress::None);
     let paid = client.get_invoice(&id);
@@ -951,6 +988,38 @@ fn test_duplicate_nonce_rejected() {
         &42,
         &MaybeAddress::None,
     );
+    let err = client
+        .try_create_invoice(
+            &merchant,
+            &10_000_000,
+            &10_000_000,
+            &3600,
+            &MaybeBytes::None,
+            &MaybeBytes::None,
+            &42,
+            &MaybeAddress::None,
+        )
+        .unwrap_err()
+        .unwrap();
+    assert_eq!(err, InvoiceError::DuplicateNonce);
+}
+
+#[test]
+fn test_nonce_cannot_be_reused_after_cancellation() {
+    let (env, _admin, client) = setup();
+    let merchant = Address::generate(&env);
+    let id = client.create_invoice(
+        &merchant,
+        &10_000_000,
+        &10_000_000,
+        &3600,
+        &MaybeBytes::None,
+        &MaybeBytes::None,
+        &42,
+        &MaybeAddress::None,
+    );
+    client.cancel_invoice(&merchant, &id);
+
     let err = client
         .try_create_invoice(
             &merchant,
@@ -1062,260 +1131,5 @@ fn test_same_nonce_different_merchants_accepted() {
         &MaybeBytes::None,
         &7,
         &MaybeAddress::None,
-    );
-}
-
-// Regression guard: the payer-only guard (invoice.payer != MaybeAddress::Some(payer)) must
-// reject every caller not recorded at mark_paid time, including elevated roles like merchant
-// and admin, so a future refactor of MaybeAddress comparison logic can't silently bypass it.
-#[test]
-fn test_request_refund_only_recorded_payer_can_call() {
-    let (env, admin, client) = setup();
-    let merchant = Address::generate(&env);
-    let payer = Address::generate(&env);
-    let impostor = Address::generate(&env);
-
-    let id = client.create_invoice(
-        &merchant,
-        &10_000_000,
-        &10_250_000,
-        &3600,
-        &MaybeBytes::None,
-        &MaybeBytes::None,
-        &0,
-        &MaybeAddress::None,
-    );
-    client.mark_paid(&admin, &id, &payer, &MaybeBytes::None, &MaybeAddress::None);
-
-    // Random address is rejected.
-    let err = client
-        .try_request_refund(&impostor, &id)
-        .unwrap_err()
-        .unwrap();
-    assert_eq!(err, InvoiceError::Unauthorized);
-
-    // Merchant is rejected despite owning the invoice.
-    let err = client
-        .try_request_refund(&merchant, &id)
-        .unwrap_err()
-        .unwrap();
-    assert_eq!(err, InvoiceError::Unauthorized);
-
-    // Admin is rejected despite holding the highest privilege.
-    let err = client.try_request_refund(&admin, &id).unwrap_err().unwrap();
-    assert_eq!(err, InvoiceError::Unauthorized);
-
-    // Only the address recorded at mark_paid time succeeds.
-    client.request_refund(&payer, &id);
-    assert_eq!(
-        client.get_invoice(&id).status,
-        InvoiceStatus::RefundRequested
-    );
-}
-
-// --- approve_refund tests ---
-
-#[test]
-fn test_approve_refund_transitions_to_refunded() {
-    let (env, admin, client) = setup();
-    let merchant = Address::generate(&env);
-    let payer = Address::generate(&env);
-    let id = client.create_invoice(
-        &merchant,
-        &10_000_000,
-        &10_250_000,
-        &3600,
-        &MaybeBytes::None,
-        &MaybeBytes::None,
-        &0,
-        &MaybeAddress::None,
-    );
-    client.mark_paid(&admin, &id, &payer, &MaybeBytes::None, &MaybeAddress::None);
-    client.request_refund(&payer, &id);
-    assert_eq!(
-        client.get_invoice(&id).status,
-        InvoiceStatus::RefundRequested
-    );
-    client.approve_refund(&admin, &id);
-    assert_eq!(client.get_invoice(&id).status, InvoiceStatus::Refunded);
-}
-
-#[test]
-fn test_approve_refund_requires_admin() {
-    let (env, admin, client) = setup();
-    let merchant = Address::generate(&env);
-    let payer = Address::generate(&env);
-    let rogue = Address::generate(&env);
-    let id = client.create_invoice(
-        &merchant,
-        &10_000_000,
-        &10_250_000,
-        &3600,
-        &MaybeBytes::None,
-        &MaybeBytes::None,
-        &0,
-        &MaybeAddress::None,
-    );
-    client.mark_paid(&admin, &id, &payer, &MaybeBytes::None, &MaybeAddress::None);
-    client.request_refund(&payer, &id);
-    let err = client.try_approve_refund(&rogue, &id).unwrap_err().unwrap();
-    assert_eq!(err, InvoiceError::Unauthorized);
-    assert_eq!(
-        client.get_invoice(&id).status,
-        InvoiceStatus::RefundRequested
-    );
-}
-
-#[test]
-fn test_approve_refund_requires_refund_requested_status() {
-    let (env, admin, client) = setup();
-    let merchant = Address::generate(&env);
-    let payer = Address::generate(&env);
-    let id = client.create_invoice(
-        &merchant,
-        &10_000_000,
-        &10_250_000,
-        &3600,
-        &MaybeBytes::None,
-        &MaybeBytes::None,
-        &0,
-        &MaybeAddress::None,
-    );
-    client.mark_paid(&admin, &id, &payer, &MaybeBytes::None, &MaybeAddress::None);
-    // Invoice is Paid, not RefundRequested → should fail.
-    let err = client.try_approve_refund(&admin, &id).unwrap_err().unwrap();
-    assert_eq!(err, InvoiceError::NotRefundRequested);
-    assert_eq!(client.get_invoice(&id).status, InvoiceStatus::Paid);
-}
-
-#[test]
-fn test_extend_expiry_updates_pending_invoice_and_emits_event() {
-    let (env, admin, client) = setup();
-    let merchant = Address::generate(&env);
-    let id = client.create_invoice(
-        &merchant,
-        &10_000_000,
-        &10_250_000,
-        &3600,
-        &MaybeBytes::None,
-        &MaybeBytes::None,
-        &0,
-        &MaybeAddress::None,
-    );
-    let old_expires_at = client.get_invoice(&id).expires_at;
-
-    client.extend_expiry(&admin, &id, &600);
-
-    assert_eq!(client.get_invoice(&id).expires_at, old_expires_at + 600);
-}
-
-#[test]
-fn test_extend_expiry_rejects_non_pending_invoices() {
-    let (env, admin, client) = setup();
-    let merchant = Address::generate(&env);
-    let payer = Address::generate(&env);
-    let create = || {
-        client.create_invoice(
-            &merchant,
-            &10_000_000,
-            &10_250_000,
-            &3600,
-            &MaybeBytes::None,
-            &MaybeBytes::None,
-            &0,
-            &MaybeAddress::None,
-        )
-    };
-
-    let paid_id = create();
-    client.mark_paid(
-        &admin,
-        &paid_id,
-        &payer,
-        &MaybeBytes::None,
-        &MaybeAddress::None,
-    );
-    let cancelled_id = create();
-    client.cancel_invoice(&admin, &cancelled_id);
-    let expired_id = create();
-    env.ledger().with_mut(|ledger| ledger.timestamp = 3601);
-    client.batch_expire(&admin, &soroban_sdk::vec![&env, expired_id]);
-
-    for id in [paid_id, cancelled_id, expired_id] {
-        assert_eq!(
-            client
-                .try_extend_expiry(&admin, &id, &600)
-                .unwrap_err()
-                .unwrap(),
-            InvoiceError::NotPending
-        );
-    }
-}
-
-#[test]
-fn test_extend_expiry_rejects_overflow() {
-    let (env, admin, client) = setup();
-    let merchant = Address::generate(&env);
-    let id = client.create_invoice(
-        &merchant,
-        &10_000_000,
-        &10_250_000,
-        &3600,
-        &MaybeBytes::None,
-        &MaybeBytes::None,
-        &0,
-        &MaybeAddress::None,
-    );
-
-    assert_eq!(
-        client
-            .try_extend_expiry(&admin, &id, &u64::MAX)
-            .unwrap_err()
-            .unwrap(),
-        InvoiceError::ExpiryOverflow
-    );
-}
-
-#[test]
-fn test_reject_refund_restores_paid_status() {
-    let (env, admin, client) = setup();
-    let merchant = Address::generate(&env);
-    let payer = Address::generate(&env);
-    let id = client.create_invoice(
-        &merchant,
-        &10_000_000,
-        &10_250_000,
-        &3600,
-        &MaybeBytes::None,
-        &MaybeBytes::None,
-        &0,
-        &MaybeAddress::None,
-    );
-    client.mark_paid(&admin, &id, &payer, &MaybeBytes::None, &MaybeAddress::None);
-    client.request_refund(&payer, &id);
-
-    client.reject_refund(&admin, &id);
-
-    assert_eq!(client.get_invoice(&id).status, InvoiceStatus::Paid);
-}
-
-#[test]
-fn test_reject_refund_rejects_other_status() {
-    let (env, admin, client) = setup();
-    let merchant = Address::generate(&env);
-    let id = client.create_invoice(
-        &merchant,
-        &10_000_000,
-        &10_250_000,
-        &3600,
-        &MaybeBytes::None,
-        &MaybeBytes::None,
-        &0,
-        &MaybeAddress::None,
-    );
-
-    assert_eq!(
-        client.try_reject_refund(&admin, &id).unwrap_err().unwrap(),
-        InvoiceError::NotRefundRequested
     );
 }

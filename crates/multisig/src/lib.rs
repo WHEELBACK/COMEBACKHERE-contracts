@@ -120,7 +120,9 @@ pub enum DataKey {
     SignerRotation(u64),
     MerchantPayoutAddress(Address),
     SignerList,
+    WithdrawalAllowlist,
     LastRotationProposal(Address),
+    PartialApprovedTotal(u64),
 }
 
 /// Returns the approval weight assigned to `signer`, or `0` if not registered.
@@ -138,4 +140,19 @@ pub fn require_authorized_signer(env: &Env, signer: &Address) {
     if signer_weight(env, signer) == 0 {
         panic!("UnauthorizedSigner");
     }
+}
+
+/// Adds `signer`'s weight to `weight` and appends `signer` to `approvals`, unless `signer` has
+/// already approved (in which case this is a no-op). Captures the dedup-then-accumulate pattern
+/// used for settlement, dispute, and rotation approvals.
+pub fn record_approval(env: &Env, approvals: &mut Vec<Address>, weight: &mut u32, signer: &Address) {
+    if !approvals.contains(signer) {
+        *weight += signer_weight(env, signer);
+        approvals.push_back(signer.clone());
+    }
+}
+
+/// Returns whether `weight` satisfies simple weighted-threshold quorum, i.e. `weight >= threshold`.
+pub fn meets_threshold(weight: u32, threshold: u32) -> bool {
+    weight >= threshold
 }
