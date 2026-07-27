@@ -4,7 +4,9 @@ use crate::validation::{
     require_usdc_precision, require_valid_payment_link_hash,
 };
 use crate::{append_history, pending_index_add, pending_index_remove};
-use crate::{DataKey, Invoice, InvoiceContract, InvoiceError, InvoiceStatus, MaybeAddress, MaybeBytes};
+use crate::{
+    DataKey, Invoice, InvoiceContract, InvoiceError, InvoiceStatus, MaybeAddress, MaybeBytes,
+};
 use soroban_sdk::{contractimpl, Address, Env, Vec};
 
 #[contractimpl]
@@ -45,7 +47,6 @@ impl InvoiceContract {
             if env.storage().persistent().has(&nonce_key) {
                 return Err(InvoiceError::DuplicateNonce);
             }
-            env.storage().persistent().set(&nonce_key, &true);
         }
 
         let count: u64 = env
@@ -53,12 +54,19 @@ impl InvoiceContract {
             .instance()
             .get(&DataKey::InvoiceCount)
             .unwrap_or(0);
-        let id = count + 1;
+        let id = count
+            .checked_add(1)
+            .ok_or(InvoiceError::InvoiceCountOverflow)?;
         let expires_at = env
             .ledger()
             .timestamp()
             .checked_add(expires_in_seconds)
             .ok_or(InvoiceError::ExpiryOverflow)?;
+        if merchant_nonce != 0 {
+            env.storage()
+                .persistent()
+                .set(&DataKey::MerchantNonce(merchant.clone(), merchant_nonce), &true);
+        }
         let invoice = Invoice {
             id,
             merchant: merchant.clone(),
@@ -193,6 +201,18 @@ impl InvoiceContract {
             .get(&DataKey::Invoice(id))
             .ok_or(InvoiceError::NotFound)?;
         Ok(invoice.status)
+    }
+
+    /// Return one status result per ID, preserving input order.
+    pub fn batch_get_invoice_status(
+        env: Env,
+        ids: Vec<u64>,
+    ) -> Vec<Result<InvoiceStatus, InvoiceError>> {
+        let mut statuses = Vec::new(&env);
+        for id in ids.iter() {
+            statuses.push_back(Self::get_invoice_status(env.clone(), id));
+        }
+        statuses
     }
 
     /// Return up to `limit` invoices starting at `start_id` (inclusive).
@@ -377,6 +397,34 @@ impl InvoiceContract {
             InvoiceStatus::Refunded,
         );
         events::refund_approved(&env, id, &invoice);
+        Ok(())
+    }
+
+    /// Reject a refund request. Admin-only. Transitions RefundRequested → Paid.
+    pub fn reject_refund(env: Env, admin: Address, id: u64) -> Result<(), InvoiceError> {
+        require_admin(&env, &admin)?;
+        require_not_paused(&env)?;
+
+        let mut invoice: Invoice = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Invoice(id))
+            .ok_or(InvoiceError::NotFound)?;
+        if invoice.status != InvoiceStatus::RefundRequested {
+            return Err(InvoiceError::NotRefundRequested);
+        }
+
+        invoice.status = InvoiceStatus::Paid;
+        env.storage()
+            .persistent()
+            .set(&DataKey::Invoice(id), &invoice);
+        append_history(
+            &env,
+            id,
+            InvoiceStatus::RefundRequested,
+            InvoiceStatus::Paid,
+        );
+        events::refund_rejected(&env, id, &invoice);
         Ok(())
     }
 

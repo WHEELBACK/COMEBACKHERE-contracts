@@ -1,8 +1,13 @@
-use invoice::{InvoiceContract, InvoiceContractClient, InvoiceStatus, MaybeAddress, MaybeBytes};
+use invoice::{
+    InvoiceContract, InvoiceContractClient, InvoiceError, InvoiceStatus, MaybeAddress, MaybeBytes,
+    MAX_BATCH_EXPIRE,
+};
 use soroban_sdk::{
     testutils::{Address as _, Ledger},
     Address, Env,
 };
+
+const MAX_BATCH_EXPIRE_INSTRUCTIONS: u64 = 100_000_000;
 
 fn setup() -> (Env, Address, InvoiceContractClient<'static>) {
     let env = Env::default();
@@ -65,20 +70,17 @@ fn high_volume_invoice_creation_storage_budget() {
 }
 
 #[test]
-fn batch_expire_1000_invoices() {
+fn batch_expire_rejects_more_than_max_batch_size() {
     let (env, admin, client) = setup();
-    // This test intentionally exceeds the default network resource budget to
-    // exercise storage/state correctness at high volume, not budget limits.
     env.cost_estimate().budget().reset_unlimited();
     let merchant = Address::generate(&env);
 
     // Set timestamp so expires_at = 1001 for every invoice.
     env.ledger().with_mut(|l| l.timestamp = 1_000);
 
-    let total: u64 = 1_000;
     let mut ids = soroban_sdk::Vec::new(&env);
 
-    for i in 1..=total {
+    for _ in 0..=MAX_BATCH_EXPIRE {
         let id = client.create_invoice(
             &merchant,
             &10_000_000,
@@ -89,13 +91,52 @@ fn batch_expire_1000_invoices() {
             &0,
             &MaybeAddress::None,
         );
-        assert_eq!(id, i);
         ids.push_back(id);
     }
 
     // Advance past expiry.
     env.ledger().with_mut(|l| l.timestamp = 2_000);
 
+    let err = client.try_batch_expire(&admin, &ids).unwrap_err().unwrap();
+    assert_eq!(err, InvoiceError::BatchTooLarge);
+}
+
+#[test]
+fn batch_expire_at_cap_stays_under_instruction_budget() {
+    let (env, admin, client) = setup();
+    env.cost_estimate().budget().reset_unlimited();
+    let merchant = Address::generate(&env);
+
+    env.ledger().with_mut(|l| l.timestamp = 1_000);
+
+    let mut ids = soroban_sdk::Vec::new(&env);
+    for _ in 0..MAX_BATCH_EXPIRE {
+        let id = client.create_invoice(
+            &merchant,
+            &10_000_000,
+            &10_250_000,
+            &1,
+            &MaybeBytes::None,
+            &MaybeBytes::None,
+            &0,
+            &MaybeAddress::None,
+        );
+        ids.push_back(id);
+    }
+
+    env.ledger().with_mut(|l| l.timestamp = 2_000);
+    env.cost_estimate().budget().reset_tracker();
+
     let expired = client.batch_expire(&admin, &ids);
-    assert_eq!(expired, total as u32);
+    let instructions = env.cost_estimate().budget().cpu_instruction_cost();
+
+    assert_eq!(expired, MAX_BATCH_EXPIRE);
+    assert!(
+        instructions <= MAX_BATCH_EXPIRE_INSTRUCTIONS,
+        "batch_expire({MAX_BATCH_EXPIRE}) used {instructions} instructions"
+    );
+
+    ids.push_back(0);
+    let err = client.try_batch_expire(&admin, &ids).unwrap_err().unwrap();
+    assert_eq!(err, InvoiceError::BatchTooLarge);
 }

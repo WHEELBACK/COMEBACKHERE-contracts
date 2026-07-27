@@ -181,6 +181,23 @@ Treasury (standalone — no outbound cross-contract calls except Token)
 Compliance (standalone — no outbound cross-contract calls)
 ```
 
+### Cross-Contract Compliance Call Failure Modes
+
+Soroban cross-contract calls have no network-style timeout or retry — a call either
+returns synchronously within the same transaction or the invocation aborts. This
+documents how the calling contract (`Treasury`, via `compliance-client`) reacts to
+each failure mode when invoking `Compliance::is_allowed`:
+
+| Failure mode | Behavior | Caller impact |
+|---|---|---|
+| Compliance contract not deployed / wrong contract ID | The host call fails immediately (no such contract instance) | The calling transaction aborts entirely; all state changes made earlier in the same transaction (e.g. a prior `Treasury` write) are rolled back. There is no partial-execution state to clean up. |
+| Compliance contract paused | `is_allowed` does not check the `Paused` flag — only administrative mutations (`allow_address`, `block_address`, etc.) enforce `require_not_paused`. `is_allowed` still executes and returns its normal `bool` result while paused. | No special handling needed; a pause does not block compliance reads, only compliance list mutations. |
+| Compliance contract panics (unexpected internal error) | The panic propagates up through the cross-contract call boundary | The calling transaction aborts entirely, identical to a missing-contract failure. Soroban provides no automatic retry — the caller (or off-chain orchestrator driving `SettlementWorkflow`) must resubmit a fresh transaction after the underlying issue is resolved. |
+
+Because there is no retry/backoff primitive at the protocol level, any retry policy
+(e.g. re-attempting `execute_settlement` after a transient compliance failure) must
+be implemented off-chain by whatever process submits these transactions.
+
 ### Invoice Status State Machine
 
 ```
@@ -192,3 +209,15 @@ Cancelled
 
 Pending ──batch_expire──► Expired  (when ledger.timestamp >= expires_at)
 ```
+
+### Invoice Status Audit Trail
+
+Off-chain indexers reconstruct the chronological status history for each invoice
+from the invoice contract's emitted events, using the invoice ID topic as the
+stream key. `invoice_created`, `invoice_paid`, `invoice_expired`,
+`invoice_cancelled`, `invoice_refund_requested`, and `refund_approved` carry the
+resulting full `Invoice`; `escrow_released` carries the invoice ID, merchant,
+amount, and release timestamp. Consumers must process events in ledger/event
+order, checkpoint their position, and deduplicate replayed events. The current
+state can be reconciled with `get_invoice` or the `batch_get_invoice_status`
+entrypoint.
