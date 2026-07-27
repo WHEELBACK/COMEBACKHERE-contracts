@@ -27,6 +27,14 @@ pub struct InvoiceAmountUpdatedEvent {
     pub new_gross_usdc: i128,
 }
 
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct InvoiceExpiryExtendedEvent {
+    pub id: u64,
+    pub old_expires_at: u64,
+    pub new_expires_at: u64,
+}
+
 pub fn invoice_created(env: &Env, id: u64, invoice: &Invoice) {
     env.events()
         .publish((Symbol::new(env, "invoice_created"), id), invoice.clone());
@@ -57,6 +65,11 @@ pub fn invoice_refund_requested(env: &Env, id: u64, invoice: &Invoice) {
 pub fn refund_approved(env: &Env, id: u64, invoice: &Invoice) {
     env.events()
         .publish((Symbol::new(env, "refund_approved"), id), invoice.clone());
+}
+
+pub fn refund_rejected(env: &Env, id: u64, invoice: &Invoice) {
+    env.events()
+        .publish((Symbol::new(env, "refund_rejected"), id), invoice.clone());
 }
 
 /// Minimal payload emitted when escrow is released for a paid invoice.
@@ -95,4 +108,42 @@ pub fn invoice_amended(env: &Env, event: &InvoiceAmountUpdatedEvent) {
         (Symbol::new(env, "invoice_amended"), event.id),
         event.clone(),
     );
+}
+
+pub fn invoice_expiry_extended(env: &Env, event: &InvoiceExpiryExtendedEvent) {
+    env.events().publish(
+        (Symbol::new(env, "invoice_expiry_extended"), event.id),
+        event.clone(),
+    );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{invoice_expiry_extended, InvoiceExpiryExtendedEvent};
+    use soroban_sdk::{contract, testutils::Events, Env, Symbol, TryFromVal};
+
+    #[contract]
+    struct TestContract;
+
+    #[test]
+    fn invoice_expiry_extended_emits_event() {
+        let env = Env::default();
+        let contract_id = env.register(TestContract, ());
+        env.as_contract(&contract_id, || {
+            invoice_expiry_extended(
+                &env,
+                &InvoiceExpiryExtendedEvent {
+                    id: 1,
+                    old_expires_at: 100,
+                    new_expires_at: 200,
+                },
+            );
+        });
+
+        let (_, topics, _) = env.events().all().last().unwrap();
+        assert_eq!(
+            Symbol::try_from_val(&env, &topics.get_unchecked(0)).unwrap(),
+            Symbol::new(&env, "invoice_expiry_extended")
+        );
+    }
 }

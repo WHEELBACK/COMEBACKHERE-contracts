@@ -6,6 +6,11 @@ use compliance::ComplianceContract;
 use compliance_client::ComplianceClient;
 use soroban_sdk::{testutils::Address as _, Address, Env};
 
+#[derive(Debug, Eq, PartialEq)]
+enum TestError {
+    Unauthorized,
+}
+
 #[test]
 fn compliance_client_matches_compliance_contract_abi() {
     let env = Env::default();
@@ -34,4 +39,29 @@ fn compliance_client_matches_compliance_contract_abi() {
 
     client.block_address(&admin, &subject, &None);
     assert!(!client.is_allowed(&subject));
+}
+
+#[test]
+fn wrapper_matches_generated_client_compliance_checks() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let admin = Address::generate(&env);
+    let subject = Address::generate(&env);
+    let contract_id = env.register_contract(None, ComplianceContract);
+    let generated = compliance::ComplianceContractClient::new(&env, &contract_id);
+    let wrapped = ComplianceClient::new(&env, &contract_id);
+    generated.initialize(&admin);
+
+    assert_eq!(wrapped.is_allowed(&subject), generated.is_allowed(&subject));
+    assert_eq!(
+        wrapped.require_allowed(&subject, TestError::Unauthorized),
+        Err(TestError::Unauthorized)
+    );
+
+    generated.allow_address(&admin, &subject);
+    assert_eq!(wrapped.is_allowed(&subject), generated.is_allowed(&subject));
+    assert_eq!(
+        wrapped.require_allowed(&subject, TestError::Unauthorized),
+        Ok(())
+    );
 }
