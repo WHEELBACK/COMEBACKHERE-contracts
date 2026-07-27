@@ -112,6 +112,18 @@ impl TreasuryContract {
         if partial_amount <= 0 || partial_amount >= settlement.amount {
             panic!("InvalidAmount");
         }
+        let approved_total: i128 = env
+            .storage()
+            .persistent()
+            .get(&DataKey::PartialApprovedTotal(settlement_id))
+            .unwrap_or(0);
+        if approved_total + partial_amount > settlement.amount {
+            panic!("InvalidAmount");
+        }
+        env.storage().persistent().set(
+            &DataKey::PartialApprovedTotal(settlement_id),
+            &(approved_total + partial_amount),
+        );
         if !settlement.approvals.contains(&signer) {
             settlement.approval_weight += signer_weight(&env, &signer);
             settlement.approvals.push_back(signer);
