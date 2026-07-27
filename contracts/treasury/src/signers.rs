@@ -111,7 +111,10 @@ impl TreasuryContract {
             panic!("RotationAlreadyExecuted");
         }
         if !proposal.approvals.contains(&approver) {
-            proposal.approval_weight += signer_weight(&env, &approver);
+            proposal.approval_weight = proposal
+                .approval_weight
+                .checked_add(signer_weight(&env, &approver))
+                .unwrap_or_else(|| panic!("WeightOverflow"));
             proposal.approvals.push_back(approver);
         }
         let threshold: u32 = env

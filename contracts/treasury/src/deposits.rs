@@ -24,6 +24,10 @@ impl TreasuryContract {
     }
 
     /// Withdraws `amount` tokens from the treasury to `to` via `token_contract`.
+    /// Confirmed reentrancy semantics (see #36): the balance is decremented and persisted
+    /// *before* the external `transfer` call (checks-effects-interactions). A malicious
+    /// `token_contract` that re-enters `withdraw` from its `transfer` callback observes the
+    /// already-decremented balance, so a double-spend of the same funds is not possible.
     /// Panics: `ContractPaused`, `InvalidAmount`, `InsufficientBalance`.
     /// Emits: `withdraw`.
     pub fn withdraw(env: Env, to: Address, token_contract: Address, amount: i128) {
