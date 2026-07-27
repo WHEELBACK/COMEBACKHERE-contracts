@@ -146,3 +146,15 @@ Cancelled
 
 Pending ──batch_expire──► Expired  (when ledger.timestamp >= expires_at)
 ```
+
+### Invoice Status Audit Trail
+
+Off-chain indexers reconstruct the chronological status history for each invoice
+from the invoice contract's emitted events, using the invoice ID topic as the
+stream key. `invoice_created`, `invoice_paid`, `invoice_expired`,
+`invoice_cancelled`, `invoice_refund_requested`, and `refund_approved` carry the
+resulting full `Invoice`; `escrow_released` carries the invoice ID, merchant,
+amount, and release timestamp. Consumers must process events in ledger/event
+order, checkpoint their position, and deduplicate replayed events. The current
+state can be reconciled with `get_invoice` or the `batch_get_invoice_status`
+entrypoint.

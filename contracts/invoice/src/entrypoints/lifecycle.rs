@@ -195,6 +195,18 @@ impl InvoiceContract {
         Ok(invoice.status)
     }
 
+    /// Return one status result per ID, preserving input order.
+    pub fn batch_get_invoice_status(
+        env: Env,
+        ids: Vec<u64>,
+    ) -> Vec<Result<InvoiceStatus, InvoiceError>> {
+        let mut statuses = Vec::new(&env);
+        for id in ids.iter() {
+            statuses.push_back(Self::get_invoice_status(env.clone(), id));
+        }
+        statuses
+    }
+
     /// Return up to `limit` invoices starting at `start_id` (inclusive).
     /// Gaps (IDs with no stored invoice) are skipped.
     pub fn get_invoices_page(env: Env, start_id: u64, limit: u64) -> Vec<Invoice> {
