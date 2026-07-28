@@ -1,3 +1,14 @@
+## Contract Size Budget
+
+The CI size gate (`contract-size.yml`) rejects any compiled WASM that exceeds **65 536 bytes (64 KiB)**.
+
+Rationale:
+- Soroban's current network-enforced maximum for a deployed contract WASM is **65 536 bytes**. Deploying a larger binary is rejected at the protocol level, so the CI threshold mirrors the hard ceiling exactly — there is no separate "margin" buffer because any byte over the limit is already a deploy failure.
+- The threshold is set via the `MAX_CONTRACT_SIZE` env var in `contract-size.yml` so it can be updated in one place if the network limit changes.
+- All three contracts (compliance, invoice, treasury) are currently well under this ceiling. The check exists to catch accidental size regressions before they reach a deploy attempt.
+
+---
+
 # Architecture
 
 This document describes the protocol-level design of the three COMEBACKHERE smart contracts, their data storage, and how they interact during a typical payment lifecycle.
