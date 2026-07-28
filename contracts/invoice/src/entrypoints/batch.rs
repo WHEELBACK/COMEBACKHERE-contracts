@@ -6,7 +6,7 @@ use crate::validation::{
 use crate::{append_history, pending_index_add, pending_index_remove};
 use crate::{
     BatchInvoiceParams, DataKey, Invoice, InvoiceContract, InvoiceError, InvoiceStatus,
-    MaybeAddress,
+    MaybeAddress, MAX_BATCH_EXPIRE,
 };
 #[allow(unused_imports)]
 use crate::{InvoiceContractArgs, InvoiceContractClient};
@@ -46,6 +46,15 @@ impl InvoiceContract {
             }
         }
 
+        let count: u64 = env
+            .storage()
+            .instance()
+            .get(&DataKey::InvoiceCount)
+            .unwrap_or(0);
+        count
+            .checked_add(params.len() as u64)
+            .ok_or(InvoiceError::InvoiceCountOverflow)?;
+
         let mut ids = Vec::new(&env);
         for p in params.iter() {
             let count: u64 = env
@@ -53,7 +62,9 @@ impl InvoiceContract {
                 .instance()
                 .get(&DataKey::InvoiceCount)
                 .unwrap_or(0);
-            let id = count + 1;
+            let id = count
+                .checked_add(1)
+                .ok_or(InvoiceError::InvoiceCountOverflow)?;
             let expires_at = env
                 .ledger()
                 .timestamp()
@@ -111,6 +122,9 @@ impl InvoiceContract {
     pub fn batch_expire(env: Env, admin: Address, ids: Vec<u64>) -> Result<u32, InvoiceError> {
         require_admin(&env, &admin)?;
         require_not_paused(&env)?;
+        if ids.len() > MAX_BATCH_EXPIRE {
+            return Err(InvoiceError::BatchTooLarge);
+        }
         let now = env.ledger().timestamp();
         let mut expired_count: u32 = 0;
         for id in ids.iter() {

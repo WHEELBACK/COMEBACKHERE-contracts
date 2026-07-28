@@ -1,8 +1,7 @@
-use crate::{DataKey, InvoiceContract, InvoiceError};
-#[allow(unused_imports)]
-use crate::{InvoiceContractArgs, InvoiceContractClient};
 use crate::events;
+use crate::events::InvoiceExpiryExtendedEvent;
 use crate::validation::require_admin;
+use crate::{DataKey, Invoice, InvoiceContract, InvoiceError, InvoiceStatus};
 use soroban_sdk::{contractimpl, Address, Env};
 
 #[contractimpl]
@@ -80,6 +79,42 @@ impl InvoiceContract {
         require_admin(&env, &admin)?;
         env.storage().instance().set(&DataKey::Paused, &false);
         events::contract_unpaused(&env, &admin);
+        Ok(())
+    }
+
+    /// Extend the expiry of a pending invoice.
+    pub fn extend_expiry(
+        env: Env,
+        admin: Address,
+        id: u64,
+        additional_seconds: u64,
+    ) -> Result<(), InvoiceError> {
+        require_admin(&env, &admin)?;
+        let mut invoice: Invoice = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Invoice(id))
+            .ok_or(InvoiceError::NotFound)?;
+        if invoice.status != InvoiceStatus::Pending {
+            return Err(InvoiceError::NotPending);
+        }
+
+        let old_expires_at = invoice.expires_at;
+        invoice.expires_at = old_expires_at
+            .checked_add(additional_seconds)
+            .filter(|new_expires_at| *new_expires_at > old_expires_at)
+            .ok_or(InvoiceError::ExpiryOverflow)?;
+        env.storage()
+            .persistent()
+            .set(&DataKey::Invoice(id), &invoice);
+        events::invoice_expiry_extended(
+            &env,
+            &InvoiceExpiryExtendedEvent {
+                id,
+                old_expires_at,
+                new_expires_at: invoice.expires_at,
+            },
+        );
         Ok(())
     }
 }

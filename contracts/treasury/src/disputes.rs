@@ -2,9 +2,7 @@ use crate::{
     require_admin, require_not_paused, DataKey, Dispute, DisputeStatus, Settlement,
     SettlementHoldReason, SettlementStatus, TreasuryContract,
 };
-#[allow(unused_imports)]
-use crate::{TreasuryContractArgs, TreasuryContractClient};
-use multisig::{require_authorized_signer, signer_weight};
+use multisig::{meets_threshold, record_approval, require_authorized_signer};
 use soroban_sdk::{contractimpl, Address, Env, Symbol, Vec};
 
 #[contractimpl]
@@ -201,16 +199,18 @@ impl TreasuryContract {
         } else if dispute.resolution_for_claimant != in_favor_of_claimant {
             panic!("ResolutionDirectionMismatch");
         }
-        if !dispute.resolution_approvals.contains(&signer) {
-            dispute.resolution_weight += signer_weight(&env, &signer);
-            dispute.resolution_approvals.push_back(signer);
-        }
+        record_approval(
+            &env,
+            &mut dispute.resolution_approvals,
+            &mut dispute.resolution_weight,
+            &signer,
+        );
         let threshold: u32 = env
             .storage()
             .instance()
             .get(&DataKey::Threshold)
             .unwrap_or_else(|| panic!("ThresholdNotConfigured"));
-        if dispute.resolution_weight >= threshold {
+        if meets_threshold(dispute.resolution_weight, threshold) {
             dispute.status = if dispute.resolution_for_claimant {
                 DisputeStatus::ResolvedClaimant
             } else {

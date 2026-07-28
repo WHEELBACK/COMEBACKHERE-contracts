@@ -1015,3 +1015,95 @@ fn bulk_block_addresses_over_cap_is_rejected() {
     let result = client.try_bulk_block_addresses(&admin, &addrs);
     assert_eq!(result, Err(Ok(ContractError::BatchTooLarge)));
 }
+
+// ── #49 sweep_expired tests ─────────────────────────────────
+
+#[test]
+fn sweep_expired_clears_lapsed_temp_allow_and_emits_event() {
+    let (env, admin, subject, client) = setup();
+    let now = env.ledger().timestamp();
+    client.allow_address_until(&admin, &subject, &(now + 100));
+
+    env.ledger().set_timestamp(now + 200);
+
+    let swept = client.sweep_expired(&admin);
+    assert_eq!(swept, 1);
+    assert_eq!(
+        last_event_symbol(&env),
+        Symbol::new(&env, "address_allow_expired")
+    );
+    assert_eq!(client.get_allow_expiry(&subject), None);
+    assert!(!client.is_allowed(&subject));
+}
+
+#[test]
+fn sweep_expired_ignores_addresses_not_yet_expired() {
+    let (env, admin, subject, client) = setup();
+    let now = env.ledger().timestamp();
+    client.allow_address_until(&admin, &subject, &(now + 1000));
+
+    let swept = client.sweep_expired(&admin);
+    assert_eq!(swept, 0);
+    assert!(client.is_allowed(&subject));
+}
+
+#[test]
+fn sweep_expired_ignores_permanently_allowed_addresses() {
+    let (env, admin, subject, client) = setup();
+    client.allow_address(&admin, &subject);
+
+    let swept = client.sweep_expired(&admin);
+    assert_eq!(swept, 0);
+    assert!(client.is_allowed(&subject));
+}
+
+#[test]
+fn sweep_expired_only_counts_lapsed_entries_among_several() {
+    let (env, admin, _, client) = setup();
+    let now = env.ledger().timestamp();
+    let expired_a = Address::generate(&env);
+    let expired_b = Address::generate(&env);
+    let still_valid = Address::generate(&env);
+    let permanent = Address::generate(&env);
+
+    client.allow_address_until(&admin, &expired_a, &(now + 50));
+    client.allow_address_until(&admin, &expired_b, &(now + 50));
+    client.allow_address_until(&admin, &still_valid, &(now + 1000));
+    client.allow_address(&admin, &permanent);
+
+    env.ledger().set_timestamp(now + 100);
+
+    let swept = client.sweep_expired(&admin);
+    assert_eq!(swept, 2);
+    assert!(!client.is_allowed(&expired_a));
+    assert!(!client.is_allowed(&expired_b));
+    assert!(client.is_allowed(&still_valid));
+    assert!(client.is_allowed(&permanent));
+}
+
+#[test]
+fn sweep_expired_is_idempotent_when_called_twice() {
+    let (env, admin, subject, client) = setup();
+    let now = env.ledger().timestamp();
+    client.allow_address_until(&admin, &subject, &(now + 50));
+    env.ledger().set_timestamp(now + 100);
+
+    let first = client.sweep_expired(&admin);
+    assert_eq!(first, 1);
+    let second = client.sweep_expired(&admin);
+    assert_eq!(second, 0);
+}
+
+#[test]
+fn sweep_expired_returns_unauthorized_for_non_admin() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let admin = Address::generate(&env);
+    let non_admin = Address::generate(&env);
+    let id = env.register_contract(None, ComplianceContract);
+    let client = ComplianceContractClient::new(&env, &id);
+    client.initialize(&admin);
+
+    let result = client.try_sweep_expired(&non_admin);
+    assert_eq!(result, Err(Ok(ContractError::Unauthorized)));
+}

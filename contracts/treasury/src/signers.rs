@@ -1,7 +1,5 @@
 use crate::{require_admin, DataKey, RotationStatus, SignerRotationProposal, TreasuryContract};
-#[allow(unused_imports)]
-use crate::{TreasuryContractArgs, TreasuryContractClient};
-use multisig::{require_authorized_signer, signer_weight};
+use multisig::{meets_threshold, record_approval, require_authorized_signer, signer_weight};
 use soroban_sdk::{contractimpl, Address, Env, Symbol, Vec};
 
 #[contractimpl]
@@ -34,6 +32,33 @@ impl TreasuryContract {
         }
         env.events()
             .publish((Symbol::new(&env, "signer_weight_set"), signer), weight);
+    }
+
+    /// Removes `signer` from the active signer registry (admin-only).
+    ///
+    /// The signer is pruned from storage and excluded from `get_all_signers`.
+    /// Existing settlement approval snapshots are not changed, so removing a
+    /// signer does not retroactively invalidate in-flight approvals.
+    /// Emits: `signer_removed`.
+    pub fn remove_signer(env: Env, admin: Address, signer: Address) {
+        require_admin(&env, &admin);
+        env.storage()
+            .instance()
+            .remove(&DataKey::Signer(signer.clone()));
+        let list: Vec<Address> = env
+            .storage()
+            .instance()
+            .get(&DataKey::SignerList)
+            .unwrap_or_else(|| Vec::new(&env));
+        let mut updated = Vec::new(&env);
+        for s in list.iter() {
+            if s != signer {
+                updated.push_back(s);
+            }
+        }
+        env.storage().instance().set(&DataKey::SignerList, &updated);
+        env.events()
+            .publish((Symbol::new(&env, "signer_removed"),), signer);
     }
 
     /// Returns the current approval weight for `signer`, or `0` if not registered.
@@ -93,9 +118,9 @@ impl TreasuryContract {
             .get(&DataKey::RotationCount)
             .unwrap_or(0);
         let id = count + 1;
-        let weight = signer_weight(&env, &proposer);
         let mut approvals = Vec::new(&env);
-        approvals.push_back(proposer);
+        let mut weight = 0u32;
+        record_approval(&env, &mut approvals, &mut weight, &proposer);
         let proposal = SignerRotationProposal {
             id,
             old_signer,
@@ -130,16 +155,18 @@ impl TreasuryContract {
         if proposal.status != RotationStatus::Pending {
             panic!("RotationAlreadyExecuted");
         }
-        if !proposal.approvals.contains(&approver) {
-            proposal.approval_weight += signer_weight(&env, &approver);
-            proposal.approvals.push_back(approver);
-        }
+        record_approval(
+            &env,
+            &mut proposal.approvals,
+            &mut proposal.approval_weight,
+            &approver,
+        );
         let threshold: u32 = env
             .storage()
             .instance()
             .get(&DataKey::Threshold)
             .unwrap_or(1);
-        if proposal.approval_weight >= threshold {
+        if meets_threshold(proposal.approval_weight, threshold) {
             let old_weight = signer_weight(&env, &proposal.old_signer);
             env.storage()
                 .instance()
