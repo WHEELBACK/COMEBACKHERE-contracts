@@ -51,7 +51,7 @@ impl TreasuryContract {
         if balance < amount {
             panic!("InsufficientBalance");
         }
-        balance -= amount;
+        balance = balance.checked_sub(amount).unwrap_or_else(|| panic!("ArithmeticOverflow"));
         env.storage()
             .persistent()
             .set(&DataKey::Balance(to.clone()), &balance);
@@ -107,7 +107,7 @@ fn deposit_one(env: &Env, from: &Address, token_contract: &Address, amount: i128
         .persistent()
         .get(&DataKey::Balance(from.clone()))
         .unwrap_or(0);
-    balance += amount;
+    balance = balance.checked_add(amount).unwrap_or_else(|| panic!("ArithmeticOverflow"));
     env.storage()
         .persistent()
         .set(&DataKey::Balance(from.clone()), &balance);

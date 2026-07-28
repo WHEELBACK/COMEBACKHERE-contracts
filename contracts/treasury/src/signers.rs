@@ -117,7 +117,7 @@ impl TreasuryContract {
             .instance()
             .get(&DataKey::RotationCount)
             .unwrap_or(0);
-        let id = count + 1;
+        let id = count.checked_add(1).unwrap_or_else(|| panic!("ArithmeticOverflow"));
         let mut approvals = Vec::new(&env);
         let mut weight = 0u32;
         record_approval(&env, &mut approvals, &mut weight, &proposer);

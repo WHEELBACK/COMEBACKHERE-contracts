@@ -117,7 +117,7 @@ impl ComplianceContract {
                     .unwrap_or(0u64);
                 env.storage()
                     .instance()
-                    .set(&DataKey::AllowCount, &(count + 1));
+                    .set(&DataKey::AllowCount, &(count.checked_add(1).unwrap_or_else(|| panic!("ArithmeticOverflow"))));
             }
             Self::track_address(&env, &address)?;
             env.events()
@@ -218,7 +218,7 @@ impl ComplianceContract {
                 .unwrap_or(0u64);
             env.storage()
                 .instance()
-                .set(&DataKey::AllowCount, &(count + 1));
+                .set(&DataKey::AllowCount, &(count.checked_add(1).unwrap_or_else(|| panic!("ArithmeticOverflow"))));
         }
         Self::track_address(&env, &address)?;
         env.events()
@@ -515,7 +515,7 @@ impl ComplianceContract {
                 .unwrap_or(0u64);
             env.storage()
                 .instance()
-                .set(&DataKey::AllowCount, &(count + 1));
+                .set(&DataKey::AllowCount, &(count.checked_add(1).unwrap_or_else(|| panic!("ArithmeticOverflow"))));
         }
         Self::track_address(&env, &address)?;
         env.events()
