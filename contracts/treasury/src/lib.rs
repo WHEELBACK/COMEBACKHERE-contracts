@@ -67,7 +67,7 @@ impl TreasuryContract {
     }
 
     /// Updates the multisig approval threshold required to execute settlements (admin-only).
-    /// Errors: `ZeroThreshold`.
+    /// Errors: `ZeroThreshold`, `ThresholdUnreachable`.
     /// Emits: `threshold_updated`.
     pub fn update_threshold(
         env: Env,
@@ -77,6 +77,13 @@ impl TreasuryContract {
         require_admin(&env, &admin);
         if new_threshold == 0 {
             return Err(TreasuryError::ZeroThreshold);
+        }
+        let total_weight: u32 = Self::get_all_signers(env.clone())
+            .iter()
+            .map(|(_, weight)| weight)
+            .sum();
+        if new_threshold > total_weight {
+            return Err(TreasuryError::ThresholdUnreachable);
         }
         env.storage()
             .instance()
