@@ -312,6 +312,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "comebackhere-settlement-workflow"
+version = "1.0.0"
+dependencies = [
+ "comebackhere-compliance",
+ "comebackhere-compliance-client",
+ "comebackhere-treasury",
+ "soroban-sdk",
+]
+
+[[package]]
 name = "comebackhere-tests"
 version = "1.0.0"
 dependencies = [
