@@ -15,6 +15,7 @@ testutils = []
 [dependencies]
 soroban-sdk.workspace = true
 compliance = { package = "comebackhere-compliance", path = "../../contracts/compliance" }
+multisig = { package = "comebackhere-multisig", path = "../multisig" }
 
 [dev-dependencies]
 soroban-sdk = { workspace = true, features = ["testutils"] }

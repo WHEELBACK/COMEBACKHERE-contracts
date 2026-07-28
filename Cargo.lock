@@ -283,6 +283,7 @@ name = "comebackhere-compliance-client"
 version = "0.1.0"
 dependencies = [
  "comebackhere-compliance",
+ "comebackhere-multisig",
  "soroban-sdk",
 ]
 

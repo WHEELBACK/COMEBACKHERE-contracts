@@ -22,6 +22,10 @@ pub enum TreasuryError {
     SettlementOnHold = 15,
     DisputeNotExpired = 16,
     AlreadyOnHold = 17,
+    /// A cross-contract call into Compliance returned non-compliant, or the
+    /// call itself failed. Callers should map compliance-gate failures here
+    /// instead of panicking or reusing `Unauthorized`. See #74.
+    ComplianceCheckFailed = 18,
 }
 
 // Issue #48: reason codes attached to a held settlement; None means not on hold
