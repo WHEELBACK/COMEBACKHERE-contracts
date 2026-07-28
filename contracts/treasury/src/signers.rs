@@ -86,6 +86,8 @@ impl TreasuryContract {
     }
 
     /// Proposes replacing `old_signer` with `new_signer` in the authorised signer set.
+    /// Enforces a 1-hour cooldown per proposer to prevent rotation spam.
+    /// Panics: `UnauthorizedSigner`, `RotationProposalCooldown`.
     /// Emits: `rotation_proposed`.
     pub fn propose_signer_rotation(
         env: Env,
@@ -94,6 +96,22 @@ impl TreasuryContract {
         new_signer: Address,
     ) -> u64 {
         require_authorized_signer(&env, &proposer);
+
+        // Cooldown: each proposer may only submit one rotation proposal per hour.
+        const COOLDOWN_SECS: u64 = 60 * 60;
+        let now = env.ledger().timestamp();
+        let cooldown_key = DataKey::LastRotationProposal(proposer.clone());
+        if let Some(last) = env
+            .storage()
+            .instance()
+            .get::<DataKey, u64>(&cooldown_key)
+        {
+            if now < last.saturating_add(COOLDOWN_SECS) {
+                panic!("RotationProposalCooldown");
+            }
+        }
+        env.storage().instance().set(&cooldown_key, &now);
+
         let count: u64 = env
             .storage()
             .instance()

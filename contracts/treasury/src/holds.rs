@@ -2,6 +2,8 @@ use crate::{
     require_admin, DataKey, Settlement, SettlementHoldReason, SettlementStatus, TreasuryContract,
     TreasuryError,
 };
+#[allow(unused_imports)]
+use crate::{TreasuryContractArgs, TreasuryContractClient};
 use soroban_sdk::{contractimpl, Address, Env, Symbol};
 
 #[contractimpl]
