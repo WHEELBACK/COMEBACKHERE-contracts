@@ -97,6 +97,69 @@ sequenceDiagram
 | `Blocked(Address)` | Persistent | `bool` | Whether an address is blocked (overrides allow) |
 | `AllowedUntil(Address)` | Persistent | `u64` | Optional expiry timestamp for a temporary allow |
 
+## Error-Code Ranges per Contract
+
+Each contract defines error codes via a `#[contracterror]` enum. New variants **must** be appended at the end (highest numeric value) to preserve on-chain backwards compatibility — existing contracts and clients may depend on the current ordinal positions.
+
+### Invoice Contract (`InvoiceError` — range 1..=21)
+
+| Code | Name | Description |
+|---|---|---|
+| 1 | `Unauthorized` | Caller is not the expected admin or merchant |
+| 2 | `ContractPaused` | Contract is paused and the operation is blocked |
+| 3 | `InvalidAmount` | Amount is zero, negative, or gross < amount |
+| 4 | `NotPending` | Invoice status is not `Pending` for the required transition |
+| 5 | `Expired` | Payment window (including grace period) has elapsed |
+| 6 | `NotFound` | No invoice exists for the given ID |
+| 7 | `AlreadyInitialized` | `initialize` has already been called |
+| 8 | `ZeroDuration` | `expires_in_seconds` is zero |
+| 9 | `ExpiryOverflow` | `expires_at` arithmetic overflowed `u64` |
+| 10 | `NotPaid` | Invoice is not in `Paid` status |
+| 11 | `NotReleased` | Invoice has not been released from escrow |
+| 12 | `AmountPrecision` | Amount below minimum USDC unit (< 10_000_000 stroops) |
+| 13 | `DuplicateNonce` | Merchant nonce has already been used |
+| 14 | `ExpiryTooLong` | `expires_in_seconds` exceeds max (5 years) |
+| 15 | `MetadataMismatch` | Provided `metadata_hash` does not match stored hash |
+| 16 | `NoPendingAdmin` | No pending admin transfer to accept |
+| 17 | `InvalidPaymentLinkHash` | `payment_link_hash` is not exactly 32 bytes |
+| 18 | `NotRefundRequested` | Invoice is not in `RefundRequested` status |
+| 19 | `TokenMismatch` | Provided payment token does not match invoice's expected token |
+| 20 | `BatchTooLarge` | Batch input exceeds `MAX_BATCH_SIZE` |
+| 21 | `CooldownActive` | `create_invoice` called again before `CreationCooldown` elapsed |
+
+### Treasury Contract (`TreasuryError` — range 1..=17)
+
+| Code | Name | Description |
+|---|---|---|
+| 1 | `AlreadyInitialized` | `initialize` has already been called |
+| 2 | `ZeroThreshold` | Approval threshold cannot be zero |
+| 3 | `SettlementNotFound` | No settlement exists for the given ID |
+| 4 | `AlreadyExecuted` | Settlement is already executed, cancelled, or expired |
+| 5 | `ThresholdNotMet` | Approval weight is below the required threshold |
+| 6 | `ThresholdNotConfigured` | Threshold has not been set |
+| 7 | `InvalidAmount` | Amount is zero or negative |
+| 8 | `ContractPaused` | Contract is paused and the operation is blocked |
+| 9 | `Unauthorized` | Caller is not the admin |
+| 10 | `UnauthorizedSigner` | Caller is not an authorised signer (zero weight) |
+| 11 | `InvalidTokenContract` | Token contract is the treasury itself |
+| 12 | `TokenNotAllowed` | Token is not on the settlement allowlist |
+| 13 | `RotationNotFound` | No signer rotation proposal for the given ID |
+| 14 | `RotationAlreadyExecuted` | Rotation proposal already executed or cancelled |
+| 15 | `SettlementOnHold` | Settlement is on hold and cannot be executed |
+| 16 | `DisputeNotExpired` | Dispute expiry timestamp has not been reached |
+| 17 | `AlreadyOnHold` | Settlement is already on hold |
+
+### Compliance Contract (`ComplianceError` / `ContractError` — range 1..=4)
+
+| Code | Name | Description |
+|---|---|---|
+| 1 | `Unauthorized` (ContractError) | Caller is not the admin or operator |
+| 2 | `ContractPaused` (ContractError) | Contract is paused and the operation is blocked |
+| 3 | `AlreadyInitialized` (ContractError) | `initialize` has already been called |
+| 4 | `BatchTooLarge` (ContractError) | Batch input exceeds `MAX_BATCH_SIZE` |
+
+> **Note:** `ComplianceError` enum exists separately with code `AlreadyInitialized = 1` for historical compatibility. New error variants should be added to `ContractError`.
+
 ---
 
 ## Cross-Contract Call Map

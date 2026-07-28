@@ -1,4 +1,4 @@
-.PHONY: build test fmt lint check audit
+.PHONY: build test fmt lint check audit check-enum-ordering
 
 build:
 	cargo build
@@ -15,5 +15,9 @@ lint:
 audit:
 	cargo audit
 
-check: fmt lint test
+# #74: Validate that all #[repr(u32)] error enums are append-only
+check-enum-ordering:
+	./scripts/check-enum-ordering.sh
+
+check: fmt lint check-enum-ordering test
 	@echo "✓ All checks passed"
