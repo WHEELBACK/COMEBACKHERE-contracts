@@ -1,7 +1,10 @@
 use crate::events;
 use crate::events::InvoiceExpiryExtendedEvent;
 use crate::validation::require_admin;
-use crate::{DataKey, Invoice, InvoiceContract, InvoiceError, InvoiceStatus};
+use crate::{
+    DataKey, Invoice, InvoiceContract, InvoiceContractArgs, InvoiceContractClient, InvoiceError,
+    InvoiceStatus,
+};
 use soroban_sdk::{contractimpl, Address, Env};
 
 #[contractimpl]

@@ -1,4 +1,7 @@
-use soroban_sdk::{testutils::Address as _, Address, Env};
+use soroban_sdk::{
+    testutils::{Address as _, MockAuth, MockAuthInvoke},
+    Address, Env, IntoVal,
+};
 use treasury::{TreasuryContract, TreasuryContractClient};
 
 mod test_token {
@@ -140,10 +143,21 @@ fn non_merchant_cannot_update_another_merchants_payout_address() {
 
     let treasury_id = env.register_contract(None, TreasuryContract);
     let treasury_client = TreasuryContractClient::new(&env, &treasury_id);
-    treasury_client.initialize(&admin, &1, &soroban_sdk::Vec::new(&env));
+    let signers: soroban_sdk::Vec<(Address, u32)> = soroban_sdk::Vec::new(&env);
+    treasury_client
+        .mock_auths(&[MockAuth {
+            address: &admin,
+            invoke: &MockAuthInvoke {
+                contract: &treasury_id,
+                fn_name: "initialize",
+                args: (admin.clone(), 1u32, signers.clone()).into_val(&env),
+                sub_invokes: &[],
+            },
+        }])
+        .initialize(&admin, &1, &signers);
 
     // Attacker tries to update merchant's payout address — should fail because
-    // attacker is not merchant
+    // no one (attacker included) has provided the merchant's authorization.
     let result = treasury_client.try_update_merchant_payout_address(
         &merchant,
         &payout_override,
@@ -183,13 +197,19 @@ fn reentrant_payout_address_change_does_not_redirect_mid_settlement() {
     // Propose settlement
     let settlement_id = treasury_client.propose_settlement(&admin, &merchant, &10_000_000);
 
-    // Execute settlement — the malicious token's transfer will re-enter the
-    // treasury and try to change the payout address, but the already-read
-    // payout_address should win.
-    treasury_client.execute_settlement(&admin, &settlement_id, &token_id);
+    // Execute settlement — the malicious token's transfer attempts to re-enter
+    // the treasury to change the payout address mid-flight. Soroban's host
+    // forbids re-entrant calls into a contract already on the invocation
+    // stack, so the whole settlement call fails atomically instead of
+    // silently redirecting funds.
+    let result = treasury_client.try_execute_settlement(&admin, &settlement_id, &token_id);
+    assert!(
+        result.is_err(),
+        "reentrant settlement execution must fail, not redirect funds"
+    );
 
-    // The funds should have gone to the original_payout address, not the hijack address
-    assert_eq!(malicious_client.balance(&original_payout), 10_000_000);
+    // No funds moved anywhere — the transaction was fully rolled back.
+    assert_eq!(malicious_client.balance(&original_payout), 0);
     assert_eq!(malicious_client.balance(&hijack_address), 0);
     assert_eq!(malicious_client.balance(&merchant), 0);
 }

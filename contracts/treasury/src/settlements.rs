@@ -1,8 +1,9 @@
 use crate::{
     require_admin, require_not_paused, DataKey, MAX_ALLOWED_TOKENS, Settlement,
-    SettlementHoldReason, SettlementStatus, TreasuryContract,
+    SettlementHoldReason, SettlementStatus, TreasuryContract, TreasuryContractArgs,
+    TreasuryContractClient,
 };
-use multisig::{meets_threshold, record_approval, require_authorized_signer};
+use multisig::{meets_threshold, record_approval, require_authorized_signer, signer_weight};
 use soroban_sdk::{contractimpl, token, Address, Env, Symbol, Vec};
 
 const SETTLEMENT_TTL: u64 = 7 * 24 * 60 * 60;
@@ -159,6 +160,18 @@ impl TreasuryContract {
         if partial_amount <= 0 || partial_amount >= settlement.amount {
             panic!("InvalidAmount");
         }
+        let approved_total: i128 = env
+            .storage()
+            .persistent()
+            .get(&DataKey::PartialApprovedTotal(settlement_id))
+            .unwrap_or(0);
+        if approved_total + partial_amount > settlement.amount {
+            panic!("InvalidAmount");
+        }
+        env.storage().persistent().set(
+            &DataKey::PartialApprovedTotal(settlement_id),
+            &(approved_total + partial_amount),
+        );
         record_approval(
             &env,
             &mut settlement.approvals,

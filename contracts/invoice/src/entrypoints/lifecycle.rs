@@ -5,7 +5,8 @@ use crate::validation::{
 };
 use crate::{append_history, pending_index_add, pending_index_remove};
 use crate::{
-    DataKey, Invoice, InvoiceContract, InvoiceError, InvoiceStatus, MaybeAddress, MaybeBytes,
+    DataKey, Invoice, InvoiceContract, InvoiceContractArgs, InvoiceContractClient, InvoiceError,
+    InvoiceStatus, MaybeAddress, MaybeBytes,
 };
 use soroban_sdk::{contractimpl, Address, Env, Vec};
 

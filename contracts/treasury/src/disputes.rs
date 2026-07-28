@@ -1,6 +1,7 @@
 use crate::{
     require_admin, require_not_paused, DataKey, Dispute, DisputeStatus, Settlement,
-    SettlementHoldReason, SettlementStatus, TreasuryContract,
+    SettlementHoldReason, SettlementStatus, TreasuryContract, TreasuryContractArgs,
+    TreasuryContractClient,
 };
 use multisig::{meets_threshold, record_approval, require_authorized_signer};
 use soroban_sdk::{contractimpl, Address, Env, Symbol, Vec};

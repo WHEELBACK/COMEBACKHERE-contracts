@@ -1,6 +1,13 @@
-use crate::{require_admin, DataKey, RotationStatus, SignerRotationProposal, TreasuryContract};
+use crate::{
+    require_admin, DataKey, RotationStatus, SignerRotationProposal, TreasuryContract,
+    TreasuryContractArgs, TreasuryContractClient,
+};
 use multisig::{meets_threshold, record_approval, require_authorized_signer, signer_weight};
 use soroban_sdk::{contractimpl, Address, Env, Symbol, Vec};
+
+/// Minimum seconds a signer must wait between successive `propose_signer_rotation`
+/// calls, to prevent a compromised/malicious signer from spamming rotation proposals.
+const ROTATION_PROPOSAL_COOLDOWN: u64 = 60 * 60;
 
 #[contractimpl]
 impl TreasuryContract {
@@ -86,6 +93,8 @@ impl TreasuryContract {
     }
 
     /// Proposes replacing `old_signer` with `new_signer` in the authorised signer set.
+    /// Panics: `UnauthorizedSigner`, `RotationProposalCooldown` if `proposer` submitted
+    /// another rotation proposal within [`ROTATION_PROPOSAL_COOLDOWN`] seconds.
     /// Emits: `rotation_proposed`.
     pub fn propose_signer_rotation(
         env: Env,
@@ -94,6 +103,19 @@ impl TreasuryContract {
         new_signer: Address,
     ) -> u64 {
         require_authorized_signer(&env, &proposer);
+        let now = env.ledger().timestamp();
+        let last_proposed: Option<u64> = env
+            .storage()
+            .instance()
+            .get(&DataKey::LastRotationProposal(proposer.clone()));
+        if let Some(last_proposed) = last_proposed {
+            if now < last_proposed + ROTATION_PROPOSAL_COOLDOWN {
+                panic!("RotationProposalCooldown");
+            }
+        }
+        env.storage()
+            .instance()
+            .set(&DataKey::LastRotationProposal(proposer.clone()), &now);
         let count: u64 = env
             .storage()
             .instance()

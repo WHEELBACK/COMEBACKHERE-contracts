@@ -26,7 +26,9 @@
 /// Invoice and compliance use `Result`-returning functions and are verified via
 /// `try_*` wrappers as usual.
 use compliance::{ComplianceContract, ComplianceContractClient};
-use invoice::{InvoiceContract, InvoiceContractClient, InvoiceError, InvoiceStatus, MaybeBytes};
+use invoice::{
+    InvoiceContract, InvoiceContractClient, InvoiceError, InvoiceStatus, MaybeAddress, MaybeBytes,
+};
 use soroban_sdk::{
     contract, contracterror, contractimpl,
     testutils::Address as _,
@@ -117,7 +119,7 @@ fn setup() -> Fixture {
     // Treasury contract (threshold=1 so single admin approval is sufficient)
     let treasury_id = env.register_contract(None, TreasuryContract);
     let treasury = TreasuryContractClient::new(&env, &treasury_id);
-    treasury.initialize(&admin, &1);
+    treasury.initialize(&admin, &1, &soroban_sdk::Vec::new(&env));
 
     // Stub token
     let token_id = env.register_contract(None, StubToken);
@@ -151,6 +153,7 @@ fn create_pending_invoice(f: &Fixture) -> u64 {
         &MaybeBytes::None,
         &MaybeBytes::None,
         &0,
+        &MaybeAddress::None,
     )
 }
 
@@ -187,7 +190,7 @@ fn scenario_invoice_paused_blocks_mark_paid_cleanly() {
     // Step 5 – mark_paid must fail with ContractPaused
     let err = f
         .invoice
-        .try_mark_paid(&f.admin, &inv_id, &payer)
+        .try_mark_paid(&f.admin, &inv_id, &payer, &MaybeBytes::None, &MaybeAddress::None)
         .unwrap_err()
         .unwrap();
     assert_eq!(
@@ -216,7 +219,7 @@ fn scenario_invoice_paused_blocks_mark_paid_cleanly() {
 
     // Step 8 – unpause and confirm recovery
     f.invoice.unpause(&f.admin);
-    let mark_result = f.invoice.try_mark_paid(&f.admin, &inv_id, &payer);
+    let mark_result = f.invoice.try_mark_paid(&f.admin, &inv_id, &payer, &MaybeBytes::None, &MaybeAddress::None);
     assert!(mark_result.is_ok(), "mark_paid must succeed after invoice is unpaused");
     assert_eq!(f.invoice.get_invoice(&inv_id).status, InvoiceStatus::Paid);
 }
@@ -239,6 +242,7 @@ fn scenario_invoice_paused_blocks_create_invoice() {
             &MaybeBytes::None,
             &MaybeBytes::None,
             &0,
+            &MaybeAddress::None,
         )
         .unwrap_err()
         .unwrap();
@@ -261,7 +265,7 @@ fn scenario_invoice_pause_unpause_full_lifecycle_recovers() {
 
     // Pause and confirm mark_paid is blocked
     f.invoice.pause(&f.admin);
-    assert!(f.invoice.try_mark_paid(&f.admin, &inv_id, &payer).is_err());
+    assert!(f.invoice.try_mark_paid(&f.admin, &inv_id, &payer, &MaybeBytes::None, &MaybeAddress::None).is_err());
 
     // Compliance and treasury remain operational
     let sid = f.treasury.propose_settlement(&f.admin, &f.merchant, &10_000_000);
@@ -272,7 +276,7 @@ fn scenario_invoice_pause_unpause_full_lifecycle_recovers() {
 
     // Unpause invoice; full lifecycle completes
     f.invoice.unpause(&f.admin);
-    f.invoice.mark_paid(&f.admin, &inv_id, &payer);
+    f.invoice.mark_paid(&f.admin, &inv_id, &payer, &MaybeBytes::None, &MaybeAddress::None);
     assert_eq!(f.invoice.get_invoice(&inv_id).status, InvoiceStatus::Paid);
 
     // Treasury execution also succeeds
@@ -340,7 +344,7 @@ fn scenario_treasury_paused_invoice_and_compliance_unaffected() {
     f.treasury.pause(&f.admin);
 
     // Invoice operations are unaffected — mark_paid succeeds
-    let mark_result = f.invoice.try_mark_paid(&f.admin, &inv_id, &payer);
+    let mark_result = f.invoice.try_mark_paid(&f.admin, &inv_id, &payer, &MaybeBytes::None, &MaybeAddress::None);
     assert!(
         mark_result.is_ok(),
         "mark_paid must succeed when only treasury is paused"
@@ -375,7 +379,7 @@ fn scenario_treasury_pause_unpause_full_lifecycle_recovers() {
     // Invoice and compliance remain usable
     let inv_id = create_pending_invoice(&f);
     let payer = Address::generate(&f.env);
-    f.invoice.mark_paid(&f.admin, &inv_id, &payer);
+    f.invoice.mark_paid(&f.admin, &inv_id, &payer, &MaybeBytes::None, &MaybeAddress::None);
     assert_eq!(f.invoice.get_invoice(&inv_id).status, InvoiceStatus::Paid);
 
     // Unpause treasury
@@ -414,7 +418,7 @@ fn scenario_compliance_paused_blocks_new_allow_so_gate_rejects() {
 
     // Step 1 – invoice workflow succeeds (unrelated to compliance)
     let inv_id = create_pending_invoice(&f);
-    f.invoice.mark_paid(&f.admin, &inv_id, &payer);
+    f.invoice.mark_paid(&f.admin, &inv_id, &payer, &MaybeBytes::None, &MaybeAddress::None);
     assert_eq!(f.invoice.get_invoice(&inv_id).status, InvoiceStatus::Paid);
 
     // Step 2 – propose treasury settlement (treasury doesn't consult compliance)
@@ -554,7 +558,7 @@ fn scenario_compliance_paused_block_address_is_permitted() {
     f.compliance.pause(&f.admin);
 
     // block_address is allowed even while paused (emergency policy)
-    let block_result = f.compliance.try_block_address(&f.admin, &f.merchant);
+    let block_result = f.compliance.try_block_address(&f.admin, &f.merchant, &None);
     assert!(
         block_result.is_ok(),
         "block_address must succeed even when compliance is paused"

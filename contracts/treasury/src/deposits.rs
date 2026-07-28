@@ -1,4 +1,7 @@
-use crate::{require_admin, require_not_paused, DataKey, TreasuryContract};
+use crate::{
+    require_admin, require_not_paused, DataKey, TreasuryContract, TreasuryContractArgs,
+    TreasuryContractClient,
+};
 use soroban_sdk::{contractimpl, token, Address, Env, Symbol, Vec};
 
 #[contractimpl]
