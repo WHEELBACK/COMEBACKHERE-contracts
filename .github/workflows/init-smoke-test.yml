@@ -1,0 +1,64 @@
+name: Init Contracts Smoke Test
+
+on:
+  pull_request:
+    paths:
+      - "contracts/**"
+      - "scripts/init-contracts.sh"
+      - ".github/workflows/init-smoke-test.yml"
+  push:
+    branches: [main]
+    paths:
+      - "contracts/**"
+      - "scripts/init-contracts.sh"
+
+env:
+  CARGO_TERM_COLOR: always
+  STELLAR_CLI_VERSION: "20.0.0"
+
+jobs:
+  init-smoke-test:
+    runs-on: ubuntu-latest
+
+    services:
+      stellar:
+        image: stellar/quickstart:latest
+        ports:
+          - 8000:8000
+        env:
+          ENABLE_SOROBAN_RPC: "true"
+          NETWORK: local
+        options: >-
+          --health-cmd "curl -sf http://localhost:8000/health"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 20
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.95.0"
+          targets: wasm32-unknown-unknown
+
+      - name: Install Stellar CLI (pinned)
+        run: cargo install --locked stellar-cli --version "$STELLAR_CLI_VERSION"
+
+      - name: Cache Cargo dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry/
+            ~/.cargo/git/
+            target/
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-
+
+      - name: Run init-contracts.sh
+        run: bash scripts/init-contracts.sh
+
+      - name: Run cargo test --all
+        run: cargo test --all
