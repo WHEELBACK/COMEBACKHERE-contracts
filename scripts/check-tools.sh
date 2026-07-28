@@ -43,7 +43,7 @@ fi
 
 # stellar --version output format: "stellar 20.0.0 (build-date)"
 STELLAR_VERSION=$(stellar --version | awk '{print $2}')
-if [[ "$STELLAR_VERSION" != "$REQUIRED_STELLAR_CLI"* ]]; then
+if [ "$STELLAR_VERSION" != "$REQUIRED_STELLAR_CLI" ]; then
     echo "❌ Error: stellar-cli version $REQUIRED_STELLAR_CLI is required (found $STELLAR_VERSION)."
     echo "   Update via: cargo install --locked stellar-cli --version $REQUIRED_STELLAR_CLI"
     exit 1

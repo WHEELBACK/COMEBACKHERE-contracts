@@ -6,6 +6,7 @@ on:
 
 env:
   CARGO_TERM_COLOR: always
+  STELLAR_CLI_VERSION: "20.0.0"
 
 jobs:
   wasm-build:
@@ -18,6 +19,17 @@ jobs:
         with:
           toolchain: "1.95.0"
           targets: wasm32-unknown-unknown
+
+      - name: Install Stellar CLI (pinned)
+        run: cargo install --locked stellar-cli --version "$STELLAR_CLI_VERSION"
+
+      - name: Verify Stellar CLI version
+        run: |
+          INSTALLED=$(stellar --version | awk '{print $2}')
+          if [ "$INSTALLED" != "$STELLAR_CLI_VERSION" ]; then
+            echo "Expected stellar-cli $STELLAR_CLI_VERSION, got $INSTALLED"
+            exit 1
+          fi
 
       - name: Cache Cargo dependencies
         uses: actions/cache@v4
