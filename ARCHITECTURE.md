@@ -1,3 +1,5 @@
+> **Glossary:** For definitions of terms used throughout this document and the contract READMEs, see [`docs/GLOSSARY.md`](docs/GLOSSARY.md).
+
 ## Contract Size Budget
 
 The CI size gate (`contract-size.yml`) rejects any compiled WASM that exceeds **65 536 bytes (64 KiB)**.
