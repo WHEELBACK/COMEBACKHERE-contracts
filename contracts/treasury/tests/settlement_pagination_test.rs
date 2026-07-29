@@ -1,6 +1,11 @@
 use soroban_sdk::{testutils::Address as _, Address, Env};
 use treasury::{SettlementStatus, TreasuryContract, TreasuryContractClient};
 
+// Same order of magnitude as MAX_BATCH_EXPIRE_INSTRUCTIONS in
+// contracts/invoice/tests/invoice_load_test.rs — get_pending_settlements_page
+// is a read-only scan, so this is a generous ceiling, not a tight one.
+const PAGE_INSTRUCTION_BUDGET: u64 = 100_000_000;
+
 fn setup_with_settlements(env: &Env, n: u64) -> (TreasuryContractClient, Address) {
     let admin = Address::generate(env);
     let contract_id = env.register_contract(None, TreasuryContract);
@@ -180,4 +185,65 @@ fn interspersed_start_exceeds_pending_not_total() {
     // 3 pending (ids 1,3,5), request start=3 → 0 remaining
     let page = client.get_pending_settlements_page(&3, &5);
     assert_eq!(page.len(), 0);
+}
+
+// ── Stress: extreme start/limit values ────────────────────────────────────
+//
+// get_pending_settlements_page, this test file, and the future
+// export_snapshot_page (#47) all need boundary coverage at very large
+// start/limit values, not just "one past the end". The pagination loop is
+// internally bounded by the actual settlement count rather than by `limit`
+// (see contracts/treasury/src/settlements.rs), so these values must return
+// cleanly rather than panicking or scanning proportionally to the input.
+
+#[test]
+fn start_far_beyond_total_count_returns_empty_not_panic() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, _) = setup_with_settlements(&env, 5);
+
+    let page = client.get_pending_settlements_page(&u64::MAX, &10);
+    assert_eq!(page.len(), 0);
+}
+
+#[test]
+fn start_and_limit_both_at_u64_max_returns_empty_not_panic() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, _) = setup_with_settlements(&env, 5);
+
+    let page = client.get_pending_settlements_page(&u64::MAX, &u64::MAX);
+    assert_eq!(page.len(), 0);
+}
+
+#[test]
+fn limit_of_u64_max_returns_all_pending_and_stays_under_instruction_budget() {
+    let env = Env::default();
+    env.mock_all_auths();
+    env.cost_estimate().budget().reset_unlimited();
+    let (client, _) = setup_with_settlements(&env, 50);
+
+    env.cost_estimate().budget().reset_tracker();
+    let page = client.get_pending_settlements_page(&0, &u64::MAX);
+    let instructions = env.cost_estimate().budget().cpu_instruction_cost();
+
+    assert_eq!(page.len(), 50);
+    assert!(
+        instructions <= PAGE_INSTRUCTION_BUDGET,
+        "get_pending_settlements_page(0, u64::MAX) over 50 settlements used \
+         {instructions} instructions, expected <= {PAGE_INSTRUCTION_BUDGET}"
+    );
+}
+
+#[test]
+fn mid_range_start_with_limit_of_u64_max_returns_remaining_suffix() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, _) = setup_with_settlements(&env, 10);
+
+    let page = client.get_pending_settlements_page(&7, &u64::MAX);
+    assert_eq!(page.len(), 3);
+    assert_eq!(page.get(0).unwrap().id, 8);
+    assert_eq!(page.get(1).unwrap().id, 9);
+    assert_eq!(page.get(2).unwrap().id, 10);
 }

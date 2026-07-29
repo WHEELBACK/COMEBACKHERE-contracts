@@ -22,10 +22,7 @@ pub enum TreasuryError {
     SettlementOnHold = 15,
     DisputeNotExpired = 16,
     AlreadyOnHold = 17,
-    /// A cross-contract call into Compliance returned non-compliant, or the
-    /// call itself failed. Callers should map compliance-gate failures here
-    /// instead of panicking or reusing `Unauthorized`. See #74.
-    ComplianceCheckFailed = 18,
+    ThresholdUnreachable = 18,
 }
 
 // Issue #48: reason codes attached to a held settlement; None means not on hold
@@ -151,7 +148,9 @@ pub fn require_authorized_signer(env: &Env, signer: &Address) {
 /// used for settlement, dispute, and rotation approvals.
 pub fn record_approval(env: &Env, approvals: &mut Vec<Address>, weight: &mut u32, signer: &Address) {
     if !approvals.contains(signer) {
-        *weight += signer_weight(env, signer);
+        *weight = weight
+            .checked_add(signer_weight(env, signer))
+            .unwrap_or_else(|| panic!("WeightOverflow"));
         approvals.push_back(signer.clone());
     }
 }

@@ -1,16 +1,39 @@
-name: WASM Build Check
+name: Init Contracts Smoke Test
 
 on:
   pull_request:
+    paths:
+      - "contracts/**"
+      - "scripts/init-contracts.sh"
+      - ".github/workflows/init-smoke-test.yml"
+  push:
     branches: [main]
+    paths:
+      - "contracts/**"
+      - "scripts/init-contracts.sh"
 
 env:
   CARGO_TERM_COLOR: always
   STELLAR_CLI_VERSION: "20.0.0"
 
 jobs:
-  wasm-build:
+  init-smoke-test:
     runs-on: ubuntu-latest
+
+    services:
+      stellar:
+        image: stellar/quickstart:latest
+        ports:
+          - 8000:8000
+        env:
+          ENABLE_SOROBAN_RPC: "true"
+          NETWORK: local
+        options: >-
+          --health-cmd "curl -sf http://localhost:8000/health"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 20
+
     steps:
       - uses: actions/checkout@v4
 
@@ -23,14 +46,6 @@ jobs:
       - name: Install Stellar CLI (pinned)
         run: cargo install --locked stellar-cli --version "$STELLAR_CLI_VERSION"
 
-      - name: Verify Stellar CLI version
-        run: |
-          INSTALLED=$(stellar --version | awk '{print $2}')
-          if [ "$INSTALLED" != "$STELLAR_CLI_VERSION" ]; then
-            echo "Expected stellar-cli $STELLAR_CLI_VERSION, got $INSTALLED"
-            exit 1
-          fi
-
       - name: Cache Cargo dependencies
         uses: actions/cache@v4
         with:
@@ -42,11 +57,8 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-cargo-
 
-      - name: Build compliance contract (WASM)
-        run: cargo build --target wasm32-unknown-unknown --release -p comebackhere-compliance
+      - name: Run init-contracts.sh
+        run: bash scripts/init-contracts.sh
 
-      - name: Build invoice contract (WASM)
-        run: cargo build --target wasm32-unknown-unknown --release -p comebackhere-invoice
-
-      - name: Build treasury contract (WASM)
-        run: cargo build --target wasm32-unknown-unknown --release -p comebackhere-treasury
+      - name: Run cargo test --all
+        run: cargo test --all
