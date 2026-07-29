@@ -118,3 +118,96 @@ make update-abi-snapshots
 # or
 just snapshot
 ```
+
+---
+
+## Adding a new contract to the workspace
+
+Follow these steps in order. Each step references the file(s) to edit.
+
+### 1. Create the crate
+
+```sh
+mkdir -p contracts/<name>/src
+```
+
+Add a minimal `contracts/<name>/Cargo.toml`:
+
+```toml
+[package]
+name = "comebackhere-<name>"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+soroban-sdk = { workspace = true }
+```
+
+### 2. Register in the workspace (`Cargo.toml`)
+
+Add `"contracts/<name>"` to the `members` array in the root `Cargo.toml`:
+
+```toml
+[workspace]
+members = [
+    ...
+    "contracts/<name>",
+]
+```
+
+### 3. Claim an error-code range (`deny.toml` + source)
+
+Error-code ranges are documented in the **Error-Code Ranges per Contract** table in `ARCHITECTURE.md` (see also issue #73). The current allocations are:
+
+| Contract | Range |
+|---|---|
+| `invoice` | 1–21 |
+| `treasury` | 1–17 |
+| `compliance` | 1–4 |
+
+Because each contract has its own `#[contracterror]` enum the numeric ranges are per-contract, not global. Pick a starting range that leaves room for growth and document it in `ARCHITECTURE.md` under **Error-Code Ranges per Contract**. Append new variants only — never renumber existing ones.
+
+`deny.toml` itself needs no change for a new contract; it governs dependency licenses and advisories, not error codes. Verify `cargo deny check` still passes after adding any new dependencies.
+
+### 4. Update CI workflows
+
+**`build.yml`** — add an explicit build step for the new contract:
+
+```yaml
+- name: Build <name> contract (WASM)
+  run: cargo build --target wasm32-unknown-unknown --release -p comebackhere-<name>
+```
+
+**`contract-size.yml`** — no change needed; the loop over `contracts/*/` picks up new contracts automatically.
+
+**`test.yml`** — no change needed; `cargo test --workspace` covers all workspace members.
+
+### 5. Update documentation
+
+- **`README.md`** — add a row to the contract table:
+
+  ```markdown
+  | `<name>` | One-line description of what the contract does |
+  ```
+
+- **`ARCHITECTURE.md`** — add:
+  - A row in the **Contracts** table.
+  - A **DataKey Storage Reference** section for the new contract.
+  - A row in the **Error-Code Ranges per Contract** table with the chosen range.
+  - Any new cross-contract call edges in the **Cross-Contract Call Map**.
+
+- **`contracts/<name>/README.md`** — create a README following the same structure as the existing contract READMEs (entrypoints table, auth, params, returns, errors, CLI examples).
+
+### 6. Pre-merge checklist
+
+- [ ] `cargo fmt --all` passes
+- [ ] `cargo clippy -- -D warnings` passes
+- [ ] `cargo test --workspace` passes
+- [ ] `cargo deny check` passes
+- [ ] ABI snapshots regenerated if the new contract exposes a public interface
+- [ ] All documentation steps above completed
