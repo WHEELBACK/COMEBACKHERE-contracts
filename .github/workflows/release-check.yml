@@ -1,0 +1,25 @@
+name: Changelog Release Check
+
+on:
+  push:
+    tags:
+      - "v*"
+
+jobs:
+  changelog-check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check [Unreleased] section is non-empty
+        run: |
+          # Extract content between [Unreleased] and the next versioned heading
+          unreleased=$(awk '/^## \[Unreleased\]/{found=1; next} found && /^## \[/{exit} found{print}' CHANGELOG.md \
+            | grep -v '^\s*$' || true)
+
+          if [ -z "$unreleased" ]; then
+            echo "::error::CHANGELOG.md [Unreleased] section is empty. Add release notes before tagging."
+            exit 1
+          fi
+
+          echo "✓ [Unreleased] section has content — release tag is valid."

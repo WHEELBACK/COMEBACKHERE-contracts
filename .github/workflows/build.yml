@@ -31,16 +31,10 @@ jobs:
             exit 1
           fi
 
-      - name: Cache Cargo dependencies
-        uses: actions/cache@v4
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@v2
         with:
-          path: |
-            ~/.cargo/registry/
-            ~/.cargo/git/
-            target/
-          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: |
-            ${{ runner.os }}-cargo-
+          key: build
 
       - name: Build compliance contract (WASM)
         run: cargo build --target wasm32-unknown-unknown --release -p comebackhere-compliance

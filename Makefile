@@ -1,10 +1,13 @@
-.PHONY: build test fmt lint check audit check-enum-ordering
+.PHONY: build test test-integration fmt lint check audit check-enum-ordering
 
 build:
 	cargo build
 
 test:
 	cargo test
+
+test-integration:
+	cargo test -p tests
 
 fmt:
 	cargo fmt --all
