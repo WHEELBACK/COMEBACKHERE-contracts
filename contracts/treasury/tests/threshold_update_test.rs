@@ -27,7 +27,7 @@ fn admin_can_update_threshold() {
 }
 
 #[test]
-#[should_panic(expected = "ThresholdUnreachable")]
+#[should_panic(expected = "Error(Contract, #18)")]
 fn threshold_above_total_weight_is_rejected() {
     let env = Env::default();
     env.mock_all_auths();

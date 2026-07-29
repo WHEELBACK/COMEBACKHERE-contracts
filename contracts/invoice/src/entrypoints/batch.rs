@@ -8,8 +8,6 @@ use crate::{
     BatchInvoiceParams, DataKey, Invoice, InvoiceContract, InvoiceContractArgs,
     InvoiceContractClient, InvoiceError, InvoiceStatus, MaybeAddress, MAX_BATCH_EXPIRE,
 };
-#[allow(unused_imports)]
-use crate::{InvoiceContractArgs, InvoiceContractClient};
 use soroban_sdk::{contractimpl, Address, Env, Vec};
 
 #[contractimpl]

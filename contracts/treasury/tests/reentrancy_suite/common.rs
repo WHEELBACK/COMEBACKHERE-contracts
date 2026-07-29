@@ -1,6 +1,6 @@
 //! Small helpers shared by the reentrancy suite's per-entrypoint modules.
 
-use soroban_sdk::{Address, Env, Vec};
+use soroban_sdk::{testutils::Address as _, Address, Env, Vec};
 use treasury::{TreasuryContract, TreasuryContractClient};
 
 /// Initialise a treasury with `threshold` and mock all auths.

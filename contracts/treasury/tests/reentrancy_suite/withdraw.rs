@@ -80,13 +80,10 @@ fn withdraw_reentrancy_with_sufficient_balance_drains_twice() {
 
     token.set_callback_target(&CallbackTarget::Withdraw, &treasury_id);
 
-    // First call withdraws once AND triggers a re-entry that withdraws a
-    // second time, draining the user's internal balance to zero.
-    client.withdraw(&user, &token_id, &amount);
+    let result = client.try_withdraw(&user, &token_id, &amount);
+    assert!(result.is_err(), "reentrant withdraw should abort");
 
-    // Both transfers' bookkeeping have run, so the malicious ledger shows
-    // the user received `2 * amount` and the treasury shed `2 * amount`.
-    assert_eq!(client.get_balance(&user), 0);
-    assert_eq!(token.balance(&user), amount * 2);
-    assert_eq!(token.balance(&treasury_id), amount * 2);
+    assert_eq!(client.get_balance(&user), amount * 2);
+    assert_eq!(token.balance(&user), 0);
+    assert_eq!(token.balance(&treasury_id), amount * 4);
 }

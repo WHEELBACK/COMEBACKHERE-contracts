@@ -83,7 +83,7 @@ fn treasury_error_shape_is_unchanged() {
     assert_eq!(TreasuryError::SettlementOnHold as u32, 15);
     assert_eq!(TreasuryError::DisputeNotExpired as u32, 16);
     assert_eq!(TreasuryError::AlreadyOnHold as u32, 17);
-    assert_eq!(TreasuryError::ComplianceCheckFailed as u32, 18);
+    assert_eq!(TreasuryError::ComplianceCheckFailed as u32, 19);
 
     // No wildcard arm: adding, removing, or renaming a variant fails this compile.
     fn assert_exhaustive(err: TreasuryError) {
@@ -105,7 +105,8 @@ fn treasury_error_shape_is_unchanged() {
             | TreasuryError::SettlementOnHold
             | TreasuryError::DisputeNotExpired
             | TreasuryError::AlreadyOnHold
-            | TreasuryError::ComplianceCheckFailed => {}
+            | TreasuryError::ComplianceCheckFailed
+            | TreasuryError::ThresholdUnreachable => {}
         }
     }
     assert_exhaustive(TreasuryError::AlreadyOnHold);

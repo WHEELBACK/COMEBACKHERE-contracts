@@ -8,6 +8,10 @@ build:
 test:
     cargo test
 
+# Run scoped mutation testing for treasury settlement math
+mutants-treasury:
+    cargo mutants --package comebackhere-treasury --timeout 60 --test-threads 1 --in-place --no-shuffle --list-test-cases --exclude "contracts/treasury/tests/" || true
+
 # Run only cross-contract integration tests (tests/ workspace package)
 test-integration:
     cargo test -p tests

@@ -74,13 +74,15 @@ fn execute_settlement_reentrancy_demonstrates_cei_violation_double_payout() {
 
     let merchant = Address::generate(&env);
     let sid = client.propose_settlement(&admin, &merchant, &amount);
-    token.set_execute_settlement_params(&admin, sid);
+    token.set_execute_settlement_params(&admin, &sid);
 
-    client.execute_settlement(&admin, &sid, &token_id);
+    let result = client.try_execute_settlement(&admin, &sid, &token_id);
+    assert!(result.is_err(), "reentrant execute_settlement should abort");
 
-    // Both transfers' bookkeeping have run.
-    assert_eq!(token.balance(&merchant), 2 * amount);
-    assert_eq!(token.balance(&treasury_id), -amount);
+    assert_eq!(token.balance(&merchant), 0);
+    assert_eq!(token.balance(&treasury_id), amount);
+    let settlement = client.get_settlement(&sid);
+    assert_eq!(settlement.status, SettlementStatus::Pending);
 }
 
 #[test]
@@ -103,7 +105,7 @@ fn execute_settlement_reentrancy_status_is_settled_once() {
 
     let merchant = Address::generate(&env);
     let sid = client.propose_settlement(&admin, &merchant, &amount);
-    token.set_execute_settlement_params(&admin, sid);
+    token.set_execute_settlement_params(&admin, &sid);
 
     // Pre-state: the settlement was just proposed, so it must still be
     // `Pending` before execution. Without reentry or any execution the
@@ -114,11 +116,9 @@ fn execute_settlement_reentrancy_status_is_settled_once() {
         SettlementStatus::Pending
     );
 
-    client.execute_settlement(&admin, &sid, &token_id);
+    let result = client.try_execute_settlement(&admin, &sid, &token_id);
+    assert!(result.is_err(), "reentrant execute_settlement should abort");
 
     let settlement = client.get_settlement(&sid);
-    // Status must have flipped out of `Pending` (proves execution ran,
-    // including its reentry chain), and must have settled to `Executed`.
-    assert_ne!(settlement.status, SettlementStatus::Pending);
-    assert_eq!(settlement.status, SettlementStatus::Executed);
+    assert_eq!(settlement.status, SettlementStatus::Pending);
 }
