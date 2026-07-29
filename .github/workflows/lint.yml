@@ -19,5 +19,10 @@ jobs:
           toolchain: "1.95.0"
           components: clippy
 
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: lint
+
       - name: Run clippy
         run: cargo clippy --workspace -- -D warnings
