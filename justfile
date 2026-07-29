@@ -8,6 +8,10 @@ build:
 test:
     cargo test
 
+# Run only cross-contract integration tests (tests/ workspace package)
+test-integration:
+    cargo test -p tests
+
 # Format all code
 fmt:
     cargo fmt --all
