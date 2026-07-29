@@ -5,8 +5,8 @@ use crate::validation::{
 };
 use crate::{append_history, pending_index_add, pending_index_remove};
 use crate::{
-    BatchInvoiceParams, DataKey, Invoice, InvoiceContract, InvoiceError, InvoiceStatus,
-    MaybeAddress, MAX_BATCH_EXPIRE,
+    BatchInvoiceParams, DataKey, Invoice, InvoiceContract, InvoiceContractArgs,
+    InvoiceContractClient, InvoiceError, InvoiceStatus, MaybeAddress, MAX_BATCH_EXPIRE,
 };
 #[allow(unused_imports)]
 use crate::{InvoiceContractArgs, InvoiceContractClient};

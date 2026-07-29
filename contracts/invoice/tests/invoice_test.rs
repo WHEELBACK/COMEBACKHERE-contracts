@@ -637,8 +637,9 @@ fn test_release_escrow_transitions_paid_to_released() {
         &MaybeBytes::None,
         &MaybeBytes::None,
         &0,
+        &MaybeAddress::None,
     );
-    client.mark_paid(&admin, &id, &payer);
+    client.mark_paid(&admin, &id, &payer, &MaybeBytes::None, &MaybeAddress::None);
     client.release_escrow(&admin, &id);
     assert_eq!(client.get_invoice(&id).status, InvoiceStatus::Released);
 }
@@ -655,6 +656,7 @@ fn test_cancel_invoice_transitions_to_cancelled() {
         &MaybeBytes::None,
         &MaybeBytes::None,
         &0,
+        &MaybeAddress::None,
     );
     client.cancel_invoice(&merchant, &invoice_id);
     let invoice = client.get_invoice(&invoice_id);
@@ -678,6 +680,7 @@ fn test_cancelled_invoice_cannot_be_marked_paid() {
         &MaybeBytes::None,
         &MaybeBytes::None,
         &0,
+        &MaybeAddress::None,
     );
     client.cancel_invoice(&merchant, &invoice_id);
     let err = client
@@ -921,7 +924,9 @@ fn test_mark_paid_blocked_when_paused() {
         &MaybeAddress::None,
     );
     client.pause(&admin);
-    assert!(client.try_mark_paid(&admin, &id, &payer).is_err());
+    assert!(client
+        .try_mark_paid(&admin, &id, &payer, &MaybeBytes::None, &MaybeAddress::None)
+        .is_err());
 }
 
 // Issue #94: create_invoice must enforce merchant authorization.
@@ -965,6 +970,7 @@ fn test_invoice_create_to_expired_flow() {
         &MaybeBytes::None,
         &MaybeBytes::None,
         &0,
+        &MaybeAddress::None,
     );
     env.ledger().with_mut(|li| {
         li.timestamp = client.get_invoice(&id).expires_at + 1;
@@ -1029,6 +1035,7 @@ fn test_invoice_create_to_paid_escrow_flow() {
         &MaybeBytes::None,
         &MaybeBytes::None,
         &0,
+        &MaybeAddress::None,
     );
     client.mark_paid(&admin, &id, &payer, &MaybeBytes::None, &MaybeAddress::None);
     let paid = client.get_invoice(&id);

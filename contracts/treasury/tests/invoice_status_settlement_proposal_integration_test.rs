@@ -1,4 +1,6 @@
-use invoice::{InvoiceContract, InvoiceContractClient, InvoiceError, InvoiceStatus, MaybeBytes};
+use invoice::{
+    InvoiceContract, InvoiceContractClient, InvoiceStatus, MaybeAddress, MaybeBytes,
+};
 use soroban_sdk::{
     contract, contracterror, contractimpl,
     testutils::{Address as _, Ledger},
@@ -81,7 +83,7 @@ fn settlement_proposal_succeeds_when_invoice_paid() {
     let (env, admin, merchant, invoice_id, invoice, treasury_id, _treasury, wf_id) = setup();
     let payer = Address::generate(&env);
     let inv_id = invoice
-        .try_create_invoice(&merchant, &10_000_000, &10_250_000, &3600, &MaybeBytes::None, &MaybeBytes::None, &0)
+        .try_create_invoice(&merchant, &10_000_000, &10_250_000, &3600, &MaybeBytes::None, &MaybeBytes::None, &0, &MaybeAddress::None)
         .unwrap()
         .unwrap();
     assert!(invoice
@@ -129,7 +131,7 @@ fn settlement_proposal_rejected_when_invoice_released() {
     let (env, admin, merchant, invoice_id, invoice, treasury_id, _treasury, wf_id) = setup();
     let payer = Address::generate(&env);
     let inv_id = invoice
-        .try_create_invoice(&merchant, &10_000_000, &10_250_000, &3600, &MaybeBytes::None, &MaybeBytes::None, &0)
+        .try_create_invoice(&merchant, &10_000_000, &10_250_000, &3600, &MaybeBytes::None, &MaybeBytes::None, &0, &MaybeAddress::None)
         .unwrap()
         .unwrap();
     assert!(invoice
@@ -156,7 +158,7 @@ fn settlement_proposal_boundary_at_expiry_transition() {
     let (env, admin, merchant, invoice_id, invoice, treasury_id, _treasury, wf_id) = setup();
     let payer = Address::generate(&env);
     let inv_id = invoice
-        .try_create_invoice(&merchant, &10_000_000, &10_250_000, &1, &MaybeBytes::None, &MaybeBytes::None, &0)
+        .try_create_invoice(&merchant, &10_000_000, &10_250_000, &1, &MaybeBytes::None, &MaybeBytes::None, &0, &MaybeAddress::None)
         .unwrap()
         .unwrap();
     let inv = invoice.get_invoice(&inv_id);

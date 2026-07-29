@@ -96,7 +96,7 @@ fn setup() -> Fixture {
     // Deploy treasury contract; threshold=1 so the proposer's single vote is enough
     let treasury_id = env.register_contract(None, TreasuryContract);
     let treasury = TreasuryContractClient::new(&env, &treasury_id);
-    treasury.initialize(&admin, &1);
+    treasury.initialize(&admin, &1, &soroban_sdk::Vec::new(&env));
 
     // Deploy stub token
     let token_id = env.register_contract(None, StubToken);
@@ -165,7 +165,7 @@ fn execution_blocked_when_merchant_blocked_after_proposal() {
     let sid = f.treasury.propose_settlement(&f.admin, &f.merchant, &10_000_000);
 
     // Simulate a compliance event: merchant is blocked *after* proposal
-    f.compliance.block_address(&f.admin, &f.merchant);
+    f.compliance.block_address(&f.admin, &f.merchant, &None);
     assert!(
         !f.compliance.is_allowed(&f.merchant),
         "merchant must be blocked before execution attempt"
@@ -236,7 +236,7 @@ fn execution_succeeds_after_block_is_cleared() {
     let sid = f.treasury.propose_settlement(&f.admin, &f.merchant, &10_000_000);
 
     // Block mid-flight
-    f.compliance.block_address(&f.admin, &f.merchant);
+    f.compliance.block_address(&f.admin, &f.merchant, &None);
 
     // First attempt fails
     let workflow = ComplianceGatedWorkflowClient::new(&f.env, &f.workflow_id);
