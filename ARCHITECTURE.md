@@ -173,6 +173,19 @@ Each contract defines error codes via a `#[contracterror]` enum. New variants **
 
 ---
 
+## Shared Crates — Types, Not Storage
+
+The two shared crates (`crates/multisig` and `crates/protocol-errors`) provide types and error definitions that are imported by the contracts. They are **not deployed contracts** and have **no DataKeys or on-chain storage of their own**.
+
+| Crate | What it provides | Storage |
+|---|---|---|
+| `crates/multisig` | `SettlementHoldReason` enum, multisig helper types | None |
+| `crates/protocol-errors` | Shared error type utilities | None |
+
+If you are looking for where a type like `SettlementHoldReason` is stored on-chain, look at the **Treasury** DataKey table above (`Settlement(u64)` embeds it). The crates themselves are compile-time dependencies only.
+
+---
+
 ## Cross-Contract Call Map
 
 ```
@@ -232,3 +245,29 @@ amount, and release timestamp. Consumers must process events in ledger/event
 order, checkpoint their position, and deduplicate replayed events. The current
 state can be reconciled with `get_invoice` or the `batch_get_invoice_status`
 entrypoint.
+
+---
+
+## Storage Migration Strategy
+
+Soroban has no automatic storage migration. Once a `#[contracttype]` struct is deployed, changing its fields is a breaking change for any data already written under that type.
+
+### Intended approach
+
+**Additive-only field changes** are the default strategy:
+- New fields must be wrapped in `Option<T>` so that existing stored values (which lack the field) deserialise without error.
+- Removing or reordering fields is forbidden after mainnet deployment.
+- Renaming a field is equivalent to removing the old one and adding a new one — treat it as a breaking change.
+
+**Explicit migration entrypoint** (when additive-only is insufficient):
+- Add a `migrate(admin: Address)` entrypoint that reads records under the old schema, transforms them, and writes them under the new schema.
+- Gate it with `require_auth` on `admin` and a one-time `Migrated` instance-storage flag so it cannot be called twice.
+- The entrypoint should be removed (or made a no-op) in a subsequent release once migration is confirmed complete on-chain.
+
+### Per-contract notes
+
+| Contract | Current risk | Notes |
+|---|---|---|
+| Invoice | `Invoice` struct has grown incrementally; all new fields are `Option<T>` | Follow additive-only going forward |
+| Treasury | `Settlement` and `Dispute` structs embed `SettlementHoldReason` from `crates/multisig` | Adding variants to `SettlementHoldReason` is safe; removing or renumbering is not |
+| Compliance | Minimal stored types (`bool`, `u64`) | Low migration risk |
