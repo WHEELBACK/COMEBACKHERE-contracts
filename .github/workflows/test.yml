@@ -29,6 +29,15 @@ jobs:
       - name: Run tests
         run: cargo test --workspace
 
+      - name: Check test snapshot drift
+        run: |
+          snapshot_status="$(git status --porcelain -- ':(glob)**/test_snapshots/*.json' ':(glob)**/tests/snapshots/*.snap')"
+          if [ -n "$snapshot_status" ]; then
+            echo "$snapshot_status"
+            echo "Test snapshots changed during CI. Regenerate and commit the matching snapshots."
+            exit 1
+          fi
+
   # Non-blocking early-warning job: runs the same suite against whatever
   # Rust currently reports as "stable", so a breakage caused by an upcoming
   # toolchain bump surfaces here before rust-toolchain.toml is ever touched.

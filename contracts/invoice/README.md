@@ -51,6 +51,67 @@ that checkpoint after interruptions, and deduplicate by transaction and event
 position. The current invoice remains queryable on-chain; the event stream is the
 source for a complete chronological audit trail.
 
+## CLI usage examples
+
+Replace `$INVOICE_CONTRACT`, `$ADMIN`, `$MERCHANT`, `$PAYER`, and `$NETWORK` with your deployed values.
+
+### initialize
+
+```sh
+stellar contract invoke \
+  --id $INVOICE_CONTRACT \
+  --source $ADMIN \
+  --network $NETWORK \
+  -- initialize \
+  --admin $ADMIN
+```
+
+### create_invoice
+
+```sh
+stellar contract invoke \
+  --id $INVOICE_CONTRACT \
+  --source $MERCHANT \
+  --network $NETWORK \
+  -- create_invoice \
+  --merchant $MERCHANT \
+  --amount_usdc 10000000 \
+  --gross_usdc 10500000 \
+  --expires_in_seconds 86400 \
+  --metadata_hash null \
+  --payment_link_hash null \
+  --merchant_nonce 1
+```
+
+Returns the new invoice ID (`u64`).
+
+### mark_paid
+
+```sh
+stellar contract invoke \
+  --id $INVOICE_CONTRACT \
+  --source $ADMIN \
+  --network $NETWORK \
+  -- mark_paid \
+  --admin $ADMIN \
+  --id 0 \
+  --payer $PAYER
+```
+
+### release_escrow
+
+```sh
+stellar contract invoke \
+  --id $INVOICE_CONTRACT \
+  --source $ADMIN \
+  --network $NETWORK \
+  -- release_escrow \
+  --admin $ADMIN \
+  --id 0
+```
+
+---
+
 ## Amount validation fuzzing
 
 The `fuzz/amount_precision` cargo-fuzz target exercises arbitrary invoice amounts,

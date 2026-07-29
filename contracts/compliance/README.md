@@ -18,6 +18,45 @@ The Compliance contract manages an allowlist of addresses permitted to interact 
 | `pause` | `admin` | `admin: Address` | `Result<(), ContractError>` | `Unauthorized` |
 | `unpause` | `admin` | `admin: Address` | `Result<(), ContractError>` | `Unauthorized` |
 
+## CLI usage examples
+
+Replace `$COMPLIANCE_CONTRACT`, `$ADMIN`, `$ADDRESS`, and `$NETWORK` with your deployed values.
+
+### initialize
+
+```sh
+stellar contract invoke \
+  --id $COMPLIANCE_CONTRACT \
+  --source $ADMIN \
+  --network $NETWORK \
+  -- initialize \
+  --admin $ADMIN
+```
+
+### allow_address
+
+```sh
+stellar contract invoke \
+  --id $COMPLIANCE_CONTRACT \
+  --source $ADMIN \
+  --network $NETWORK \
+  -- allow_address \
+  --admin $ADMIN \
+  --address $ADDRESS
+```
+
+### is_allowed
+
+```sh
+stellar contract invoke \
+  --id $COMPLIANCE_CONTRACT \
+  --network $NETWORK \
+  -- is_allowed \
+  --address $ADDRESS
+```
+
+---
+
 ## `is_allowed` precedence
 
 `is_allowed` evaluates state in a fixed order, and **Blocked overrides Allowed**:

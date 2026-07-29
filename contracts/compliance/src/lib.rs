@@ -55,7 +55,15 @@ pub enum ContractError {
     ContractPaused = 2,
     AlreadyInitialized = 3,
     BatchTooLarge = 4,
+    AddressIndexFull = 5,
 }
+
+/// Upper bound on the number of distinct addresses tracked in `DataKey::AddressIndex`.
+/// Once reached, operations that would track a *new* address are rejected with
+/// [`ContractError::AddressIndexFull`] instead of growing the index further — this
+/// caps unbounded storage-rent growth. Existing tracked addresses are unaffected.
+/// See `track_address`.
+const MAX_TRACKED_ADDRESSES: u32 = 50_000;
 
 /// Maximum number of addresses accepted per batch admin call, consistent with
 /// the batch caps used elsewhere in the workspace (see #8/#21/#29).

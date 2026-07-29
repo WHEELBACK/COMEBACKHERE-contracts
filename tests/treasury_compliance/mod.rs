@@ -98,7 +98,7 @@ fn blocked_merchant_settlement_rejected() {
     let (env, admin, merchant, compliance_cid, compliance, treasury_cid, _treasury, wf_id) =
         setup();
     compliance.allow_address(&admin, &merchant);
-    compliance.block_address(&admin, &merchant);
+    compliance.block_address(&admin, &merchant, &None);
     assert!(!compliance.is_allowed(&merchant));
 
     let err = TreasuryComplianceWorkflowClient::new(&env, &wf_id)

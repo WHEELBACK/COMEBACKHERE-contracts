@@ -1,6 +1,6 @@
 use crate::{
     require_admin, DataKey, Settlement, SettlementHoldReason, SettlementStatus, TreasuryContract,
-    TreasuryError,
+    TreasuryContractArgs, TreasuryContractClient, TreasuryError,
 };
 #[allow(unused_imports)]
 use crate::{TreasuryContractArgs, TreasuryContractClient};

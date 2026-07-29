@@ -1,6 +1,13 @@
-use crate::{require_admin, DataKey, RotationStatus, SignerRotationProposal, TreasuryContract};
+use crate::{
+    require_admin, DataKey, RotationStatus, SignerRotationProposal, TreasuryContract,
+    TreasuryContractArgs, TreasuryContractClient,
+};
 use multisig::{meets_threshold, record_approval, require_authorized_signer, signer_weight};
 use soroban_sdk::{contractimpl, Address, Env, Symbol, Vec};
+
+/// Minimum seconds a signer must wait between successive `propose_signer_rotation`
+/// calls, to prevent a compromised/malicious signer from spamming rotation proposals.
+const ROTATION_PROPOSAL_COOLDOWN: u64 = 60 * 60;
 
 #[contractimpl]
 impl TreasuryContract {

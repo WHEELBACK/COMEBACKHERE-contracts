@@ -1,9 +1,7 @@
 use compliance::{ComplianceContract, ComplianceContractClient};
-use settlement_workflow::{
-    SettlementWorkflowContract, SettlementWorkflowContractClient, WorkflowError,
-};
+use settlement_workflow::{SettlementWorkflowContract, SettlementWorkflowContractClient};
 use soroban_sdk::{testutils::Address as _, token, Address, Env};
-use treasury::{TreasuryContract, TreasuryContractClient};
+use treasury::{TreasuryContract, TreasuryContractClient, TreasuryError};
 
 fn setup() -> (
     Env,
@@ -79,7 +77,7 @@ fn execution_blocked_when_compliance_returns_false() {
         )
         .unwrap_err()
         .unwrap();
-    assert_eq!(err, WorkflowError::ComplianceFailed);
+    assert_eq!(err, TreasuryError::ComplianceCheckFailed);
     assert_eq!(token::Client::new(&env, &token_id).balance(&merchant), 0);
 }
 

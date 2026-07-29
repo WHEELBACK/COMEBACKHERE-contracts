@@ -1,6 +1,7 @@
 #![no_std]
 
 use compliance::ComplianceContractClient;
+use multisig::TreasuryError;
 use soroban_sdk::{Address, Env};
 
 /// Thin ergonomic wrapper over the generated compliance contract client.
@@ -30,6 +31,14 @@ impl<'a> ComplianceClient<'a> {
         } else {
             Err(error)
         }
+    }
+
+    /// Convert a failed compliance check into `TreasuryError::ComplianceCheckFailed`,
+    /// following the same `From`-conversion shape established in `protocol-errors` (#72),
+    /// so callers get a well-typed treasury error instead of an ad-hoc panic! or a
+    /// generic `Unauthorized`.
+    pub fn require_allowed_for_treasury(&self, address: &Address) -> Result<(), TreasuryError> {
+        self.require_allowed(address, TreasuryError::ComplianceCheckFailed)
     }
 }
 
@@ -105,5 +114,29 @@ mod tests {
             compliance.require_allowed(&denied, TreasuryError::UnauthorizedSigner),
             Err(TreasuryError::UnauthorizedSigner)
         );
+    }
+
+    #[test]
+    fn require_allowed_for_treasury_maps_compliance_gate_failure() {
+        use crate::ComplianceClient;
+        use ::compliance::ComplianceContract;
+        use multisig::TreasuryError as RealTreasuryError;
+
+        let env = Env::default();
+        env.mock_all_auths();
+        let admin = Address::generate(&env);
+        let merchant = Address::generate(&env);
+
+        let contract_id = env.register_contract(None, ComplianceContract);
+        let client = ComplianceClient::new(&env, &contract_id);
+        client.initialize(&admin);
+
+        assert_eq!(
+            client.require_allowed_for_treasury(&merchant),
+            Err(RealTreasuryError::ComplianceCheckFailed)
+        );
+
+        client.allow_address(&admin, &merchant);
+        assert_eq!(client.require_allowed_for_treasury(&merchant), Ok(()));
     }
 }

@@ -1,11 +1,12 @@
 use crate::events::{self, InvoiceAmountUpdatedEvent};
 use crate::validation::{
-    require_admin, require_expiry_not_too_long, require_not_paused, require_positive_amount,
-    require_usdc_precision, require_valid_payment_link_hash,
+    require_admin, require_expiry_not_too_long, require_hash_not_too_long, require_not_paused,
+    require_positive_amount, require_usdc_precision, require_valid_payment_link_hash,
 };
 use crate::{append_history, pending_index_add, pending_index_remove};
 use crate::{
-    DataKey, Invoice, InvoiceContract, InvoiceError, InvoiceStatus, MaybeAddress, MaybeBytes,
+    DataKey, Invoice, InvoiceContract, InvoiceContractArgs, InvoiceContractClient, InvoiceError,
+    InvoiceStatus, MaybeAddress, MaybeBytes,
 };
 use soroban_sdk::{contractimpl, Address, Env, Vec};
 
@@ -33,6 +34,8 @@ impl InvoiceContract {
         require_positive_amount(amount_usdc, gross_usdc)?;
         // #57: USDC decimal precision guardrail
         require_usdc_precision(amount_usdc, gross_usdc)?;
+        require_hash_not_too_long(&metadata_hash)?;
+        require_hash_not_too_long(&payment_link_hash)?;
         // #16: payment_link_hash must be exactly 32 bytes when provided
         require_valid_payment_link_hash(&payment_link_hash)?;
 
@@ -87,15 +90,19 @@ impl InvoiceContract {
             .set(&DataKey::Invoice(id), &invoice);
         env.storage().instance().set(&DataKey::InvoiceCount, &id);
 
-        // #9: maintain merchant invoice index
-        let idx_key = DataKey::MerchantInvoices(merchant.clone());
-        let mut ids: Vec<u64> = env
+        let merchant_count_key = DataKey::MerchantInvoiceCount(merchant.clone());
+        let merchant_count: u64 = env
             .storage()
             .persistent()
-            .get(&idx_key)
-            .unwrap_or(Vec::new(&env));
-        ids.push_back(id);
-        env.storage().persistent().set(&idx_key, &ids);
+            .get(&merchant_count_key)
+            .unwrap_or(0);
+        env.storage().persistent().set(
+            &DataKey::MerchantInvoiceIndex(merchant.clone(), merchant_count),
+            &id,
+        );
+        env.storage()
+            .persistent()
+            .set(&merchant_count_key, &(merchant_count + 1));
 
         pending_index_add(&env, id);
         events::invoice_created(&env, id, &invoice);
@@ -438,17 +445,20 @@ impl InvoiceContract {
         start: u32,
         limit: u32,
     ) -> Vec<u64> {
-        let ids: Vec<u64> = env
+        let total: u64 = env
             .storage()
             .persistent()
-            .get(&DataKey::MerchantInvoices(merchant))
-            .unwrap_or(Vec::new(&env));
-        let total = ids.len();
-        let start = start.min(total);
-        let end = (start + limit).min(total);
+            .get(&DataKey::MerchantInvoiceCount(merchant.clone()))
+            .unwrap_or(0);
+        let start = u64::from(start).min(total);
+        let end = start.saturating_add(u64::from(limit)).min(total);
         let mut page = Vec::new(&env);
         for i in start..end {
-            page.push_back(ids.get(i).unwrap());
+            if let Some(id) = env.storage().persistent().get::<DataKey, u64>(
+                &DataKey::MerchantInvoiceIndex(merchant.clone(), i),
+            ) {
+                page.push_back(id);
+            }
         }
         page
     }

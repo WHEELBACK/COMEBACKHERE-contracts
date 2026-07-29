@@ -8,9 +8,6 @@
     "get_invoice_status",
     "batch_get_invoice_status",
     "get_invoices_page",
-    "get_invoice_count",
-    "get_pending_ids",
-    "get_invoices_by_merchant",
     "cancel_invoice",
     "amend_invoice",
     "request_refund",
@@ -22,9 +19,8 @@
     "unpause",
     "set_grace_window",
     "get_grace_window",
-    "transfer_admin",
-    "accept_admin",
-    "extend_expiry"
+    "release_escrow",
+    "approve_refund"
   ],
   "events": [
     "invoice_created",
@@ -32,12 +28,11 @@
     "invoice_expired",
     "invoice_cancelled",
     "invoice_refund_requested",
-    "refund_approved",
-    "refund_rejected",
     "escrow_released",
     "invoice_amended",
     "invoice_expiry_extended",
     "contract_paused",
-    "contract_unpaused"
+    "contract_unpaused",
+    "refund_approved"
   ]
 }

@@ -1,12 +1,12 @@
 use crate::events;
 use crate::validation::{
-    require_admin, require_expiry_not_too_long, require_not_paused, require_positive_amount,
-    require_usdc_precision, require_valid_payment_link_hash,
+    require_admin, require_expiry_not_too_long, require_hash_not_too_long, require_not_paused,
+    require_positive_amount, require_usdc_precision, require_valid_payment_link_hash,
 };
 use crate::{append_history, pending_index_add, pending_index_remove};
 use crate::{
-    BatchInvoiceParams, DataKey, Invoice, InvoiceContract, InvoiceError, InvoiceStatus,
-    MaybeAddress, MAX_BATCH_EXPIRE,
+    BatchInvoiceParams, DataKey, Invoice, InvoiceContract, InvoiceContractArgs,
+    InvoiceContractClient, InvoiceError, InvoiceStatus, MaybeAddress, MAX_BATCH_EXPIRE,
 };
 #[allow(unused_imports)]
 use crate::{InvoiceContractArgs, InvoiceContractClient};
@@ -30,6 +30,8 @@ impl InvoiceContract {
         for p in params.iter() {
             require_positive_amount(p.amount_usdc, p.gross_usdc)?;
             require_usdc_precision(p.amount_usdc, p.gross_usdc)?;
+            require_hash_not_too_long(&p.metadata_hash)?;
+            require_hash_not_too_long(&p.payment_link_hash)?;
             require_valid_payment_link_hash(&p.payment_link_hash)?;
             if p.expires_in_seconds == 0 {
                 return Err(InvoiceError::ZeroDuration);
@@ -96,14 +98,19 @@ impl InvoiceContract {
                 );
             }
 
-            let idx_key = DataKey::MerchantInvoices(merchant.clone());
-            let mut merchant_ids: Vec<u64> = env
+            let merchant_count_key = DataKey::MerchantInvoiceCount(merchant.clone());
+            let merchant_count: u64 = env
                 .storage()
                 .persistent()
-                .get(&idx_key)
-                .unwrap_or(Vec::new(&env));
-            merchant_ids.push_back(id);
-            env.storage().persistent().set(&idx_key, &merchant_ids);
+                .get(&merchant_count_key)
+                .unwrap_or(0);
+            env.storage().persistent().set(
+                &DataKey::MerchantInvoiceIndex(merchant.clone(), merchant_count),
+                &id,
+            );
+            env.storage()
+                .persistent()
+                .set(&merchant_count_key, &(merchant_count + 1));
 
             pending_index_add(&env, id);
             events::invoice_created(&env, id, &invoice);
