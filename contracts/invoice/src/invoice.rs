@@ -10,6 +10,9 @@ pub const MAX_BATCH_SIZE: u32 = 50;
 /// Maximum number of invoice IDs accepted by batch_expire per call.
 pub const MAX_BATCH_EXPIRE: u32 = 100;
 
+/// Maximum bytes accepted for optional invoice hash fields.
+pub const MAX_HASH_BYTES: u32 = 64;
+
 #[contracterror]
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 #[repr(u32)]
@@ -48,6 +51,8 @@ pub enum InvoiceError {
     CooldownActive = 21,
     /// InvoiceCount overflow would wrap the next invoice ID.
     InvoiceCountOverflow = 22,
+    /// metadata_hash or payment_link_hash exceeds MAX_HASH_BYTES.
+    HashTooLong = 23,
 }
 
 #[contracttype]
@@ -134,8 +139,10 @@ pub enum DataKey {
     GraceWindow,
     /// Tracks used merchant nonces: (merchant_address, nonce) → bool.
     MerchantNonce(Address, u64),
-    /// Secondary index: merchant address → Vec<u64> of invoice IDs.
-    MerchantInvoices(Address),
+    /// Count of invoices created by a merchant.
+    MerchantInvoiceCount(Address),
+    /// Secondary index: (merchant address, zero-based position) → invoice ID.
+    MerchantInvoiceIndex(Address, u64),
     /// Ordered audit log of status transitions for an invoice.
     InvoiceHistory(u64),
     /// Global set of pending invoice IDs for efficient expiry enumeration.

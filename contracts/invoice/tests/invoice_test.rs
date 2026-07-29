@@ -4,7 +4,7 @@ use invoice::{
 };
 use soroban_sdk::{
     testutils::{Address as _, Events, Ledger},
-    vec, Address, Env, Symbol, TryFromVal,
+    vec, Address, Bytes, Env, Symbol, TryFromVal,
 };
 
 extern crate std;
@@ -1131,6 +1131,147 @@ fn test_nonce_cannot_be_reused_after_cancellation() {
         .unwrap_err()
         .unwrap();
     assert_eq!(err, InvoiceError::DuplicateNonce);
+}
+
+#[test]
+fn test_oversized_metadata_hash_rejected() {
+    let (env, _admin, client) = setup();
+    let merchant = Address::generate(&env);
+    let hash = Bytes::from_slice(&env, &[1; 65]);
+
+    let err = client
+        .try_create_invoice(
+            &merchant,
+            &10_000_000,
+            &10_000_000,
+            &3600,
+            &MaybeBytes::Some(hash),
+            &MaybeBytes::None,
+            &0,
+            &MaybeAddress::None,
+        )
+        .unwrap_err()
+        .unwrap();
+
+    assert_eq!(err, InvoiceError::HashTooLong);
+}
+
+#[test]
+fn test_oversized_payment_link_hash_rejected() {
+    let (env, _admin, client) = setup();
+    let merchant = Address::generate(&env);
+    let hash = Bytes::from_slice(&env, &[2; 65]);
+
+    let err = client
+        .try_create_invoice(
+            &merchant,
+            &10_000_000,
+            &10_000_000,
+            &3600,
+            &MaybeBytes::None,
+            &MaybeBytes::Some(hash),
+            &0,
+            &MaybeAddress::None,
+        )
+        .unwrap_err()
+        .unwrap();
+
+    assert_eq!(err, InvoiceError::HashTooLong);
+}
+
+#[test]
+fn test_valid_32_byte_hashes_accepted() {
+    let (env, _admin, client) = setup();
+    let merchant = Address::generate(&env);
+    let metadata_hash = Bytes::from_slice(&env, &[1; 32]);
+    let payment_link_hash = Bytes::from_slice(&env, &[2; 32]);
+
+    let id = client.create_invoice(
+        &merchant,
+        &10_000_000,
+        &10_000_000,
+        &3600,
+        &MaybeBytes::Some(metadata_hash.clone()),
+        &MaybeBytes::Some(payment_link_hash.clone()),
+        &0,
+        &MaybeAddress::None,
+    );
+    let invoice = client.get_invoice(&id);
+
+    assert_eq!(invoice.metadata_hash, MaybeBytes::Some(metadata_hash));
+    assert_eq!(invoice.payment_link_hash, MaybeBytes::Some(payment_link_hash));
+}
+
+#[test]
+fn test_get_invoices_by_merchant_paginates() {
+    let (env, _admin, client) = setup();
+    let merchant = Address::generate(&env);
+    let other_merchant = Address::generate(&env);
+
+    let first = client.create_invoice(
+        &merchant,
+        &10_000_000,
+        &10_000_000,
+        &3600,
+        &MaybeBytes::None,
+        &MaybeBytes::None,
+        &0,
+        &MaybeAddress::None,
+    );
+    client.create_invoice(
+        &other_merchant,
+        &10_000_000,
+        &10_000_000,
+        &3600,
+        &MaybeBytes::None,
+        &MaybeBytes::None,
+        &0,
+        &MaybeAddress::None,
+    );
+    let second = client.create_invoice(
+        &merchant,
+        &20_000_000,
+        &20_000_000,
+        &3600,
+        &MaybeBytes::None,
+        &MaybeBytes::None,
+        &0,
+        &MaybeAddress::None,
+    );
+    let third = client.create_invoice(
+        &merchant,
+        &30_000_000,
+        &30_000_000,
+        &3600,
+        &MaybeBytes::None,
+        &MaybeBytes::None,
+        &0,
+        &MaybeAddress::None,
+    );
+
+    assert_eq!(
+        client.get_invoices_by_merchant(&merchant, &0, &2),
+        vec![&env, first, second]
+    );
+    assert_eq!(
+        client.get_invoices_by_merchant(&merchant, &2, &2),
+        vec![&env, third]
+    );
+    assert_eq!(
+        client.get_invoices_by_merchant(&merchant, &3, &2),
+        vec![&env]
+    );
+}
+
+#[test]
+fn test_get_invoices_by_merchant_empty_for_new_merchant() {
+    let (env, _admin, client) = setup();
+    let merchant = Address::generate(&env);
+
+    assert_eq!(
+        client.get_invoices_by_merchant(&merchant, &0, &10),
+        vec![&env]
+    );
 }
 
 #[test]
