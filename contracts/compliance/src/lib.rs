@@ -1,3 +1,24 @@
+//! Compliance contract — admin-managed allowlist and blocklist for the COMEBACKHERE protocol.
+//!
+//! # Module layout
+//!
+//! All types, storage keys, error codes, and entrypoint logic live in this single file.
+//! A refactor to split the data types and `DataKey` variants into a dedicated `allowlist.rs`
+//! submodule was drafted (see issue #43 / branch `docs/protocol-glossary-and-compliance-stub-intent`)
+//! but has been deferred pending owner sign-off. Until that split lands, `allowlist.rs` does
+//! **not** exist in this crate — this file is the sole source of truth. Do not create a
+//! stub `allowlist.rs` without completing the migration described in #43.
+//!
+//! # Contract responsibilities
+//!
+//! - Maintain a per-address allow/block state under [`DataKey::Allowed`] / [`DataKey::Blocked`].
+//! - Support time-bound allowances via [`DataKey::AllowedUntil`].
+//! - Expose [`ComplianceContract::is_allowed`] as the compliance gate read by `SettlementWorkflow`.
+//! - Admin operations (allow, block, clear, pause) are gated on [`DataKey::Admin`] auth.
+//!
+//! See `contracts/compliance/README.md` for the full entrypoint reference and `is_allowed`
+//! precedence rules, and `docs/GLOSSARY.md` for term definitions.
+
 #![no_std]
 
 use soroban_sdk::{
@@ -6,31 +27,59 @@ use soroban_sdk::{
 
 #[contracttype]
 #[derive(Clone)]
+/// Storage key enum for the compliance contract.
+///
+/// These variants were intended to move to a dedicated `allowlist.rs` submodule
+/// (see issue #43). Until that refactor lands they remain here. Add new variants
+/// at the end only — reordering breaks any stored data keyed by ordinal position.
 pub enum DataKey {
+    /// The active administrator address (instance storage).
     Admin,
+    /// Staged address for the two-step admin transfer (`transfer_admin` / `accept_admin`).
     PendingAdmin,
+    /// Reserved for a future operator role; not yet used by any entrypoint.
     Operator,
+    /// Persistent flag: address is on the protocol allowlist.
     Allowed(Address),
+    /// Persistent flag: address is blocked; overrides `Allowed` in `is_allowed`.
     Blocked(Address),
+    /// Optional UNIX timestamp after which a temporary allow expires.
     AllowedUntil(Address),
+    /// Optional UNIX timestamp after which an auto-expiring block is lifted.
     BlockedUntil(Address),
+    /// Optional human-readable reason stored when an address is blocked.
     BlockReason(Address),
+    /// Monotonically incrementing schema version; used for future migrations.
     SchemaVersion,
+    /// Circuit-breaker flag — when `true`, administrative mutations are rejected.
     Paused,
+    /// Index of all tracked addresses for `export_snapshot`; bounded by `MAX_TRACKED_ADDRESSES`.
     AddressIndex,
+    /// Running count of addresses that have ever been allowed.
     AllowCount,
+    /// Running count of addresses that have ever been blocked.
     BlockCount,
+    /// Reserved for a future tiered-compliance model; not yet used by any entrypoint.
     Tier(Address),
 }
 
+/// Coarse classification of an address's compliance state.
+///
+/// Returned by internal helpers; external callers should prefer [`AddressStatus`] or
+/// the `is_allowed` / `is_blocked` entrypoints for authoritative state.
 #[contracttype]
 #[derive(Clone, PartialEq, Debug)]
 pub enum AddressState {
     Allowed,
     Blocked,
+    /// A time-bound allow or block whose expiry timestamp has passed.
     Expired,
 }
 
+/// Legacy error enum retained for on-chain backwards compatibility.
+///
+/// `ComplianceError` predates `ContractError`. It must not be renumbered.
+/// New error variants belong in [`ContractError`], not here.
 #[contracterror]
 #[derive(Clone, Copy, Debug, PartialEq)]
 #[repr(u32)]
@@ -38,15 +87,28 @@ pub enum ComplianceError {
     AlreadyInitialized = 1,
 }
 
+/// Rich compliance status for a single address, returned by `address_status`.
+///
+/// Aggregates the raw storage flags into a single queryable struct so callers
+/// do not need to call `is_allowed` and `is_blocked` separately.
 #[contracttype]
 #[derive(Clone, Debug, PartialEq)]
 pub struct AddressStatus {
+    /// Whether the address has an active `Allowed` entry.
     pub allowed: bool,
+    /// Whether the address has an active `Blocked` entry.
     pub blocked: bool,
+    /// The `AllowedUntil` expiry timestamp, if a temporary allow was set.
     pub expires_at: Option<u64>,
+    /// Computed result equivalent to calling `is_allowed` — factors in block,
+    /// expiry, and precedence rules.
     pub is_currently_allowed: bool,
 }
 
+/// Primary error type for the compliance contract.
+///
+/// Variants must only be appended at the end (highest numeric value) to preserve
+/// on-chain backwards compatibility. Range: 1..=5 (see `ARCHITECTURE.md`).
 #[contracterror]
 #[derive(Copy, Clone, Debug, PartialEq)]
 #[repr(u32)]
