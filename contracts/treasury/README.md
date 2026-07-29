@@ -37,6 +37,64 @@ The Treasury contract manages funds and settlements using a multi-signature appr
 | `hold_settlement` | `admin` | `admin: Address, settlement_id: u64, reason: SettlementHoldReason` | `()` | `Unauthorized`, `SettlementNotFound`, `AlreadyExecuted` |
 | `release_hold` | `admin` | `admin: Address, settlement_id: u64` | `()` | `Unauthorized`, `SettlementNotFound`, `NotOnHold` |
 
+## CLI usage examples
+
+Replace `$TREASURY_CONTRACT`, `$ADMIN`, `$SIGNER`, `$MERCHANT`, `$TOKEN`, and `$NETWORK` with your deployed values.
+
+### initialize
+
+```sh
+stellar contract invoke \
+  --id $TREASURY_CONTRACT \
+  --source $ADMIN \
+  --network $NETWORK \
+  -- initialize \
+  --admin $ADMIN \
+  --threshold 2
+```
+
+### propose_settlement
+
+```sh
+stellar contract invoke \
+  --id $TREASURY_CONTRACT \
+  --source $SIGNER \
+  --network $NETWORK \
+  -- propose_settlement \
+  --signer $SIGNER \
+  --merchant_address $MERCHANT \
+  --amount 10000000
+```
+
+Returns the new settlement ID (`u64`).
+
+### approve_settlement
+
+```sh
+stellar contract invoke \
+  --id $TREASURY_CONTRACT \
+  --source $SIGNER2 \
+  --network $NETWORK \
+  -- approve_settlement \
+  --signer $SIGNER2 \
+  --settlement_id 0
+```
+
+### execute_settlement
+
+```sh
+stellar contract invoke \
+  --id $TREASURY_CONTRACT \
+  --source $SIGNER \
+  --network $NETWORK \
+  -- execute_settlement \
+  --signer $SIGNER \
+  --settlement_id 0 \
+  --token_contract $TOKEN
+```
+
+---
+
 ## Settlement Hold Reasons
 
 `SettlementHoldReason` (defined in `crates/multisig/src/lib.rs`) is attached to a settlement via `hold_settlement` and cleared via `release_hold`. It records why a settlement was paused so operators and auditors can see which off-chain process is responsible for lifting the hold.
