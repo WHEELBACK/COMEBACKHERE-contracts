@@ -107,7 +107,7 @@ fn bench_large_signer_set_proposal_and_approval() {
     let contract_id = env.register_contract(None, TreasuryContract);
     let client = TreasuryContractClient::new(&env, &contract_id);
     client.initialize(&admin, &signer_count, &soroban_sdk::Vec::new(&env));
-    client.set_signer(&admin, &admin, &signer_count / 2);
+    client.set_signer(&admin, &admin, &(signer_count / 2));
 
     // Register 50 signers with weight 1
     let signers = register_signers(&client, &admin, &env, signer_count);

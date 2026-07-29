@@ -6,7 +6,11 @@
 //! later.
 
 use compliance::{ComplianceContract, ComplianceContractClient};
-use soroban_sdk::{contract, contractimpl, testutils::Address as _, Address, Env};
+use soroban_sdk::{
+    contract, contractimpl,
+    testutils::{Address as _, Events},
+    Address, Env,
+};
 use treasury::{TreasuryContract, TreasuryContractClient};
 
 // ── testutils events no longer accumulate across separate top-level calls ──

@@ -40,20 +40,13 @@ fn withdraw_all_reentrancy_malicious_token_drains_twice() {
     token.set_callback_target(&CallbackTarget::WithdrawAll, &treasury_id);
     token.set_withdraw_all_params(&admin, &recipient);
 
-    client.withdraw_all(&admin, &token_id, &recipient);
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        client.withdraw_all(&admin, &token_id, &recipient);
+    }));
+    assert!(result.is_err(), "reentrant withdraw_all should abort");
 
-    // Inner + outer drain: recipient receives twice the balance.
-    assert_eq!(token.balance(&recipient), 2 * amount);
-    // Treasury's malicious-ledger balance goes negative (overdraft).
-    assert_eq!(token.balance(&treasury_id), -amount);
-    // NOTE: `withdraw_all` does not have a CEI ordering hazard in the
-    // same sense as the other entrypoints because it doesn't write any
-    // treasury-side state — it only reads the external token balance,
-    // transfers, and emits an event. The double-drain demonstrated here
-    // is purely a property of an attacker-controlled token that allows
-    // overdraft; a real SEP-41 contract would panic with
-    // `InsufficientBalance` on the second `transfer` and roll the
-    // whole transaction back.
+    assert_eq!(token.balance(&recipient), 0);
+    assert_eq!(token.balance(&treasury_id), amount);
 }
 
 #[test]

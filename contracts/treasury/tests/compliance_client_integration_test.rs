@@ -43,8 +43,6 @@ impl TestToken {
     }
 }
 
-use test_token::{TestToken, TestTokenClient};
-
 // ─── Settlement Workflow using compliance-client ─────────────────────────────
 
 #[contract]
@@ -85,11 +83,8 @@ struct TestContext {
     env: Env,
     admin: Address,
     merchant: Address,
-    treasury: TreasuryContractClient<'static>,
     treasury_id: Address,
-    compliance: ComplianceClient<'static>,
     compliance_id: Address,
-    token: TestTokenClient<'static>,
     token_id: Address,
     workflow_id: Address,
 }
@@ -125,11 +120,8 @@ fn setup() -> TestContext {
         env,
         admin,
         merchant,
-        treasury,
         treasury_id,
-        compliance,
         compliance_id,
-        token,
         token_id,
         workflow_id,
     }
@@ -142,17 +134,19 @@ fn setup() -> TestContext {
 fn settlement_proceeds_when_compliance_passing_via_compliance_client() {
     let ctx = setup();
 
+    let compliance = ComplianceClient::new(&ctx.env, &ctx.compliance_id);
+    let treasury = TreasuryContractClient::new(&ctx.env, &ctx.treasury_id);
+    let token = TestTokenClient::new(&ctx.env, &ctx.token_id);
+
     // Allow the merchant
-    ctx.compliance.allow_address(&ctx.admin, &ctx.merchant);
-    assert!(ctx.compliance.is_allowed(&ctx.merchant));
+    compliance.allow_address(&ctx.admin, &ctx.merchant);
+    assert!(compliance.is_allowed(&ctx.merchant));
 
     // Create settlement
-    let settlement_id = ctx
-        .treasury
-        .propose_settlement(&ctx.admin, &ctx.merchant, &10_000_000);
+    let settlement_id = treasury.propose_settlement(&ctx.admin, &ctx.merchant, &10_000_000);
 
     // Fund treasury
-    ctx.token.mint(&ctx.treasury_id, &10_000_000);
+    token.mint(&ctx.treasury_id, &10_000_000);
 
     let wf = ComplianceGatedSettlementClient::new(&ctx.env, &ctx.workflow_id);
 
@@ -166,13 +160,10 @@ fn settlement_proceeds_when_compliance_passing_via_compliance_client() {
     );
 
     // Settlement executed and merchant paid
-    let settlement = ctx.treasury.get_settlement(&settlement_id);
+    let settlement = treasury.get_settlement(&settlement_id);
     assert_eq!(settlement.status, SettlementStatus::Executed);
-    assert_eq!(ctx.token.balance(&ctx.merchant), 10_000_000);
-    assert_eq!(
-        ctx.treasury.get_settlement(&settlement_id).status,
-        SettlementStatus::Executed
-    );
+    assert_eq!(token.balance(&ctx.merchant), 10_000_000);
+    assert_eq!(treasury.get_settlement(&settlement_id).status, SettlementStatus::Executed);
 }
 
 /// Compliance failure: merchant not allowed → settlement rejected.
@@ -180,12 +171,13 @@ fn settlement_proceeds_when_compliance_passing_via_compliance_client() {
 fn settlement_rejected_when_merchant_not_allowed_via_compliance_client() {
     let ctx = setup();
 
-    // Merchant is NOT allowed (default-deny)
-    let settlement_id = ctx
-        .treasury
-        .propose_settlement(&ctx.admin, &ctx.merchant, &10_000_000);
+    let treasury = TreasuryContractClient::new(&ctx.env, &ctx.treasury_id);
+    let token = TestTokenClient::new(&ctx.env, &ctx.token_id);
 
-    ctx.token.mint(&ctx.treasury_id, &10_000_000);
+    // Merchant is NOT allowed (default-deny)
+    let settlement_id = treasury.propose_settlement(&ctx.admin, &ctx.merchant, &10_000_000);
+
+    token.mint(&ctx.treasury_id, &10_000_000);
 
     let wf = ComplianceGatedSettlementClient::new(&ctx.env, &ctx.workflow_id);
 
@@ -202,8 +194,8 @@ fn settlement_rejected_when_merchant_not_allowed_via_compliance_client() {
     assert!(result.is_err(), "expected compliance failure panic");
 
     // Merchant received nothing
-    assert_eq!(ctx.token.balance(&ctx.merchant), 0);
-    let settlement = ctx.treasury.get_settlement(&settlement_id);
+    assert_eq!(token.balance(&ctx.merchant), 0);
+    let settlement = treasury.get_settlement(&settlement_id);
     assert_eq!(settlement.status, SettlementStatus::Pending);
 }
 
@@ -212,17 +204,18 @@ fn settlement_rejected_when_merchant_not_allowed_via_compliance_client() {
 fn settlement_rejected_when_merchant_blocked_via_compliance_client() {
     let ctx = setup();
 
+let compliance = ComplianceClient::new(&ctx.env, &ctx.compliance_id);
+    let treasury = TreasuryContractClient::new(&ctx.env, &ctx.treasury_id);
+    let token = TestTokenClient::new(&ctx.env, &ctx.token_id);
+
     // Allow then block the merchant
-    ctx.compliance.allow_address(&ctx.admin, &ctx.merchant);
-    ctx.compliance
-        .block_address(&ctx.admin, &ctx.merchant, &None);
-    assert!(!ctx.compliance.is_allowed(&ctx.merchant));
+    compliance.allow_address(&ctx.admin, &ctx.merchant);
+    compliance.block_address(&ctx.admin, &ctx.merchant, &None);
+    assert!(!compliance.is_allowed(&ctx.merchant));
 
-    let settlement_id = ctx
-        .treasury
-        .propose_settlement(&ctx.admin, &ctx.merchant, &10_000_000);
+    let settlement_id = treasury.propose_settlement(&ctx.admin, &ctx.merchant, &10_000_000);
 
-    ctx.token.mint(&ctx.treasury_id, &10_000_000);
+    token.mint(&ctx.treasury_id, &10_000_000);
 
     let wf = ComplianceGatedSettlementClient::new(&ctx.env, &ctx.workflow_id);
 
@@ -239,7 +232,7 @@ fn settlement_rejected_when_merchant_blocked_via_compliance_client() {
         result.is_err(),
         "expected compliance failure for blocked merchant"
     );
-    assert_eq!(ctx.token.balance(&ctx.merchant), 0);
+    assert_eq!(token.balance(&ctx.merchant), 0);
 }
 
 /// Compliance passes when merchant is allowed with a temp allow.
@@ -247,16 +240,17 @@ fn settlement_rejected_when_merchant_blocked_via_compliance_client() {
 fn settlement_proceeds_with_temp_allow_via_compliance_client() {
     let ctx = setup();
 
+    let compliance = ComplianceClient::new(&ctx.env, &ctx.compliance_id);
+    let treasury = TreasuryContractClient::new(&ctx.env, &ctx.treasury_id);
+    let token = TestTokenClient::new(&ctx.env, &ctx.token_id);
+
     let now = ctx.env.ledger().timestamp();
-    ctx.compliance
-        .allow_address_until(&ctx.admin, &ctx.merchant, &(now + 1000));
-    assert!(ctx.compliance.is_allowed(&ctx.merchant));
+    compliance.allow_address_until(&ctx.admin, &ctx.merchant, &(now + 1000));
+    assert!(compliance.is_allowed(&ctx.merchant));
 
-    let settlement_id = ctx
-        .treasury
-        .propose_settlement(&ctx.admin, &ctx.merchant, &10_000_000);
+    let settlement_id = treasury.propose_settlement(&ctx.admin, &ctx.merchant, &10_000_000);
 
-    ctx.token.mint(&ctx.treasury_id, &10_000_000);
+    token.mint(&ctx.treasury_id, &10_000_000);
 
     let wf = ComplianceGatedSettlementClient::new(&ctx.env, &ctx.workflow_id);
 
@@ -268,8 +262,8 @@ fn settlement_proceeds_with_temp_allow_via_compliance_client() {
         &ctx.merchant,
     );
 
-    assert_eq!(ctx.token.balance(&ctx.merchant), 10_000_000);
-    let settlement = ctx.treasury.get_settlement(&settlement_id);
+    assert_eq!(token.balance(&ctx.merchant), 10_000_000);
+    let settlement = treasury.get_settlement(&settlement_id);
     assert_eq!(settlement.status, SettlementStatus::Executed);
 }
 
@@ -278,17 +272,18 @@ fn settlement_proceeds_with_temp_allow_via_compliance_client() {
 fn settlement_rejected_when_temp_allow_expired_via_compliance_client() {
     let ctx = setup();
 
+    let compliance = ComplianceClient::new(&ctx.env, &ctx.compliance_id);
+    let treasury = TreasuryContractClient::new(&ctx.env, &ctx.treasury_id);
+    let token = TestTokenClient::new(&ctx.env, &ctx.token_id);
+
     let now = ctx.env.ledger().timestamp();
     // Set temp allow that expired in the past
-    ctx.compliance
-        .allow_address_until(&ctx.admin, &ctx.merchant, &now);
-    assert!(!ctx.compliance.is_allowed(&ctx.merchant));
+    compliance.allow_address_until(&ctx.admin, &ctx.merchant, &now);
+    assert!(!compliance.is_allowed(&ctx.merchant));
 
-    let settlement_id = ctx
-        .treasury
-        .propose_settlement(&ctx.admin, &ctx.merchant, &10_000_000);
+    let settlement_id = treasury.propose_settlement(&ctx.admin, &ctx.merchant, &10_000_000);
 
-    ctx.token.mint(&ctx.treasury_id, &10_000_000);
+    token.mint(&ctx.treasury_id, &10_000_000);
 
     let wf = ComplianceGatedSettlementClient::new(&ctx.env, &ctx.workflow_id);
 
@@ -305,7 +300,7 @@ fn settlement_rejected_when_temp_allow_expired_via_compliance_client() {
         result.is_err(),
         "expected compliance failure for expired temp allow"
     );
-    assert_eq!(ctx.token.balance(&ctx.merchant), 0);
+    assert_eq!(token.balance(&ctx.merchant), 0);
 }
 
 /// check_compliance standalone test via compliance-client.
@@ -313,7 +308,8 @@ fn settlement_rejected_when_temp_allow_expired_via_compliance_client() {
 fn check_compliance_returns_ok_for_allowed_merchant_via_compliance_client() {
     let ctx = setup();
 
-    ctx.compliance.allow_address(&ctx.admin, &ctx.merchant);
+    let compliance = ComplianceClient::new(&ctx.env, &ctx.compliance_id);
+    compliance.allow_address(&ctx.admin, &ctx.merchant);
 
     let wf = ComplianceGatedSettlementClient::new(&ctx.env, &ctx.workflow_id);
 

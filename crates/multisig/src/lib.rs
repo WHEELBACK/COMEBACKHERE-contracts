@@ -23,6 +23,7 @@ pub enum TreasuryError {
     DisputeNotExpired = 16,
     AlreadyOnHold = 17,
     ThresholdUnreachable = 18,
+    ComplianceCheckFailed = 19,
 }
 
 // Issue #48: reason codes attached to a held settlement; None means not on hold

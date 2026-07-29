@@ -71,13 +71,16 @@ fn partially_execute_settlement_reentrancy_demonstrates_cei_violation() {
 
     let merchant = Address::generate(&env);
     let sid = client.propose_settlement(&admin, &merchant, &total);
-    token.set_partial_execute_params(&admin, sid, partial);
+    token.set_partial_execute_params(&admin, &sid, &partial);
 
-    client.partially_execute_settlement(&admin, &sid, &partial, &token_id);
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        client.partially_execute_settlement(&admin, &sid, &partial, &token_id);
+    }));
+    assert!(result.is_err(), "reentrant partial execution should abort");
 
-    assert_eq!(token.balance(&merchant), 2 * partial);
-    assert_eq!(token.balance(&treasury_id), total - 2 * partial);
+    assert_eq!(token.balance(&merchant), 0);
+    assert_eq!(token.balance(&treasury_id), total);
 
     let settlement = client.get_settlement(&sid);
-    assert_eq!(settlement.status, SettlementStatus::PartiallyExecuted);
+    assert_eq!(settlement.status, SettlementStatus::Pending);
 }

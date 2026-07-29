@@ -63,13 +63,12 @@ fn deposit_reentrancy_demonstrates_cei_violation_double_credit() {
     token.set_depositor(&depositor);
     token.mint(&depositor, &10_000_000);
 
-    client.deposit(&depositor, &token_id, &10_000_000);
+    let result = client.try_deposit(&depositor, &token_id, &10_000_000);
+    assert!(result.is_err(), "reentrant deposit should abort");
 
-    // Internal balance is double-credited today.
-    assert_eq!(client.get_balance(&depositor), 20_000_000);
-    // The malicious ledger allowed overdraft on the second debit.
-    assert_eq!(token.balance(&depositor), -10_000_000);
-    assert_eq!(token.balance(&treasury_id), 20_000_000);
+    assert_eq!(client.get_balance(&depositor), 0);
+    assert_eq!(token.balance(&depositor), 10_000_000);
+    assert_eq!(token.balance(&treasury_id), 0);
 }
 
 #[test]

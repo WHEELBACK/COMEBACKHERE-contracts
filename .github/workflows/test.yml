@@ -38,6 +38,24 @@ jobs:
             exit 1
           fi
 
+  mutants-treasury:
+    runs-on: ubuntu-latest
+    if: github.event_name == 'workflow_dispatch'
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.95.0"
+          targets: wasm32-unknown-unknown
+
+      - name: Install cargo-mutants
+        run: cargo install cargo-mutants
+
+      - name: Run treasury mutation tests
+        run: cargo mutants --package comebackhere-treasury --timeout 60 --test-threads 1 --in-place --no-shuffle --list-test-cases --exclude "contracts/treasury/tests/" || true
+
   # Non-blocking early-warning job: runs the same suite against whatever
   # Rust currently reports as "stable", so a breakage caused by an upcoming
   # toolchain bump surfaces here before rust-toolchain.toml is ever touched.
