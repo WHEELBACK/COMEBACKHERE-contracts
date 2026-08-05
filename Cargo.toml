@@ -17,7 +17,7 @@ license = "MIT"
 repository = "https://github.com/WHEELBACK/COMEBACKHERE-contracts"
 
 [workspace.dependencies]
-soroban-sdk = { version = "22.0.0" }
+soroban-sdk = { version = "27.0.4" }
 stellar-xdr = "0.0.18"
 
 [profile.release]
