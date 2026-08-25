@@ -808,6 +808,12 @@ fn test_abi_snapshot_matches_contract() {
         "unpause",
         "set_grace_window",
         "get_grace_window",
+        "accept_admin",
+        "extend_expiry",
+        "get_invoice_count",
+        "get_invoices_by_merchant",
+        "get_pending_ids",
+        "transfer_admin",
     ]
     .iter()
     .copied()
@@ -825,6 +831,7 @@ fn test_abi_snapshot_matches_contract() {
         "contract_paused",
         "contract_unpaused",
         "refund_approved",
+        "refund_rejected",
     ]
     .iter()
     .copied()
