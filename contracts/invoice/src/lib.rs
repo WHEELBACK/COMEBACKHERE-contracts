@@ -18,7 +18,7 @@ pub use invoice::{
     MAX_BATCH_EXPIRE, MAX_BATCH_SIZE,
 };
 
-use soroban_sdk::{contract, Address, Env, Vec};
+use soroban_sdk::{contract, Env, Vec};
 
 pub(crate) fn pending_index_add(env: &Env, id: u64) {
     let mut ids: Vec<u64> = env
