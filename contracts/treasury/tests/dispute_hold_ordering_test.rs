@@ -1,7 +1,5 @@
 use soroban_sdk::{testutils::Address as _, Address, Env};
-use treasury::{
-    SettlementHoldReason, SettlementStatus, TreasuryContract, TreasuryContractClient,
-};
+use treasury::{SettlementHoldReason, SettlementStatus, TreasuryContract, TreasuryContractClient};
 
 fn setup(env: &Env) -> (TreasuryContractClient, Address) {
     env.mock_all_auths();
@@ -23,17 +21,11 @@ fn dispute_resolved_while_hold_active_releases_to_pending() {
 
     // First, admin places a compliance hold
     client.hold_settlement(&admin, &sid, &SettlementHoldReason::ComplianceReview);
-    assert_eq!(
-        client.get_settlement(&sid).status,
-        SettlementStatus::OnHold
-    );
+    assert_eq!(client.get_settlement(&sid).status, SettlementStatus::OnHold);
 
     // Then a dispute is raised (raise_dispute won't change OnHold → OnHold, but records the dispute)
     let did = client.raise_dispute(&claimant, &sid, &merchant, &5_000_000, &500);
-    assert_eq!(
-        client.get_settlement(&sid).status,
-        SettlementStatus::OnHold
-    );
+    assert_eq!(client.get_settlement(&sid).status, SettlementStatus::OnHold);
 
     // Resolve the dispute — this should release the settlement back to Pending
     // since no other open disputes remain
@@ -57,17 +49,11 @@ fn second_dispute_keeps_hold_after_first_resolved() {
     // Two disputes raised against the same settlement
     let did_a = client.raise_dispute(&claimant_a, &sid, &merchant, &5_000_000, &500);
     let did_b = client.raise_dispute(&claimant_b, &sid, &merchant, &3_000_000, &500);
-    assert_eq!(
-        client.get_settlement(&sid).status,
-        SettlementStatus::OnHold
-    );
+    assert_eq!(client.get_settlement(&sid).status, SettlementStatus::OnHold);
 
     // Resolve dispute A — dispute B is still open so settlement stays OnHold
     client.resolve_dispute(&admin, &did_a, &true);
-    assert_eq!(
-        client.get_settlement(&sid).status,
-        SettlementStatus::OnHold
-    );
+    assert_eq!(client.get_settlement(&sid).status, SettlementStatus::OnHold);
 
     // Resolve dispute B — now no open disputes remain, settlement released
     client.resolve_dispute(&admin, &did_b, &false);
@@ -88,10 +74,7 @@ fn dispute_raised_after_hold_settlement_produces_consistent_state() {
 
     // Admin puts the settlement on hold
     client.hold_settlement(&admin, &sid, &SettlementHoldReason::FraudCheck);
-    assert_eq!(
-        client.get_settlement(&sid).status,
-        SettlementStatus::OnHold
-    );
+    assert_eq!(client.get_settlement(&sid).status, SettlementStatus::OnHold);
     assert_eq!(
         client.get_settlement(&sid).hold_reason,
         SettlementHoldReason::FraudCheck
@@ -99,10 +82,7 @@ fn dispute_raised_after_hold_settlement_produces_consistent_state() {
 
     // Dispute is raised — settlement stays OnHold
     let did = client.raise_dispute(&claimant, &sid, &merchant, &2_000_000, &500);
-    assert_eq!(
-        client.get_settlement(&sid).status,
-        SettlementStatus::OnHold
-    );
+    assert_eq!(client.get_settlement(&sid).status, SettlementStatus::OnHold);
 
     // Resolve dispute — settlement transitions to Pending
     client.resolve_dispute(&admin, &did, &true);
@@ -113,7 +93,9 @@ fn dispute_raised_after_hold_settlement_produces_consistent_state() {
 
     // Verify no double-payout: execute the settlement once
     // (We just verify the terminal state transition, no actual token transfer)
-    assert!(client.try_execute_settlement(&admin, &sid, &Address::generate(&env)).is_err());
+    assert!(client
+        .try_execute_settlement(&admin, &sid, &Address::generate(&env))
+        .is_err());
 }
 
 #[test]
@@ -131,10 +113,7 @@ fn execute_settlement_rejected_while_dispute_active() {
 
     // Raise a dispute — settlement goes OnHold
     client.raise_dispute(&claimant, &sid, &merchant, &5_000_000, &500);
-    assert_eq!(
-        client.get_settlement(&sid).status,
-        SettlementStatus::OnHold
-    );
+    assert_eq!(client.get_settlement(&sid).status, SettlementStatus::OnHold);
 
     // Attempting to execute while dispute is active should fail
     assert!(client

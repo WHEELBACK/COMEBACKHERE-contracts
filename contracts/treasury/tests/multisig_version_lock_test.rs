@@ -24,7 +24,7 @@ use treasury::{
 /// Expected version of `crates/multisig` (see its `Cargo.toml`). Bump this only
 /// alongside a review of every exhaustive match below - if they still compile,
 /// the ABI-relevant shape of multisig's types is unchanged.
-const EXPECTED_MULTISIG_VERSION: &str = "0.1.0";
+const EXPECTED_MULTISIG_VERSION: &str = "0.2.0";
 
 const MULTISIG_CARGO_TOML: &str = include_str!("../../../crates/multisig/Cargo.toml");
 
@@ -84,6 +84,20 @@ fn treasury_error_shape_is_unchanged() {
     assert_eq!(TreasuryError::DisputeNotExpired as u32, 16);
     assert_eq!(TreasuryError::AlreadyOnHold as u32, 17);
     assert_eq!(TreasuryError::ComplianceCheckFailed as u32, 19);
+    assert_eq!(TreasuryError::ArithmeticOverflow as u32, 20);
+    assert_eq!(TreasuryError::DisputeNotFound as u32, 21);
+    assert_eq!(TreasuryError::DisputeAlreadyResolved as u32, 22);
+    assert_eq!(TreasuryError::ResolutionDirectionMismatch as u32, 23);
+    assert_eq!(TreasuryError::BatchTooLarge as u32, 24);
+    assert_eq!(TreasuryError::WeightOverflow as u32, 25);
+    assert_eq!(TreasuryError::SettlementNotCancellable as u32, 26);
+    assert_eq!(TreasuryError::TtlNotElapsed as u32, 27);
+    assert_eq!(TreasuryError::AllowlistFull as u32, 28);
+    assert_eq!(TreasuryError::NotOnHold as u32, 29);
+    assert_eq!(TreasuryError::DestinationNotAllowed as u32, 30);
+    assert_eq!(TreasuryError::InsufficientBalance as u32, 31);
+    assert_eq!(TreasuryError::NotPaused as u32, 32);
+    assert_eq!(TreasuryError::RotationProposalCooldown as u32, 33);
 
     // No wildcard arm: adding, removing, or renaming a variant fails this compile.
     fn assert_exhaustive(err: TreasuryError) {
@@ -106,7 +120,21 @@ fn treasury_error_shape_is_unchanged() {
             | TreasuryError::DisputeNotExpired
             | TreasuryError::AlreadyOnHold
             | TreasuryError::ComplianceCheckFailed
-            | TreasuryError::ThresholdUnreachable => {}
+            | TreasuryError::ThresholdUnreachable
+            | TreasuryError::ArithmeticOverflow
+            | TreasuryError::DisputeNotFound
+            | TreasuryError::DisputeAlreadyResolved
+            | TreasuryError::ResolutionDirectionMismatch
+            | TreasuryError::BatchTooLarge
+            | TreasuryError::WeightOverflow
+            | TreasuryError::SettlementNotCancellable
+            | TreasuryError::TtlNotElapsed
+            | TreasuryError::AllowlistFull
+            | TreasuryError::NotOnHold
+            | TreasuryError::DestinationNotAllowed
+            | TreasuryError::InsufficientBalance
+            | TreasuryError::NotPaused
+            | TreasuryError::RotationProposalCooldown => {}
         }
     }
     assert_exhaustive(TreasuryError::AlreadyOnHold);

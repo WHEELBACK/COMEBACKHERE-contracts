@@ -133,7 +133,7 @@ fn batch_deposit_transfers_multiple_tokens_to_treasury() {
 }
 
 #[test]
-#[should_panic(expected = "InvalidAmount")]
+#[should_panic(expected = "Error(Contract, #7)")]
 fn batch_deposit_rejects_invalid_amount() {
     let env = Env::default();
     env.mock_all_auths();
@@ -182,10 +182,7 @@ fn get_balance_reflects_deposits_and_withdrawals() {
     treasury_client.withdraw(&depositor, &token_id, &partial);
 
     // Verify balance after withdrawal
-    assert_eq!(
-        treasury_client.get_balance(&depositor),
-        amount - partial
-    );
+    assert_eq!(treasury_client.get_balance(&depositor), amount - partial);
 
     // Verify unrelated address still has 0 balance
     let stranger = Address::generate(&env);

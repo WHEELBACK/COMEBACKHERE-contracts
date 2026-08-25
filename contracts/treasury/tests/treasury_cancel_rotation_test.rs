@@ -25,7 +25,7 @@ fn admin_can_cancel_pending_rotation() {
 }
 
 #[test]
-#[should_panic(expected = "RotationAlreadyExecuted")]
+#[should_panic(expected = "Error(Contract, #14)")]
 fn cancelled_rotation_cannot_be_approved() {
     let env = Env::default();
     let (client, admin) = setup(&env, 2);
@@ -42,7 +42,7 @@ fn cancelled_rotation_cannot_be_approved() {
 }
 
 #[test]
-#[should_panic(expected = "Unauthorized")]
+#[should_panic(expected = "Error(Contract, #9)")]
 fn non_admin_cannot_cancel_rotation() {
     let env = Env::default();
     let (client, admin) = setup(&env, 2);
@@ -57,7 +57,7 @@ fn non_admin_cannot_cancel_rotation() {
 }
 
 #[test]
-#[should_panic(expected = "RotationAlreadyExecuted")]
+#[should_panic(expected = "Error(Contract, #14)")]
 fn executed_rotation_cannot_be_cancelled() {
     let env = Env::default();
     let (client, admin) = setup(&env, 1);
@@ -72,7 +72,7 @@ fn executed_rotation_cannot_be_cancelled() {
 }
 
 #[test]
-#[should_panic(expected = "RotationNotFound")]
+#[should_panic(expected = "Error(Contract, #13)")]
 fn cancel_missing_rotation_panics() {
     let env = Env::default();
     let (client, admin) = setup(&env, 2);

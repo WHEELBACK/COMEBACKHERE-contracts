@@ -14,7 +14,7 @@ fn setup(env: &Env, threshold: u32) -> (TreasuryContractClient, Address, Address
 
 // Zero additional approvals: proposer's weight (1) < threshold (2) → ThresholdNotMet.
 #[test]
-#[should_panic(expected = "ThresholdNotMet")]
+#[should_panic(expected = "Error(Contract, #5)")]
 fn test_zero_additional_approvals_panics() {
     let env = Env::default();
     env.mock_all_auths();
@@ -26,7 +26,7 @@ fn test_zero_additional_approvals_panics() {
 
 // Approvals below threshold: two signers each with weight 1, threshold 3 → ThresholdNotMet.
 #[test]
-#[should_panic(expected = "ThresholdNotMet")]
+#[should_panic(expected = "Error(Contract, #5)")]
 fn test_below_threshold_panics() {
     let env = Env::default();
     env.mock_all_auths();
@@ -41,7 +41,7 @@ fn test_below_threshold_panics() {
 
 // threshold - 1 approvals: propose first, then accumulate threshold-1 approvals.
 #[test]
-#[should_panic(expected = "ThresholdNotMet")]
+#[should_panic(expected = "Error(Contract, #5)")]
 fn test_threshold_minus_one_approvals_panics() {
     let env = Env::default();
     env.mock_all_auths();
@@ -94,7 +94,7 @@ fn test_threshold_one_proposer_satisfies_alone() {
 
 // Unanimous threshold: all registered signers must approve.
 #[test]
-#[should_panic(expected = "ThresholdNotMet")]
+#[should_panic(expected = "Error(Contract, #5)")]
 fn test_unanimous_threshold_partial_approvals_panics() {
     let env = Env::default();
     env.mock_all_auths();

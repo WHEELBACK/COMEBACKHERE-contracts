@@ -61,14 +61,20 @@ mod tests {
     #[test]
     fn from_treasury_error() {
         let e = ProtocolError::from(TreasuryError::SettlementNotFound);
-        assert_eq!(e, ProtocolError::Treasury(TreasuryError::SettlementNotFound));
+        assert_eq!(
+            e,
+            ProtocolError::Treasury(TreasuryError::SettlementNotFound)
+        );
         assert_eq!(e.contract_name(), "treasury");
     }
 
     #[test]
     fn from_compliance_error() {
         let e = ProtocolError::from(ComplianceError::AlreadyInitialized);
-        assert_eq!(e, ProtocolError::Compliance(ComplianceError::AlreadyInitialized));
+        assert_eq!(
+            e,
+            ProtocolError::Compliance(ComplianceError::AlreadyInitialized)
+        );
         assert_eq!(e.contract_name(), "compliance");
     }
 

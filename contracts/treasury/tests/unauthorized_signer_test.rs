@@ -11,7 +11,7 @@ fn setup_treasury(env: &Env, threshold: u32) -> (TreasuryContractClient, Address
 }
 
 #[test]
-#[should_panic(expected = "UnauthorizedSigner")]
+#[should_panic(expected = "Error(Contract, #10)")]
 fn unauthorized_signer_cannot_propose_settlement() {
     let env = Env::default();
     let (client, _admin, _contract_id) = setup_treasury(&env, 2);
@@ -25,7 +25,7 @@ fn unauthorized_signer_cannot_propose_settlement() {
 }
 
 #[test]
-#[should_panic(expected = "UnauthorizedSigner")]
+#[should_panic(expected = "Error(Contract, #10)")]
 fn unauthorized_signer_cannot_approve_settlement() {
     let env = Env::default();
     let (client, admin, _contract_id) = setup_treasury(&env, 2);
@@ -42,7 +42,7 @@ fn unauthorized_signer_cannot_approve_settlement() {
 }
 
 #[test]
-#[should_panic(expected = "UnauthorizedSigner")]
+#[should_panic(expected = "Error(Contract, #10)")]
 fn unauthorized_signer_cannot_approve_partial_settlement() {
     let env = Env::default();
     let (client, admin, _contract_id) = setup_treasury(&env, 2);
@@ -59,7 +59,7 @@ fn unauthorized_signer_cannot_approve_partial_settlement() {
 }
 
 #[test]
-#[should_panic(expected = "UnauthorizedSigner")]
+#[should_panic(expected = "Error(Contract, #10)")]
 fn unauthorized_signer_cannot_execute_settlement() {
     let env = Env::default();
     let (client, admin, contract_id) = setup_treasury(&env, 1);
@@ -77,7 +77,7 @@ fn unauthorized_signer_cannot_execute_settlement() {
 }
 
 #[test]
-#[should_panic(expected = "UnauthorizedSigner")]
+#[should_panic(expected = "Error(Contract, #10)")]
 fn unauthorized_signer_cannot_cancel_settlement() {
     let env = Env::default();
     let (client, admin, _contract_id) = setup_treasury(&env, 2);
@@ -94,7 +94,7 @@ fn unauthorized_signer_cannot_cancel_settlement() {
 }
 
 #[test]
-#[should_panic(expected = "UnauthorizedSigner")]
+#[should_panic(expected = "Error(Contract, #10)")]
 fn unauthorized_signer_cannot_partially_execute_settlement() {
     let env = Env::default();
     let (client, admin, _contract_id) = setup_treasury(&env, 1);
@@ -112,7 +112,7 @@ fn unauthorized_signer_cannot_partially_execute_settlement() {
 }
 
 #[test]
-#[should_panic(expected = "UnauthorizedSigner")]
+#[should_panic(expected = "Error(Contract, #10)")]
 fn unauthorized_signer_cannot_vote_on_dispute_resolution() {
     let env = Env::default();
     let (client, admin, _contract_id) = setup_treasury(&env, 2);
@@ -132,7 +132,7 @@ fn unauthorized_signer_cannot_vote_on_dispute_resolution() {
 }
 
 #[test]
-#[should_panic(expected = "UnauthorizedSigner")]
+#[should_panic(expected = "Error(Contract, #10)")]
 fn unauthorized_signer_cannot_propose_signer_rotation() {
     let env = Env::default();
     let (client, admin, _contract_id) = setup_treasury(&env, 2);
@@ -147,7 +147,7 @@ fn unauthorized_signer_cannot_propose_signer_rotation() {
 }
 
 #[test]
-#[should_panic(expected = "UnauthorizedSigner")]
+#[should_panic(expected = "Error(Contract, #10)")]
 fn unauthorized_signer_cannot_approve_signer_rotation() {
     let env = Env::default();
     let (client, admin, _contract_id) = setup_treasury(&env, 2);
@@ -165,7 +165,7 @@ fn unauthorized_signer_cannot_approve_signer_rotation() {
 }
 
 #[test]
-#[should_panic(expected = "UnauthorizedSigner")]
+#[should_panic(expected = "Error(Contract, #10)")]
 fn signer_with_zero_weight_is_unauthorized() {
     let env = Env::default();
     let (client, admin, _contract_id) = setup_treasury(&env, 2);
@@ -211,7 +211,7 @@ fn authorized_signer_can_perform_operations() {
 }
 
 #[test]
-#[should_panic(expected = "UnauthorizedSigner")]
+#[should_panic(expected = "Error(Contract, #10)")]
 fn unauthorized_signer_cannot_propose_partial_settlement() {
     let env = Env::default();
     let (client, _admin, _contract_id) = setup_treasury(&env, 2);
@@ -241,7 +241,7 @@ fn admin_is_automatically_authorized_signer() {
 // adding a new entrypoint without the guard will surface as a missing entry here.
 
 #[test]
-#[should_panic(expected = "UnauthorizedSigner")]
+#[should_panic(expected = "Error(Contract, #10)")]
 fn guard_table_propose_settlement_rejects_unauthorized() {
     let env = Env::default();
     let (client, _admin, _) = setup_treasury(&env, 2);
@@ -250,7 +250,7 @@ fn guard_table_propose_settlement_rejects_unauthorized() {
 }
 
 #[test]
-#[should_panic(expected = "UnauthorizedSigner")]
+#[should_panic(expected = "Error(Contract, #10)")]
 fn guard_table_approve_settlement_rejects_unauthorized() {
     let env = Env::default();
     let (client, admin, _contract_id) = setup_treasury(&env, 2);
@@ -261,7 +261,7 @@ fn guard_table_approve_settlement_rejects_unauthorized() {
 }
 
 #[test]
-#[should_panic(expected = "UnauthorizedSigner")]
+#[should_panic(expected = "Error(Contract, #10)")]
 fn guard_table_execute_settlement_rejects_unauthorized() {
     let env = Env::default();
     let (client, admin, _contract_id) = setup_treasury(&env, 1);
@@ -273,7 +273,7 @@ fn guard_table_execute_settlement_rejects_unauthorized() {
 }
 
 #[test]
-#[should_panic(expected = "UnauthorizedSigner")]
+#[should_panic(expected = "Error(Contract, #10)")]
 fn guard_table_propose_signer_rotation_rejects_unauthorized() {
     let env = Env::default();
     let (client, _admin, _) = setup_treasury(&env, 2);
@@ -284,7 +284,7 @@ fn guard_table_propose_signer_rotation_rejects_unauthorized() {
 }
 
 #[test]
-#[should_panic(expected = "UnauthorizedSigner")]
+#[should_panic(expected = "Error(Contract, #10)")]
 fn guard_table_approve_signer_rotation_rejects_unauthorized() {
     let env = Env::default();
     let (client, admin, _contract_id) = setup_treasury(&env, 2);

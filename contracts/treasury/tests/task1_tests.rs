@@ -42,7 +42,7 @@ fn cancel_pending_settlement_removes_it_from_pending() {
 }
 
 #[test]
-#[should_panic(expected = "AlreadyExecuted")]
+#[should_panic(expected = "Error(Contract, #4)")]
 fn execute_after_cancel_panics() {
     let env = Env::default();
     let (client, admin, _) = setup(&env, 1);
@@ -55,7 +55,7 @@ fn execute_after_cancel_panics() {
 }
 
 #[test]
-#[should_panic(expected = "AlreadyExecuted")]
+#[should_panic(expected = "Error(Contract, #4)")]
 fn approve_after_cancel_panics() {
     let env = Env::default();
     let (client, admin, _) = setup(&env, 2);
@@ -67,7 +67,7 @@ fn approve_after_cancel_panics() {
 }
 
 #[test]
-#[should_panic(expected = "SettlementNotCancellable")]
+#[should_panic(expected = "Error(Contract, #26)")]
 fn double_cancel_panics() {
     let env = Env::default();
     let (client, admin, _) = setup(&env, 1);
@@ -139,7 +139,7 @@ fn rotated_in_signer_can_propose() {
 }
 
 #[test]
-#[should_panic(expected = "UnauthorizedSigner")]
+#[should_panic(expected = "Error(Contract, #10)")]
 fn rotated_out_signer_cannot_propose() {
     let env = Env::default();
     let (client, admin, _) = setup(&env, 1);
@@ -152,7 +152,7 @@ fn rotated_out_signer_cannot_propose() {
 }
 
 #[test]
-#[should_panic(expected = "UnauthorizedSigner")]
+#[should_panic(expected = "Error(Contract, #10)")]
 fn rotated_out_signer_cannot_approve() {
     let env = Env::default();
     let (client, admin, _) = setup(&env, 2);
@@ -201,7 +201,7 @@ fn new_signer_can_approve_after_rotation() {
 // ─── #120 Execute on non-existent settlement typed failure ───────────────────
 
 #[test]
-#[should_panic(expected = "SettlementNotFound")]
+#[should_panic(expected = "Error(Contract, #3)")]
 fn execute_nonexistent_settlement_panics() {
     let env = Env::default();
     let (client, admin, _) = setup(&env, 1);
@@ -210,7 +210,7 @@ fn execute_nonexistent_settlement_panics() {
 }
 
 #[test]
-#[should_panic(expected = "SettlementNotFound")]
+#[should_panic(expected = "Error(Contract, #3)")]
 fn approve_nonexistent_settlement_panics() {
     let env = Env::default();
     let (client, admin, _) = setup(&env, 1);
@@ -218,7 +218,7 @@ fn approve_nonexistent_settlement_panics() {
 }
 
 #[test]
-#[should_panic(expected = "SettlementNotFound")]
+#[should_panic(expected = "Error(Contract, #3)")]
 fn cancel_nonexistent_settlement_panics() {
     let env = Env::default();
     let (client, admin, _) = setup(&env, 1);

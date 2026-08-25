@@ -64,10 +64,7 @@ fn partially_execute_settlement_reentrancy_demonstrates_cei_violation() {
     let total: i128 = 10_000_000;
     let partial: i128 = 3_000_000;
     let (token_id, token) = funded_token(&env, &treasury_id, total);
-    token.set_callback_target(
-        &CallbackTarget::PartiallyExecuteSettlement,
-        &treasury_id,
-    );
+    token.set_callback_target(&CallbackTarget::PartiallyExecuteSettlement, &treasury_id);
 
     let merchant = Address::generate(&env);
     let sid = client.propose_settlement(&admin, &merchant, &total);

@@ -48,11 +48,7 @@ impl ReentrancyToken {
         // Depth counter — incremented on every `transfer` entry. The outer
         // call (depth=0) performs the configured callback; recursive reentries
         // (depth>=1) skip the callback so the test never infinite-recurses.
-        let depth: u32 = env
-            .storage()
-            .instance()
-            .get(&("rt_depth",))
-            .unwrap_or(0);
+        let depth: u32 = env.storage().instance().get(&("rt_depth",)).unwrap_or(0);
         env.storage().instance().set(&("rt_depth",), &(depth + 1));
 
         let target: CallbackTarget = env
@@ -62,20 +58,13 @@ impl ReentrancyToken {
             .unwrap_or(CallbackTarget::None);
 
         if depth == 0 && target != CallbackTarget::None {
-            let treasury_addr: Address = env
-                .storage()
-                .instance()
-                .get(&("rt_treasury",))
-                .unwrap();
+            let treasury_addr: Address = env.storage().instance().get(&("rt_treasury",)).unwrap();
             let client = TreasuryContractClient::new(&env, &treasury_addr);
 
             match target {
                 CallbackTarget::Deposit => {
-                    let depositor: Address = env
-                        .storage()
-                        .instance()
-                        .get(&("rt_depositor",))
-                        .unwrap();
+                    let depositor: Address =
+                        env.storage().instance().get(&("rt_depositor",)).unwrap();
                     client.deposit(&depositor, &env.current_contract_address(), &amount);
                 }
                 CallbackTarget::Withdraw => {
@@ -86,47 +75,20 @@ impl ReentrancyToken {
                     client.withdraw(&to, &env.current_contract_address(), &amount);
                 }
                 CallbackTarget::WithdrawAll => {
-                    let admin: Address = env
-                        .storage()
-                        .instance()
-                        .get(&("rt_admin",))
-                        .unwrap();
-                    let recipient: Address = env
-                        .storage()
-                        .instance()
-                        .get(&("rt_recipient",))
-                        .unwrap();
+                    let admin: Address = env.storage().instance().get(&("rt_admin",)).unwrap();
+                    let recipient: Address =
+                        env.storage().instance().get(&("rt_recipient",)).unwrap();
                     client.withdraw_all(&admin, &env.current_contract_address(), &recipient);
                 }
                 CallbackTarget::ExecuteSettlement => {
-                    let signer: Address = env
-                        .storage()
-                        .instance()
-                        .get(&("rt_signer",))
-                        .unwrap();
-                    let sid: u64 = env
-                        .storage()
-                        .instance()
-                        .get(&("rt_sid",))
-                        .unwrap();
+                    let signer: Address = env.storage().instance().get(&("rt_signer",)).unwrap();
+                    let sid: u64 = env.storage().instance().get(&("rt_sid",)).unwrap();
                     client.execute_settlement(&signer, &sid, &env.current_contract_address());
                 }
                 CallbackTarget::PartiallyExecuteSettlement => {
-                    let signer: Address = env
-                        .storage()
-                        .instance()
-                        .get(&("rt_signer",))
-                        .unwrap();
-                    let sid: u64 = env
-                        .storage()
-                        .instance()
-                        .get(&("rt_sid",))
-                        .unwrap();
-                    let partial: i128 = env
-                        .storage()
-                        .instance()
-                        .get(&("rt_partial",))
-                        .unwrap();
+                    let signer: Address = env.storage().instance().get(&("rt_signer",)).unwrap();
+                    let sid: u64 = env.storage().instance().get(&("rt_sid",)).unwrap();
+                    let partial: i128 = env.storage().instance().get(&("rt_partial",)).unwrap();
                     client.partially_execute_settlement(
                         &signer,
                         &sid,

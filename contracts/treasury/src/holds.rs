@@ -47,7 +47,9 @@ impl TreasuryContract {
             .storage()
             .persistent()
             .get(&DataKey::Settlement(settlement_id))
-            .unwrap_or_else(|| panic!("SettlementNotFound"));
+            .unwrap_or_else(|| {
+                soroban_sdk::panic_with_error!(env, TreasuryError::SettlementNotFound)
+            });
         settlement.hold_reason
     }
 
@@ -60,9 +62,11 @@ impl TreasuryContract {
             .storage()
             .persistent()
             .get(&DataKey::Settlement(settlement_id))
-            .unwrap_or_else(|| panic!("SettlementNotFound"));
+            .unwrap_or_else(|| {
+                soroban_sdk::panic_with_error!(env, TreasuryError::SettlementNotFound)
+            });
         if settlement.status != SettlementStatus::OnHold {
-            panic!("NotOnHold");
+            soroban_sdk::panic_with_error!(env, TreasuryError::NotOnHold);
         }
         settlement.status = SettlementStatus::Pending;
         settlement.hold_reason = SettlementHoldReason::None;

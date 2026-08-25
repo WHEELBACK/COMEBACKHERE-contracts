@@ -185,9 +185,12 @@ impl ComplianceContract {
                     .instance()
                     .get(&DataKey::AllowCount)
                     .unwrap_or(0u64);
-                env.storage()
-                    .instance()
-                    .set(&DataKey::AllowCount, &(count.checked_add(1).unwrap_or_else(|| panic!("ArithmeticOverflow"))));
+                env.storage().instance().set(
+                    &DataKey::AllowCount,
+                    &(count
+                        .checked_add(1)
+                        .unwrap_or_else(|| panic!("ArithmeticOverflow"))),
+                );
             }
             Self::track_address(&env, &address)?;
             env.events()
@@ -286,9 +289,12 @@ impl ComplianceContract {
                 .instance()
                 .get(&DataKey::AllowCount)
                 .unwrap_or(0u64);
-            env.storage()
-                .instance()
-                .set(&DataKey::AllowCount, &(count.checked_add(1).unwrap_or_else(|| panic!("ArithmeticOverflow"))));
+            env.storage().instance().set(
+                &DataKey::AllowCount,
+                &(count
+                    .checked_add(1)
+                    .unwrap_or_else(|| panic!("ArithmeticOverflow"))),
+            );
         }
         Self::track_address(&env, &address)?;
         env.events()
@@ -583,9 +589,12 @@ impl ComplianceContract {
                 .instance()
                 .get(&DataKey::AllowCount)
                 .unwrap_or(0u64);
-            env.storage()
-                .instance()
-                .set(&DataKey::AllowCount, &(count.checked_add(1).unwrap_or_else(|| panic!("ArithmeticOverflow"))));
+            env.storage().instance().set(
+                &DataKey::AllowCount,
+                &(count
+                    .checked_add(1)
+                    .unwrap_or_else(|| panic!("ArithmeticOverflow"))),
+            );
         }
         Self::track_address(&env, &address)?;
         env.events()
@@ -702,10 +711,8 @@ impl ComplianceContract {
                     env.storage()
                         .instance()
                         .set(&DataKey::AllowCount, &count.saturating_sub(1));
-                    env.events().publish(
-                        (Symbol::new(&env, "address_allow_expired"),),
-                        addr.clone(),
-                    );
+                    env.events()
+                        .publish((Symbol::new(&env, "address_allow_expired"),), addr.clone());
                     swept += 1;
                 }
             }

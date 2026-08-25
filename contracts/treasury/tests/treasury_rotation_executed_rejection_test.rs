@@ -2,7 +2,7 @@ use soroban_sdk::{testutils::Address as _, Address, Env};
 use treasury::{TreasuryContract, TreasuryContractClient};
 
 #[test]
-#[should_panic(expected = "RotationAlreadyExecuted")]
+#[should_panic(expected = "Error(Contract, #14)")]
 fn executed_rotation_prevents_further_approvals() {
     let env = Env::default();
     env.mock_all_auths();

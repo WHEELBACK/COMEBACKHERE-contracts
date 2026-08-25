@@ -87,7 +87,7 @@ fn get_hold_reason_resets_to_none_after_release() {
 }
 
 #[test]
-#[should_panic(expected = "SettlementNotFound")]
+#[should_panic(expected = "Error(Contract, #3)")]
 fn get_hold_reason_panics_for_nonexistent_settlement() {
     let env = Env::default();
     let (client, _admin) = setup(&env);
