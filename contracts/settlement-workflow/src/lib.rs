@@ -1,8 +1,19 @@
 #![no_std]
 
 use compliance_client::ComplianceClient;
-use soroban_sdk::{contract, contractimpl, Address, Env};
-use treasury::{TreasuryContractClient, TreasuryError};
+use multisig::TreasuryError;
+use soroban_sdk::{contract, contractclient, contractimpl, Address, Env};
+
+/// Cross-contract call surface this crate needs from the treasury contract.
+/// `#[contractclient]` on a bare trait generates only an invocation client, not
+/// a dependency on the `comebackhere-treasury` implementation crate, so this
+/// contract doesn't statically link treasury's wasm exports (`pause`,
+/// `unpause`, ...) alongside its own. See the `compliance_client` crate for
+/// the same pattern, and Cargo.toml for why `treasury` is dev-only here.
+#[contractclient(name = "TreasuryOnlyClient")]
+pub trait TreasuryInterface {
+    fn execute_settlement(env: Env, signer: Address, settlement_id: u64, token_contract: Address);
+}
 
 /// Reference on-chain implementation of the `SettlementWorkflow` role described in
 /// `ARCHITECTURE.md`: gates `Treasury::execute_settlement` behind
@@ -30,7 +41,7 @@ impl SettlementWorkflowContract {
     ) -> Result<(), TreasuryError> {
         let compliance = ComplianceClient::new(&env, &compliance_id);
         compliance.require_allowed_for_treasury(&merchant)?;
-        let treasury = TreasuryContractClient::new(&env, &treasury_id);
+        let treasury = TreasuryOnlyClient::new(&env, &treasury_id);
         treasury.execute_settlement(
             &env.current_contract_address(),
             &settlement_id,

@@ -1,10 +1,21 @@
 #![no_std]
 
-use compliance::ComplianceContractClient;
 use multisig::TreasuryError;
-use soroban_sdk::{Address, Env};
+use soroban_sdk::{contractclient, Address, Env};
 
-/// Thin ergonomic wrapper over the generated compliance contract client.
+/// Cross-contract call surface this crate actually needs from the compliance
+/// contract. `#[contractclient]` on a bare trait (no `#[contract]`/
+/// `#[contractimpl]` implementation) generates only an invocation client —
+/// unlike depending on the `comebackhere-compliance` crate directly, it does
+/// not compile in that contract's own wasm exports (`pause`, `unpause`, ...),
+/// so contracts that depend on this crate don't collide with those exports at
+/// link time. See the `compliance` dev-dependency note in Cargo.toml.
+#[contractclient(name = "ComplianceOnlyClient")]
+pub trait ComplianceInterface {
+    fn is_allowed(env: Env, address: Address) -> bool;
+}
+
+/// Thin ergonomic wrapper over the compliance contract's `is_allowed` check.
 ///
 /// # Example
 /// ```ignore
@@ -14,19 +25,23 @@ use soroban_sdk::{Address, Env};
 /// client.require_allowed(&address, MyError::UnauthorizedSigner)?;
 /// ```
 pub struct ComplianceClient<'a> {
-    inner: ComplianceContractClient<'a>,
+    inner: ComplianceOnlyClient<'a>,
 }
 
 impl<'a> ComplianceClient<'a> {
     pub fn new(env: &'a Env, contract_id: &Address) -> Self {
         Self {
-            inner: ComplianceContractClient::new(env, contract_id),
+            inner: ComplianceOnlyClient::new(env, contract_id),
         }
+    }
+
+    pub fn is_allowed(&self, address: &Address) -> bool {
+        self.inner.is_allowed(address)
     }
 
     /// Convert a failed compliance check into the caller's domain error.
     pub fn require_allowed<E>(&self, address: &Address, error: E) -> Result<(), E> {
-        if self.inner.is_allowed(address) {
+        if self.is_allowed(address) {
             Ok(())
         } else {
             Err(error)
@@ -39,14 +54,6 @@ impl<'a> ComplianceClient<'a> {
     /// generic `Unauthorized`.
     pub fn require_allowed_for_treasury(&self, address: &Address) -> Result<(), TreasuryError> {
         self.require_allowed(address, TreasuryError::ComplianceCheckFailed)
-    }
-}
-
-impl<'a> core::ops::Deref for ComplianceClient<'a> {
-    type Target = ComplianceContractClient<'a>;
-
-    fn deref(&self) -> &Self::Target {
-        &self.inner
     }
 }
 
@@ -119,7 +126,7 @@ mod tests {
     #[test]
     fn require_allowed_for_treasury_maps_compliance_gate_failure() {
         use crate::ComplianceClient;
-        use ::compliance::ComplianceContract;
+        use ::compliance::{ComplianceContract, ComplianceContractClient};
         use multisig::TreasuryError as RealTreasuryError;
 
         let env = Env::default();
@@ -128,15 +135,17 @@ mod tests {
         let merchant = Address::generate(&env);
 
         let contract_id = env.register_contract(None, ComplianceContract);
-        let client = ComplianceClient::new(&env, &contract_id);
-        client.initialize(&admin);
+        // Real generated client, used only to drive compliance contract state.
+        let admin_client = ComplianceContractClient::new(&env, &contract_id);
+        admin_client.initialize(&admin);
 
+        let client = ComplianceClient::new(&env, &contract_id);
         assert_eq!(
             client.require_allowed_for_treasury(&merchant),
             Err(RealTreasuryError::ComplianceCheckFailed)
         );
 
-        client.allow_address(&admin, &merchant);
+        admin_client.allow_address(&admin, &merchant);
         assert_eq!(client.require_allowed_for_treasury(&merchant), Ok(()));
     }
 }

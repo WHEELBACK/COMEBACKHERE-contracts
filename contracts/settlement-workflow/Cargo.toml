@@ -15,8 +15,13 @@ testutils = ["soroban-sdk/testutils"]
 [dependencies]
 soroban-sdk.workspace = true
 compliance-client = { package = "comebackhere-compliance-client", path = "../../crates/compliance-client" }
-treasury = { package = "comebackhere-treasury", path = "../treasury" }
+# TreasuryError is a plain #[contracterror] enum with no #[contractimpl] body,
+# so depending on it here doesn't link any wasm exports (unlike `treasury`
+# below, kept dev-only for the same reason `compliance` is dev-only in
+# compliance-client's Cargo.toml).
+multisig = { package = "comebackhere-multisig", path = "../../crates/multisig" }
 
 [dev-dependencies]
 soroban-sdk = { workspace = true, features = ["testutils"] }
 compliance = { package = "comebackhere-compliance", path = "../compliance" }
+treasury = { package = "comebackhere-treasury", path = "../treasury" }
