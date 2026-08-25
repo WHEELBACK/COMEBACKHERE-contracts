@@ -14,7 +14,7 @@ on:
 
 env:
   CARGO_TERM_COLOR: always
-  STELLAR_CLI_VERSION: "20.0.0"
+  STELLAR_CLI_VERSION: "22.8.2"
 
 jobs:
   init-smoke-test:

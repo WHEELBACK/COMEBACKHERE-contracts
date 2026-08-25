@@ -5,7 +5,7 @@ set -e
 # Verifies that the environment matches the required versions for COMEBACKHERE contracts.
 
 REQUIRED_RUST="1.95.0"
-REQUIRED_STELLAR_CLI="20.0.0"
+REQUIRED_STELLAR_CLI="22.8.2"
 TARGET="wasm32-unknown-unknown"
 
 echo "Checking development environment..."
@@ -41,7 +41,7 @@ if ! command -v stellar &> /dev/null; then
     exit 1
 fi
 
-# stellar --version output format: "stellar 20.0.0 (build-date)"
+# stellar --version output format: "stellar 22.8.2 (build-date)"
 STELLAR_VERSION=$(stellar --version | awk '{print $2}')
 if [ "$STELLAR_VERSION" != "$REQUIRED_STELLAR_CLI" ]; then
     echo "❌ Error: stellar-cli version $REQUIRED_STELLAR_CLI is required (found $STELLAR_VERSION)."
