@@ -11,8 +11,15 @@ NETWORK_PASSPHRASE="Standalone Network ; February 2017"
 echo "Using network: $NETWORK ($RPC_URL)"
 
 # 1. Build contracts
+# Restricted to the packages this script actually deploys below, rather than
+# the whole workspace: a workspace-wide wasm32 build also touches crates
+# whose testutils feature pulls in host-only deps (soroban-env-host, rand,
+# serde_json) that don't exist on wasm32.
 echo "Building contracts..."
-cargo build --target wasm32-unknown-unknown --release
+cargo build --target wasm32-unknown-unknown --release \
+    --package comebackhere-compliance \
+    --package comebackhere-invoice \
+    --package comebackhere-treasury
 
 # 2. Setup network
 echo "Ensuring network '$NETWORK' is configured..."

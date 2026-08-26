@@ -41,8 +41,10 @@ if ! command -v stellar &> /dev/null; then
     exit 1
 fi
 
-# stellar --version output format: "stellar 22.8.2 (build-date)"
-STELLAR_VERSION=$(stellar --version | awk '{print $2}')
+# stellar --version output format: first line "stellar 22.8.2 (build-date)",
+# followed by additional lines (soroban-env, release channel, etc.) - only the
+# first line's second field is the CLI's own version.
+STELLAR_VERSION=$(stellar --version | head -1 | awk '{print $2}')
 if [ "$STELLAR_VERSION" != "$REQUIRED_STELLAR_CLI" ]; then
     echo "❌ Error: stellar-cli version $REQUIRED_STELLAR_CLI is required (found $STELLAR_VERSION)."
     echo "   Update via: cargo install --locked stellar-cli --version $REQUIRED_STELLAR_CLI"

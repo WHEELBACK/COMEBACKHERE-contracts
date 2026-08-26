@@ -28,7 +28,7 @@ jobs:
 
       - name: Verify Stellar CLI version
         run: |
-          INSTALLED=$(stellar --version | awk '{print $2}')
+          INSTALLED=$(stellar --version | head -1 | awk '{print $2}')
           if [ "$INSTALLED" != "$STELLAR_CLI_VERSION" ]; then
             echo "Expected stellar-cli $STELLAR_CLI_VERSION, got $INSTALLED"
             exit 1
