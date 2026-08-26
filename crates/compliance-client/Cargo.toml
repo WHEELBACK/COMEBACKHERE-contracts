@@ -14,8 +14,16 @@ testutils = []
 
 [dependencies]
 soroban-sdk.workspace = true
-compliance = { package = "comebackhere-compliance", path = "../../contracts/compliance" }
 multisig = { package = "comebackhere-multisig", path = "../multisig" }
 
 [dev-dependencies]
 soroban-sdk = { workspace = true, features = ["testutils"] }
+# Real contract crate, needed only to drive compliance contract state in tests
+# and to assert this crate's client stays ABI-compatible with it (see
+# tests/abi_parity_test.rs). Deliberately NOT a `[dependencies]` entry: pulling
+# in `comebackhere-compliance`'s `#[contractimpl]` block would statically link
+# its `pause`/`unpause` wasm exports into any contract that depends on this
+# crate, colliding with that contract's own `pause`/`unpause` exports at link
+# time (see `contracts/settlement-workflow`, which links both `treasury` and
+# this crate).
+compliance = { package = "comebackhere-compliance", path = "../../contracts/compliance" }

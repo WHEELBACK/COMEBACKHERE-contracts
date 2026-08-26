@@ -71,7 +71,7 @@ fn threshold_update_takes_effect_for_future_executions() {
 }
 
 #[test]
-#[should_panic(expected = "Unauthorized")]
+#[should_panic(expected = "Error(Contract, #9)")]
 fn non_admin_cannot_update_threshold() {
     let env = Env::default();
     env.mock_all_auths();
@@ -82,7 +82,7 @@ fn non_admin_cannot_update_threshold() {
 }
 
 #[test]
-#[should_panic(expected = "Unauthorized")]
+#[should_panic(expected = "Error(Contract, #9)")]
 fn wrong_admin_address_is_rejected() {
     let env = Env::default();
     env.mock_all_auths();

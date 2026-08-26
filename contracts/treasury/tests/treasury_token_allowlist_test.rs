@@ -89,7 +89,5 @@ fn adding_beyond_max_allowed_tokens_is_rejected() {
 
     // The 21st addition should panic
     let extra_token = Address::generate(&env);
-    assert!(client
-        .try_add_allowed_token(&admin, &extra_token)
-        .is_err());
+    assert!(client.try_add_allowed_token(&admin, &extra_token).is_err());
 }

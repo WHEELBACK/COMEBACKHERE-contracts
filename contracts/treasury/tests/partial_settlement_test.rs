@@ -39,7 +39,7 @@ fn partially_executed_settlement_absent_from_pending_list() {
 }
 
 #[test]
-#[should_panic(expected = "ThresholdNotMet")]
+#[should_panic(expected = "Error(Contract, #5)")]
 fn partially_execute_without_sufficient_approvals_panics() {
     let env = Env::default();
     env.mock_all_auths();
@@ -55,7 +55,7 @@ fn partially_execute_without_sufficient_approvals_panics() {
 }
 
 #[test]
-#[should_panic(expected = "InvalidAmount")]
+#[should_panic(expected = "Error(Contract, #7)")]
 fn partially_execute_exceeding_amount_panics() {
     let env = Env::default();
     env.mock_all_auths();
@@ -65,7 +65,7 @@ fn partially_execute_exceeding_amount_panics() {
 }
 
 #[test]
-#[should_panic(expected = "InvalidAmount")]
+#[should_panic(expected = "Error(Contract, #7)")]
 fn partially_execute_zero_amount_panics() {
     let env = Env::default();
     env.mock_all_auths();
@@ -92,7 +92,7 @@ fn partially_execute_already_executed_panics() {
 }
 
 #[test]
-#[should_panic(expected = "InvalidAmount")]
+#[should_panic(expected = "Error(Contract, #7)")]
 fn cumulative_partial_approvals_exceeding_amount_panics() {
     let env = Env::default();
     env.mock_all_auths();

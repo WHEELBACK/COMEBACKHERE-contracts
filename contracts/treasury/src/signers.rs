@@ -1,13 +1,9 @@
 use crate::{
     require_admin, DataKey, RotationStatus, SignerRotationProposal, TreasuryContract,
-    TreasuryContractArgs, TreasuryContractClient,
+    TreasuryContractArgs, TreasuryContractClient, TreasuryError,
 };
 use multisig::{meets_threshold, record_approval, require_authorized_signer, signer_weight};
 use soroban_sdk::{contractimpl, Address, Env, Symbol, Vec};
-
-/// Minimum seconds a signer must wait between successive `propose_signer_rotation`
-/// calls, to prevent a compromised/malicious signer from spamming rotation proposals.
-const ROTATION_PROPOSAL_COOLDOWN: u64 = 60 * 60;
 
 #[contractimpl]
 impl TreasuryContract {
@@ -108,13 +104,9 @@ impl TreasuryContract {
         const COOLDOWN_SECS: u64 = 60 * 60;
         let now = env.ledger().timestamp();
         let cooldown_key = DataKey::LastRotationProposal(proposer.clone());
-        if let Some(last) = env
-            .storage()
-            .instance()
-            .get::<DataKey, u64>(&cooldown_key)
-        {
+        if let Some(last) = env.storage().instance().get::<DataKey, u64>(&cooldown_key) {
             if now < last.saturating_add(COOLDOWN_SECS) {
-                panic!("RotationProposalCooldown");
+                soroban_sdk::panic_with_error!(env, TreasuryError::RotationProposalCooldown);
             }
         }
         env.storage().instance().set(&cooldown_key, &now);
@@ -124,7 +116,9 @@ impl TreasuryContract {
             .instance()
             .get(&DataKey::RotationCount)
             .unwrap_or(0);
-        let id = count.checked_add(1).unwrap_or_else(|| panic!("ArithmeticOverflow"));
+        let id = count.checked_add(1).unwrap_or_else(|| {
+            soroban_sdk::panic_with_error!(env, TreasuryError::ArithmeticOverflow)
+        });
         let mut approvals = Vec::new(&env);
         let mut weight = 0u32;
         record_approval(&env, &mut approvals, &mut weight, &proposer);
@@ -158,9 +152,11 @@ impl TreasuryContract {
             .storage()
             .persistent()
             .get(&DataKey::SignerRotation(rotation_id))
-            .unwrap_or_else(|| panic!("RotationNotFound"));
+            .unwrap_or_else(|| {
+                soroban_sdk::panic_with_error!(env, TreasuryError::RotationNotFound)
+            });
         if proposal.status != RotationStatus::Pending {
-            panic!("RotationAlreadyExecuted");
+            soroban_sdk::panic_with_error!(env, TreasuryError::RotationAlreadyExecuted);
         }
         record_approval(
             &env,
@@ -206,9 +202,11 @@ impl TreasuryContract {
             .storage()
             .persistent()
             .get(&DataKey::SignerRotation(rotation_id))
-            .unwrap_or_else(|| panic!("RotationNotFound"));
+            .unwrap_or_else(|| {
+                soroban_sdk::panic_with_error!(env, TreasuryError::RotationNotFound)
+            });
         if proposal.status != RotationStatus::Pending {
-            panic!("RotationAlreadyExecuted");
+            soroban_sdk::panic_with_error!(env, TreasuryError::RotationAlreadyExecuted);
         }
         proposal.status = RotationStatus::Cancelled;
         env.storage()

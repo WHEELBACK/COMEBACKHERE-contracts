@@ -12,7 +12,7 @@ fn paused_setup(env: &Env) -> (TreasuryContractClient, Address) {
 }
 
 #[test]
-#[should_panic(expected = "ContractPaused")]
+#[should_panic(expected = "Error(Contract, #8)")]
 fn paused_rejects_propose_settlement() {
     let env = Env::default();
     let (client, admin) = paused_setup(&env);
@@ -21,7 +21,7 @@ fn paused_rejects_propose_settlement() {
 }
 
 #[test]
-#[should_panic(expected = "ContractPaused")]
+#[should_panic(expected = "Error(Contract, #8)")]
 fn paused_rejects_approve_settlement() {
     let env = Env::default();
     let (client, admin) = paused_setup(&env);
@@ -29,7 +29,7 @@ fn paused_rejects_approve_settlement() {
 }
 
 #[test]
-#[should_panic(expected = "ContractPaused")]
+#[should_panic(expected = "Error(Contract, #8)")]
 fn paused_rejects_execute_settlement() {
     let env = Env::default();
     let (client, admin) = paused_setup(&env);
@@ -38,7 +38,7 @@ fn paused_rejects_execute_settlement() {
 }
 
 #[test]
-#[should_panic(expected = "ContractPaused")]
+#[should_panic(expected = "Error(Contract, #8)")]
 fn paused_rejects_deposit() {
     let env = Env::default();
     let (client, admin) = paused_setup(&env);
@@ -47,7 +47,7 @@ fn paused_rejects_deposit() {
 }
 
 #[test]
-#[should_panic(expected = "ContractPaused")]
+#[should_panic(expected = "Error(Contract, #8)")]
 fn paused_rejects_batch_deposit() {
     let env = Env::default();
     let (client, admin) = paused_setup(&env);
@@ -58,7 +58,7 @@ fn paused_rejects_batch_deposit() {
 }
 
 #[test]
-#[should_panic(expected = "ContractPaused")]
+#[should_panic(expected = "Error(Contract, #8)")]
 fn paused_rejects_withdraw() {
     let env = Env::default();
     let (client, admin) = paused_setup(&env);
@@ -67,7 +67,7 @@ fn paused_rejects_withdraw() {
 }
 
 #[test]
-#[should_panic(expected = "ContractPaused")]
+#[should_panic(expected = "Error(Contract, #8)")]
 fn paused_rejects_raise_dispute() {
     let env = Env::default();
     let (client, _admin) = paused_setup(&env);
@@ -77,7 +77,7 @@ fn paused_rejects_raise_dispute() {
 }
 
 #[test]
-#[should_panic(expected = "ContractPaused")]
+#[should_panic(expected = "Error(Contract, #8)")]
 fn paused_rejects_resolve_dispute() {
     let env = Env::default();
     let (client, admin) = paused_setup(&env);

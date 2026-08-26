@@ -24,6 +24,22 @@ pub enum TreasuryError {
     AlreadyOnHold = 17,
     ThresholdUnreachable = 18,
     ComplianceCheckFailed = 19,
+    // Appended (not renumbered) to keep discriminants stable for existing
+    // on-chain state; see scripts/check-enum-ordering.sh (#74).
+    ArithmeticOverflow = 20,
+    DisputeNotFound = 21,
+    DisputeAlreadyResolved = 22,
+    ResolutionDirectionMismatch = 23,
+    BatchTooLarge = 24,
+    WeightOverflow = 25,
+    SettlementNotCancellable = 26,
+    TtlNotElapsed = 27,
+    AllowlistFull = 28,
+    NotOnHold = 29,
+    DestinationNotAllowed = 30,
+    InsufficientBalance = 31,
+    NotPaused = 32,
+    RotationProposalCooldown = 33,
 }
 
 // Issue #48: reason codes attached to a held settlement; None means not on hold
@@ -140,18 +156,23 @@ pub fn signer_weight(env: &Env, signer: &Address) -> u32 {
 pub fn require_authorized_signer(env: &Env, signer: &Address) {
     signer.require_auth();
     if signer_weight(env, signer) == 0 {
-        panic!("UnauthorizedSigner");
+        soroban_sdk::panic_with_error!(env, TreasuryError::UnauthorizedSigner);
     }
 }
 
 /// Adds `signer`'s weight to `weight` and appends `signer` to `approvals`, unless `signer` has
 /// already approved (in which case this is a no-op). Captures the dedup-then-accumulate pattern
 /// used for settlement, dispute, and rotation approvals.
-pub fn record_approval(env: &Env, approvals: &mut Vec<Address>, weight: &mut u32, signer: &Address) {
+pub fn record_approval(
+    env: &Env,
+    approvals: &mut Vec<Address>,
+    weight: &mut u32,
+    signer: &Address,
+) {
     if !approvals.contains(signer) {
         *weight = weight
             .checked_add(signer_weight(env, signer))
-            .unwrap_or_else(|| panic!("WeightOverflow"));
+            .unwrap_or_else(|| soroban_sdk::panic_with_error!(env, TreasuryError::WeightOverflow));
         approvals.push_back(signer.clone());
     }
 }

@@ -14,7 +14,7 @@ fn setup(env: &Env, threshold: u32) -> (TreasuryContractClient, Address) {
 }
 
 #[test]
-#[should_panic(expected = "RotationProposalCooldown")]
+#[should_panic(expected = "Error(Contract, #33)")]
 fn repeated_rotation_proposal_within_cooldown_is_rejected() {
     let env = Env::default();
     let (client, admin) = setup(&env, 2);

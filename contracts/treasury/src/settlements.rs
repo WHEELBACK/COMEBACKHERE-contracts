@@ -1,7 +1,7 @@
 use crate::{
-    require_admin, require_not_paused, DataKey, MAX_ALLOWED_TOKENS, Settlement,
-    SettlementHoldReason, SettlementStatus, TreasuryContract, TreasuryContractArgs,
-    TreasuryContractClient,
+    require_admin, require_not_paused, DataKey, Settlement, SettlementHoldReason, SettlementStatus,
+    TreasuryContract, TreasuryContractArgs, TreasuryContractClient, TreasuryError,
+    MAX_ALLOWED_TOKENS,
 };
 use multisig::{meets_threshold, record_approval, require_authorized_signer, signer_weight};
 use soroban_sdk::{contractimpl, token, Address, Env, Symbol, Vec};
@@ -27,14 +27,16 @@ impl TreasuryContract {
         require_not_paused(&env);
         require_authorized_signer(&env, &signer);
         if amount <= 0 {
-            panic!("InvalidAmount");
+            soroban_sdk::panic_with_error!(env, TreasuryError::InvalidAmount);
         }
         let count: u64 = env
             .storage()
             .instance()
             .get(&DataKey::SettlementCount)
             .unwrap_or(0);
-        let id = count.checked_add(1).unwrap_or_else(|| panic!("ArithmeticOverflow"));
+        let id = count.checked_add(1).unwrap_or_else(|| {
+            soroban_sdk::panic_with_error!(env, TreasuryError::ArithmeticOverflow)
+        });
         let mut approvals = Vec::new(&env);
         let mut weight = 0u32;
         record_approval(&env, &mut approvals, &mut weight, &signer);
@@ -77,9 +79,11 @@ impl TreasuryContract {
             .storage()
             .persistent()
             .get(&DataKey::Settlement(settlement_id))
-            .unwrap_or_else(|| panic!("SettlementNotFound"));
+            .unwrap_or_else(|| {
+                soroban_sdk::panic_with_error!(env, TreasuryError::SettlementNotFound)
+            });
         if settlement.status != SettlementStatus::Pending {
-            panic!("AlreadyExecuted");
+            soroban_sdk::panic_with_error!(env, TreasuryError::AlreadyExecuted);
         }
         record_approval(
             &env,
@@ -106,7 +110,7 @@ impl TreasuryContract {
         require_not_paused(&env);
         require_authorized_signer(&env, &signer);
         if ids.len() > MAX_BATCH_SIZE {
-            panic!("BatchTooLarge");
+            soroban_sdk::panic_with_error!(env, TreasuryError::BatchTooLarge);
         }
         let weight = signer_weight(&env, &signer);
         let mut approved = Vec::new(&env);
@@ -119,7 +123,9 @@ impl TreasuryContract {
                         settlement.approval_weight = settlement
                             .approval_weight
                             .checked_add(weight)
-                            .unwrap_or_else(|| panic!("WeightOverflow"));
+                            .unwrap_or_else(|| {
+                                soroban_sdk::panic_with_error!(env, TreasuryError::WeightOverflow)
+                            });
                         settlement.approvals.push_back(signer.clone());
                     }
                     env.storage()
@@ -153,12 +159,14 @@ impl TreasuryContract {
             .storage()
             .persistent()
             .get(&DataKey::Settlement(settlement_id))
-            .unwrap_or_else(|| panic!("SettlementNotFound"));
+            .unwrap_or_else(|| {
+                soroban_sdk::panic_with_error!(env, TreasuryError::SettlementNotFound)
+            });
         if settlement.status != SettlementStatus::Pending {
-            panic!("AlreadyExecuted");
+            soroban_sdk::panic_with_error!(env, TreasuryError::AlreadyExecuted);
         }
         if partial_amount <= 0 || partial_amount >= settlement.amount {
-            panic!("InvalidAmount");
+            soroban_sdk::panic_with_error!(env, TreasuryError::InvalidAmount);
         }
         let approved_total: i128 = env
             .storage()
@@ -166,7 +174,7 @@ impl TreasuryContract {
             .get(&DataKey::PartialApprovedTotal(settlement_id))
             .unwrap_or(0);
         if approved_total + partial_amount > settlement.amount {
-            panic!("InvalidAmount");
+            soroban_sdk::panic_with_error!(env, TreasuryError::InvalidAmount);
         }
         env.storage().persistent().set(
             &DataKey::PartialApprovedTotal(settlement_id),
@@ -209,26 +217,30 @@ impl TreasuryContract {
             .storage()
             .persistent()
             .get(&DataKey::Settlement(settlement_id))
-            .unwrap_or_else(|| panic!("SettlementNotFound"));
+            .unwrap_or_else(|| {
+                soroban_sdk::panic_with_error!(env, TreasuryError::SettlementNotFound)
+            });
         if settlement.status == SettlementStatus::OnHold {
-            panic!("SettlementOnHold");
+            soroban_sdk::panic_with_error!(env, TreasuryError::SettlementOnHold);
         }
         if settlement.status != SettlementStatus::Pending {
-            panic!("AlreadyExecuted");
+            soroban_sdk::panic_with_error!(env, TreasuryError::AlreadyExecuted);
         }
         let threshold: u32 = env
             .storage()
             .instance()
             .get(&DataKey::Threshold)
-            .unwrap_or_else(|| panic!("ThresholdNotConfigured"));
+            .unwrap_or_else(|| {
+                soroban_sdk::panic_with_error!(env, TreasuryError::ThresholdNotConfigured)
+            });
         if threshold == 0 {
-            panic!("ThresholdNotConfigured");
+            soroban_sdk::panic_with_error!(env, TreasuryError::ThresholdNotConfigured);
         }
         if !meets_threshold(settlement.approval_weight, threshold) {
-            panic!("ThresholdNotMet");
+            soroban_sdk::panic_with_error!(env, TreasuryError::ThresholdNotMet);
         }
         if token_contract == env.current_contract_address() {
-            panic!("InvalidTokenContract");
+            soroban_sdk::panic_with_error!(env, TreasuryError::InvalidTokenContract);
         }
         let allowlist: Vec<Address> = env
             .storage()
@@ -236,7 +248,7 @@ impl TreasuryContract {
             .get(&DataKey::TokenAllowlist)
             .unwrap_or_else(|| Vec::new(&env));
         if !allowlist.is_empty() && !allowlist.contains(&token_contract) {
-            panic!("TokenNotAllowed");
+            soroban_sdk::panic_with_error!(env, TreasuryError::TokenNotAllowed);
         }
         let payout_address = env
             .storage()
@@ -275,26 +287,30 @@ impl TreasuryContract {
             .storage()
             .persistent()
             .get(&DataKey::Settlement(settlement_id))
-            .unwrap_or_else(|| panic!("SettlementNotFound"));
+            .unwrap_or_else(|| {
+                soroban_sdk::panic_with_error!(env, TreasuryError::SettlementNotFound)
+            });
         if settlement.status != SettlementStatus::Pending {
-            panic!("AlreadyExecuted");
+            soroban_sdk::panic_with_error!(env, TreasuryError::AlreadyExecuted);
         }
         if partial_amount <= 0 || partial_amount >= settlement.amount {
-            panic!("InvalidAmount");
+            soroban_sdk::panic_with_error!(env, TreasuryError::InvalidAmount);
         }
         let threshold: u32 = env
             .storage()
             .instance()
             .get(&DataKey::Threshold)
-            .unwrap_or_else(|| panic!("ThresholdNotConfigured"));
+            .unwrap_or_else(|| {
+                soroban_sdk::panic_with_error!(env, TreasuryError::ThresholdNotConfigured)
+            });
         if threshold == 0 {
-            panic!("ThresholdNotConfigured");
+            soroban_sdk::panic_with_error!(env, TreasuryError::ThresholdNotConfigured);
         }
         if !meets_threshold(settlement.approval_weight, threshold) {
-            panic!("ThresholdNotMet");
+            soroban_sdk::panic_with_error!(env, TreasuryError::ThresholdNotMet);
         }
         if token_contract == env.current_contract_address() {
-            panic!("InvalidTokenContract");
+            soroban_sdk::panic_with_error!(env, TreasuryError::InvalidTokenContract);
         }
         let treasury = env.current_contract_address();
         let token_client = token::Client::new(&env, &token_contract);
@@ -322,9 +338,11 @@ impl TreasuryContract {
             .storage()
             .persistent()
             .get(&DataKey::Settlement(settlement_id))
-            .unwrap_or_else(|| panic!("SettlementNotFound"));
+            .unwrap_or_else(|| {
+                soroban_sdk::panic_with_error!(env, TreasuryError::SettlementNotFound)
+            });
         if settlement.status != SettlementStatus::Pending {
-            panic!("SettlementNotCancellable");
+            soroban_sdk::panic_with_error!(env, TreasuryError::SettlementNotCancellable);
         }
         settlement.status = SettlementStatus::Cancelled;
         env.storage()
@@ -416,7 +434,9 @@ impl TreasuryContract {
         env.storage()
             .persistent()
             .get(&DataKey::Settlement(settlement_id))
-            .unwrap_or_else(|| panic!("SettlementNotFound"))
+            .unwrap_or_else(|| {
+                soroban_sdk::panic_with_error!(env, TreasuryError::SettlementNotFound)
+            })
     }
 
     /// Expires a pending settlement once `SETTLEMENT_TTL` has elapsed since it was proposed.
@@ -431,12 +451,14 @@ impl TreasuryContract {
             .storage()
             .persistent()
             .get(&DataKey::Settlement(settlement_id))
-            .unwrap_or_else(|| panic!("SettlementNotFound"));
+            .unwrap_or_else(|| {
+                soroban_sdk::panic_with_error!(env, TreasuryError::SettlementNotFound)
+            });
         if settlement.status != SettlementStatus::Pending {
-            panic!("AlreadyExecuted");
+            soroban_sdk::panic_with_error!(env, TreasuryError::AlreadyExecuted);
         }
         if env.ledger().timestamp() <= settlement.proposed_at + SETTLEMENT_TTL {
-            panic!("TtlNotElapsed");
+            soroban_sdk::panic_with_error!(env, TreasuryError::TtlNotElapsed);
         }
         settlement.status = SettlementStatus::Expired;
         env.storage()
@@ -485,7 +507,7 @@ impl TreasuryContract {
             .unwrap_or_else(|| Vec::new(&env));
         if !allowlist.contains(&token) {
             if allowlist.len() >= MAX_ALLOWED_TOKENS {
-                panic!("AllowlistFull");
+                soroban_sdk::panic_with_error!(env, TreasuryError::AllowlistFull);
             }
             allowlist.push_back(token.clone());
             env.storage()

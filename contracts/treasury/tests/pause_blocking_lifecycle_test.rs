@@ -29,11 +29,7 @@ use compliance::{ComplianceContract, ComplianceContractClient};
 use invoice::{
     InvoiceContract, InvoiceContractClient, InvoiceError, InvoiceStatus, MaybeAddress, MaybeBytes,
 };
-use soroban_sdk::{
-    contract, contracterror, contractimpl,
-    testutils::Address as _,
-    Address, Env,
-};
+use soroban_sdk::{contract, contracterror, contractimpl, testutils::Address as _, Address, Env};
 use treasury::{SettlementStatus, TreasuryContract, TreasuryContractClient};
 
 // ─── Workflow error type shared across scenarios ──────────────────────────────
@@ -171,13 +167,18 @@ fn scenario_invoice_paused_blocks_mark_paid_cleanly() {
 
     // Step 1 – create invoice (succeeds; contract not yet paused)
     let inv_id = create_pending_invoice(&f);
-    assert_eq!(f.invoice.get_invoice(&inv_id).status, InvoiceStatus::Pending);
+    assert_eq!(
+        f.invoice.get_invoice(&inv_id).status,
+        InvoiceStatus::Pending
+    );
 
     // Step 2 – allow merchant in compliance (unrelated to invoice pause)
     f.compliance.allow_address(&f.admin, &f.merchant);
 
     // Step 3 – propose a treasury settlement (also unaffected by invoice state)
-    let sid = f.treasury.propose_settlement(&f.admin, &f.merchant, &10_000_000);
+    let sid = f
+        .treasury
+        .propose_settlement(&f.admin, &f.merchant, &10_000_000);
     assert_eq!(
         f.treasury.get_settlement(&sid).status,
         SettlementStatus::Pending
@@ -190,7 +191,13 @@ fn scenario_invoice_paused_blocks_mark_paid_cleanly() {
     // Step 5 – mark_paid must fail with ContractPaused
     let err = f
         .invoice
-        .try_mark_paid(&f.admin, &inv_id, &payer, &MaybeBytes::None, &MaybeAddress::None)
+        .try_mark_paid(
+            &f.admin,
+            &inv_id,
+            &payer,
+            &MaybeBytes::None,
+            &MaybeAddress::None,
+        )
         .unwrap_err()
         .unwrap();
     assert_eq!(
@@ -219,8 +226,17 @@ fn scenario_invoice_paused_blocks_mark_paid_cleanly() {
 
     // Step 8 – unpause and confirm recovery
     f.invoice.unpause(&f.admin);
-    let mark_result = f.invoice.try_mark_paid(&f.admin, &inv_id, &payer, &MaybeBytes::None, &MaybeAddress::None);
-    assert!(mark_result.is_ok(), "mark_paid must succeed after invoice is unpaused");
+    let mark_result = f.invoice.try_mark_paid(
+        &f.admin,
+        &inv_id,
+        &payer,
+        &MaybeBytes::None,
+        &MaybeAddress::None,
+    );
+    assert!(
+        mark_result.is_ok(),
+        "mark_paid must succeed after invoice is unpaused"
+    );
     assert_eq!(f.invoice.get_invoice(&inv_id).status, InvoiceStatus::Paid);
 }
 
@@ -265,10 +281,21 @@ fn scenario_invoice_pause_unpause_full_lifecycle_recovers() {
 
     // Pause and confirm mark_paid is blocked
     f.invoice.pause(&f.admin);
-    assert!(f.invoice.try_mark_paid(&f.admin, &inv_id, &payer, &MaybeBytes::None, &MaybeAddress::None).is_err());
+    assert!(f
+        .invoice
+        .try_mark_paid(
+            &f.admin,
+            &inv_id,
+            &payer,
+            &MaybeBytes::None,
+            &MaybeAddress::None
+        )
+        .is_err());
 
     // Compliance and treasury remain operational
-    let sid = f.treasury.propose_settlement(&f.admin, &f.merchant, &10_000_000);
+    let sid = f
+        .treasury
+        .propose_settlement(&f.admin, &f.merchant, &10_000_000);
     assert_eq!(
         f.treasury.get_settlement(&sid).status,
         SettlementStatus::Pending
@@ -276,7 +303,13 @@ fn scenario_invoice_pause_unpause_full_lifecycle_recovers() {
 
     // Unpause invoice; full lifecycle completes
     f.invoice.unpause(&f.admin);
-    f.invoice.mark_paid(&f.admin, &inv_id, &payer, &MaybeBytes::None, &MaybeAddress::None);
+    f.invoice.mark_paid(
+        &f.admin,
+        &inv_id,
+        &payer,
+        &MaybeBytes::None,
+        &MaybeAddress::None,
+    );
     assert_eq!(f.invoice.get_invoice(&inv_id).status, InvoiceStatus::Paid);
 
     // Treasury execution also succeeds
@@ -303,26 +336,29 @@ fn scenario_invoice_pause_unpause_full_lifecycle_recovers() {
 // Treasury uses non-unwinding panic!() for error paths (no_std).  The Soroban
 // testutils sandbox traps the abort so tests don't crash the process, but the
 // `try_*` wrappers cannot return a typed error — they re-abort.  Therefore
-// treasury pause-rejection tests use `#[should_panic(expected = "ContractPaused")]`.
+// treasury pause-rejection tests use `#[should_panic(expected = "Error(Contract, #8)")]`.
 
 /// Pausing the treasury mid-flow panics with "ContractPaused" when
 /// `propose_settlement` is called.
 #[test]
-#[should_panic(expected = "ContractPaused")]
+#[should_panic(expected = "Error(Contract, #8)")]
 fn scenario_treasury_paused_blocks_propose_settlement() {
     let f = setup();
     f.treasury.pause(&f.admin);
     // This must panic with "ContractPaused"
-    f.treasury.propose_settlement(&f.admin, &f.merchant, &10_000_000);
+    f.treasury
+        .propose_settlement(&f.admin, &f.merchant, &10_000_000);
 }
 
 /// Pausing treasury *after* proposal panics with "ContractPaused" on execute.
 #[test]
-#[should_panic(expected = "ContractPaused")]
+#[should_panic(expected = "Error(Contract, #8)")]
 fn scenario_treasury_paused_blocks_execute_settlement() {
     let f = setup();
     f.compliance.allow_address(&f.admin, &f.merchant);
-    let sid = f.treasury.propose_settlement(&f.admin, &f.merchant, &10_000_000);
+    let sid = f
+        .treasury
+        .propose_settlement(&f.admin, &f.merchant, &10_000_000);
     // Pause AFTER proposal
     f.treasury.pause(&f.admin);
     // This must panic with "ContractPaused"
@@ -344,7 +380,13 @@ fn scenario_treasury_paused_invoice_and_compliance_unaffected() {
     f.treasury.pause(&f.admin);
 
     // Invoice operations are unaffected — mark_paid succeeds
-    let mark_result = f.invoice.try_mark_paid(&f.admin, &inv_id, &payer, &MaybeBytes::None, &MaybeAddress::None);
+    let mark_result = f.invoice.try_mark_paid(
+        &f.admin,
+        &inv_id,
+        &payer,
+        &MaybeBytes::None,
+        &MaybeAddress::None,
+    );
     assert!(
         mark_result.is_ok(),
         "mark_paid must succeed when only treasury is paused"
@@ -363,7 +405,10 @@ fn scenario_treasury_paused_invoice_and_compliance_unaffected() {
         release_result.is_ok(),
         "release_escrow must succeed when only treasury is paused"
     );
-    assert_eq!(f.invoice.get_invoice(&inv_id).status, InvoiceStatus::Released);
+    assert_eq!(
+        f.invoice.get_invoice(&inv_id).status,
+        InvoiceStatus::Released
+    );
 }
 
 /// After unpausing treasury, propose + execute succeed; confirms full recovery.
@@ -379,14 +424,22 @@ fn scenario_treasury_pause_unpause_full_lifecycle_recovers() {
     // Invoice and compliance remain usable
     let inv_id = create_pending_invoice(&f);
     let payer = Address::generate(&f.env);
-    f.invoice.mark_paid(&f.admin, &inv_id, &payer, &MaybeBytes::None, &MaybeAddress::None);
+    f.invoice.mark_paid(
+        &f.admin,
+        &inv_id,
+        &payer,
+        &MaybeBytes::None,
+        &MaybeAddress::None,
+    );
     assert_eq!(f.invoice.get_invoice(&inv_id).status, InvoiceStatus::Paid);
 
     // Unpause treasury
     f.treasury.unpause(&f.admin);
 
     // Now propose and execute succeed
-    let sid = f.treasury.propose_settlement(&f.admin, &f.merchant, &10_000_000);
+    let sid = f
+        .treasury
+        .propose_settlement(&f.admin, &f.merchant, &10_000_000);
     let workflow = PauseTestWorkflowClient::new(&f.env, &f.workflow_id);
     assert!(workflow
         .try_execute_if_compliant(
@@ -418,11 +471,19 @@ fn scenario_compliance_paused_blocks_new_allow_so_gate_rejects() {
 
     // Step 1 – invoice workflow succeeds (unrelated to compliance)
     let inv_id = create_pending_invoice(&f);
-    f.invoice.mark_paid(&f.admin, &inv_id, &payer, &MaybeBytes::None, &MaybeAddress::None);
+    f.invoice.mark_paid(
+        &f.admin,
+        &inv_id,
+        &payer,
+        &MaybeBytes::None,
+        &MaybeAddress::None,
+    );
     assert_eq!(f.invoice.get_invoice(&inv_id).status, InvoiceStatus::Paid);
 
     // Step 2 – propose treasury settlement (treasury doesn't consult compliance)
-    let sid = f.treasury.propose_settlement(&f.admin, &f.merchant, &10_000_000);
+    let sid = f
+        .treasury
+        .propose_settlement(&f.admin, &f.merchant, &10_000_000);
     assert_eq!(
         f.treasury.get_settlement(&sid).status,
         SettlementStatus::Pending
@@ -512,7 +573,9 @@ fn scenario_compliance_paused_pre_allowed_merchant_can_still_execute() {
     f.compliance.allow_address(&f.admin, &f.merchant);
     assert!(f.compliance.is_allowed(&f.merchant));
 
-    let sid = f.treasury.propose_settlement(&f.admin, &f.merchant, &10_000_000);
+    let sid = f
+        .treasury
+        .propose_settlement(&f.admin, &f.merchant, &10_000_000);
 
     // Pause compliance after allow
     f.compliance.pause(&f.admin);
@@ -552,7 +615,9 @@ fn scenario_compliance_paused_block_address_is_permitted() {
     // Allow merchant first
     f.compliance.allow_address(&f.admin, &f.merchant);
 
-    let sid = f.treasury.propose_settlement(&f.admin, &f.merchant, &10_000_000);
+    let sid = f
+        .treasury
+        .propose_settlement(&f.admin, &f.merchant, &10_000_000);
 
     // Pause compliance
     f.compliance.pause(&f.admin);

@@ -62,17 +62,9 @@ mod malicious_token {
         pub fn transfer(env: Env, from: Address, to: Address, amount: i128) {
             from.require_auth();
             // Re-enter the treasury to change the merchant's payout address
-            let treasury_addr: Address = env
-                .storage()
-                .instance()
-                .get(&("treasury_addr",))
-                .unwrap();
+            let treasury_addr: Address = env.storage().instance().get(&("treasury_addr",)).unwrap();
             let treasury_client = TreasuryContractClient::new(&env, &treasury_addr);
-            let hijack_addr: Address = env
-                .storage()
-                .instance()
-                .get(&("hijack_addr",))
-                .unwrap();
+            let hijack_addr: Address = env.storage().instance().get(&("hijack_addr",)).unwrap();
             treasury_client.update_merchant_payout_address(&to, &hijack_addr);
 
             // Now perform the actual transfer
@@ -87,9 +79,7 @@ mod malicious_token {
         }
 
         pub fn set_treasury_addr(env: Env, treasury: Address) {
-            env.storage()
-                .instance()
-                .set(&("treasury_addr",), &treasury);
+            env.storage().instance().set(&("treasury_addr",), &treasury);
         }
 
         pub fn set_hijack_addr(env: Env, hijack: Address) {
@@ -98,8 +88,8 @@ mod malicious_token {
     }
 }
 
-use test_token::{TestToken, TestTokenClient};
 use malicious_token::{MaliciousToken, MaliciousTokenClient};
+use test_token::{TestToken, TestTokenClient};
 
 #[test]
 fn execute_settlement_uses_merchant_payout_override() {
@@ -158,10 +148,7 @@ fn non_merchant_cannot_update_another_merchants_payout_address() {
 
     // Attacker tries to update merchant's payout address — should fail because
     // no one (attacker included) has provided the merchant's authorization.
-    let result = treasury_client.try_update_merchant_payout_address(
-        &merchant,
-        &payout_override,
-    );
+    let result = treasury_client.try_update_merchant_payout_address(&merchant, &payout_override);
     assert!(result.is_err());
 }
 

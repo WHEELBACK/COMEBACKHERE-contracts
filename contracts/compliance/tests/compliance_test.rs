@@ -968,13 +968,20 @@ fn accept_admin_rejects_current_admin_self_accepting_others_transfer() {
 fn clear_address_clears_blocked_and_allowed_flags() {
     use compliance::AddressState;
     let (_env, admin, subject, client) = setup();
-    client.block_address(&admin, &subject, &Some(soroban_sdk::Bytes::from_slice(&_env, b"bad")));
+    client.block_address(
+        &admin,
+        &subject,
+        &Some(soroban_sdk::Bytes::from_slice(&_env, b"bad")),
+    );
     assert!(!client.is_allowed(&subject));
 
     client.clear_address(&admin, &subject);
 
     assert!(client.is_allowed(&subject));
-    assert_eq!(client.address_status(&admin, &subject), AddressState::Allowed);
+    assert_eq!(
+        client.address_status(&admin, &subject),
+        AddressState::Allowed
+    );
 }
 
 #[test]

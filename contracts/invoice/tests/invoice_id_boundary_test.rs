@@ -40,7 +40,16 @@ fn test_get_invoice_id_u64_max_minus_one_panics() {
 fn test_first_invoice_id_is_one() {
     let (env, _, _, client) = setup();
     let merchant = Address::generate(&env);
-    let id = client.create_invoice(&merchant, &10_000_000, &10_000_000, &3600, &MaybeBytes::None, &MaybeBytes::None, &0, &MaybeAddress::None);
+    let id = client.create_invoice(
+        &merchant,
+        &10_000_000,
+        &10_000_000,
+        &3600,
+        &MaybeBytes::None,
+        &MaybeBytes::None,
+        &0,
+        &MaybeAddress::None,
+    );
     assert_eq!(id, 1u64);
 }
 
@@ -50,7 +59,16 @@ fn test_sequential_ids_increment_correctly() {
     let (env, _, _, client) = setup();
     let merchant = Address::generate(&env);
     for expected in 1u64..=10 {
-        let id = client.create_invoice(&merchant, &10_000_000, &10_000_000, &3600, &MaybeBytes::None, &MaybeBytes::None, &0, &MaybeAddress::None);
+        let id = client.create_invoice(
+            &merchant,
+            &10_000_000,
+            &10_000_000,
+            &3600,
+            &MaybeBytes::None,
+            &MaybeBytes::None,
+            &0,
+            &MaybeAddress::None,
+        );
         assert_eq!(id, expected);
     }
 }
@@ -67,7 +85,16 @@ fn test_invoice_at_large_boundary_id_retrievable() {
             .set(&DataKey::InvoiceCount, &(u64::MAX - 2));
     });
     let merchant = Address::generate(&env);
-    let result = client.try_create_invoice(&merchant, &10_000_000, &11_000_000, &3600, &MaybeBytes::None, &MaybeBytes::None, &0, &MaybeAddress::None);
+    let result = client.try_create_invoice(
+        &merchant,
+        &10_000_000,
+        &11_000_000,
+        &3600,
+        &MaybeBytes::None,
+        &MaybeBytes::None,
+        &0,
+        &MaybeAddress::None,
+    );
     // The host may abort or return an error for near-overflow IDs; either is acceptable.
     // If it succeeds, verify the stored values are correct.
     if let Ok(Ok(id)) = result {
@@ -97,8 +124,14 @@ fn test_overflow_wrapping_at_u64_max_is_not_silent() {
     // Counter at MAX-1 → next id = MAX. Use try_ to avoid a non-unwinding abort
     // if the host rejects arithmetic at this boundary.
     let result = client.try_create_invoice(
-        &merchant, &10_000_000, &10_000_000, &3600,
-        &MaybeBytes::None, &MaybeBytes::None, &0, &MaybeAddress::None,
+        &merchant,
+        &10_000_000,
+        &10_000_000,
+        &3600,
+        &MaybeBytes::None,
+        &MaybeBytes::None,
+        &0,
+        &MaybeAddress::None,
     );
     // Either an error (host rejects) or id == u64::MAX (host allows) is acceptable.
     // What must NOT happen is a silent wrap to id == 0.

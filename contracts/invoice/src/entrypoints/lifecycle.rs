@@ -66,9 +66,10 @@ impl InvoiceContract {
             .checked_add(expires_in_seconds)
             .ok_or(InvoiceError::ExpiryOverflow)?;
         if merchant_nonce != 0 {
-            env.storage()
-                .persistent()
-                .set(&DataKey::MerchantNonce(merchant.clone(), merchant_nonce), &true);
+            env.storage().persistent().set(
+                &DataKey::MerchantNonce(merchant.clone(), merchant_nonce),
+                &true,
+            );
         }
         let invoice = Invoice {
             id,
@@ -454,9 +455,11 @@ impl InvoiceContract {
         let end = start.saturating_add(u64::from(limit)).min(total);
         let mut page = Vec::new(&env);
         for i in start..end {
-            if let Some(id) = env.storage().persistent().get::<DataKey, u64>(
-                &DataKey::MerchantInvoiceIndex(merchant.clone(), i),
-            ) {
+            if let Some(id) = env
+                .storage()
+                .persistent()
+                .get::<DataKey, u64>(&DataKey::MerchantInvoiceIndex(merchant.clone(), i))
+            {
                 page.push_back(id);
             }
         }

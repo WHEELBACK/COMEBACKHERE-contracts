@@ -36,7 +36,16 @@ fn prop_gross_always_gte_amount() {
         let client = InvoiceContractClient::new(&env, &cid);
         client.initialize(&admin);
         let merchant = Address::generate(&env);
-        let id = client.create_invoice(&merchant, &amount, &gross, &3600, &MaybeBytes::None, &MaybeBytes::None, &0, &MaybeAddress::None);
+        let id = client.create_invoice(
+            &merchant,
+            &amount,
+            &gross,
+            &3600,
+            &MaybeBytes::None,
+            &MaybeBytes::None,
+            &0,
+            &MaybeAddress::None,
+        );
         let inv = client.get_invoice(&id);
         assert!(
             inv.gross_usdc >= inv.amount_usdc,
@@ -64,7 +73,16 @@ fn prop_paid_does_not_mutate_amounts() {
         client.initialize(&admin);
         let merchant = Address::generate(&env);
         let payer = Address::generate(&env);
-        let id = client.create_invoice(&merchant, &amount, &gross, &3600, &MaybeBytes::None, &MaybeBytes::None, &0, &MaybeAddress::None);
+        let id = client.create_invoice(
+            &merchant,
+            &amount,
+            &gross,
+            &3600,
+            &MaybeBytes::None,
+            &MaybeBytes::None,
+            &0,
+            &MaybeAddress::None,
+        );
         client.mark_paid(&admin, &id, &payer, &MaybeBytes::None, &MaybeAddress::None);
         let inv = client.get_invoice(&id);
         assert_eq!(
@@ -82,7 +100,16 @@ fn prop_invoice_ids_are_sequential() {
     let (env, _, client) = setup();
     let merchant = Address::generate(&env);
     for expected_id in 1u64..=20 {
-        let id = client.create_invoice(&merchant, &10_000_000, &10_250_000, &3600, &MaybeBytes::None, &MaybeBytes::None, &0, &MaybeAddress::None);
+        let id = client.create_invoice(
+            &merchant,
+            &10_000_000,
+            &10_250_000,
+            &3600,
+            &MaybeBytes::None,
+            &MaybeBytes::None,
+            &0,
+            &MaybeAddress::None,
+        );
         assert_eq!(
             id, expected_id,
             "non-sequential id at position {expected_id}"
@@ -108,7 +135,16 @@ fn prop_amounts_stored_exactly() {
         let client = InvoiceContractClient::new(&env, &cid);
         client.initialize(&admin);
         let merchant = Address::generate(&env);
-        let id = client.create_invoice(&merchant, &amount, &gross, &3600, &MaybeBytes::None, &MaybeBytes::None, &0, &MaybeAddress::None);
+        let id = client.create_invoice(
+            &merchant,
+            &amount,
+            &gross,
+            &3600,
+            &MaybeBytes::None,
+            &MaybeBytes::None,
+            &0,
+            &MaybeAddress::None,
+        );
         let inv = client.get_invoice(&id);
         assert_eq!(inv.amount_usdc, amount);
         assert_eq!(inv.gross_usdc, gross);
@@ -128,7 +164,7 @@ fn prop_validator_accepts_iff_positive_and_gross_gte_amount() {
         (0, 0),
         (-1, 10_000_000),
         (10_000_000, 9_999_999),
-        (500_000, 500_000),   // below 1 USDC minimum
+        (500_000, 500_000), // below 1 USDC minimum
         (i128::MIN, i128::MAX),
     ];
 
@@ -142,7 +178,16 @@ fn prop_validator_accepts_iff_positive_and_gross_gte_amount() {
         let merchant = Address::generate(&env);
         assert!(
             client
-                .try_create_invoice(&merchant, &amount, &gross, &3600, &MaybeBytes::None, &MaybeBytes::None, &0, &MaybeAddress::None)
+                .try_create_invoice(
+                    &merchant,
+                    &amount,
+                    &gross,
+                    &3600,
+                    &MaybeBytes::None,
+                    &MaybeBytes::None,
+                    &0,
+                    &MaybeAddress::None
+                )
                 .is_ok(),
             "expected accept for amount={amount} gross={gross}"
         );
@@ -157,7 +202,16 @@ fn prop_validator_accepts_iff_positive_and_gross_gte_amount() {
         let merchant = Address::generate(&env);
         assert!(
             client
-                .try_create_invoice(&merchant, &amount, &gross, &3600, &MaybeBytes::None, &MaybeBytes::None, &0, &MaybeAddress::None)
+                .try_create_invoice(
+                    &merchant,
+                    &amount,
+                    &gross,
+                    &3600,
+                    &MaybeBytes::None,
+                    &MaybeBytes::None,
+                    &0,
+                    &MaybeAddress::None
+                )
                 .is_err(),
             "expected reject for amount={amount} gross={gross}"
         );

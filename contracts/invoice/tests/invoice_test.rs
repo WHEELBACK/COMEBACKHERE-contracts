@@ -740,10 +740,7 @@ fn test_payer_cannot_cancel_pending_invoice() {
         &MaybeAddress::None,
     );
 
-    let err = client
-        .try_cancel_invoice(&payer, &id)
-        .unwrap_err()
-        .unwrap();
+    let err = client.try_cancel_invoice(&payer, &id).unwrap_err().unwrap();
 
     assert_eq!(err, InvoiceError::Unauthorized);
     assert_eq!(client.get_invoice(&id).status, InvoiceStatus::Pending);
@@ -811,6 +808,12 @@ fn test_abi_snapshot_matches_contract() {
         "unpause",
         "set_grace_window",
         "get_grace_window",
+        "accept_admin",
+        "extend_expiry",
+        "get_invoice_count",
+        "get_invoices_by_merchant",
+        "get_pending_ids",
+        "transfer_admin",
     ]
     .iter()
     .copied()
@@ -828,6 +831,7 @@ fn test_abi_snapshot_matches_contract() {
         "contract_paused",
         "contract_unpaused",
         "refund_approved",
+        "refund_rejected",
     ]
     .iter()
     .copied()
@@ -1022,7 +1026,10 @@ fn test_batch_expire_skips_missing_and_non_pending_invoices() {
     env.ledger().with_mut(|li| li.timestamp = 2);
     let ids = soroban_sdk::vec![&env, 999, expired_id, paid_id];
     assert_eq!(client.batch_expire(&admin, &ids), 1);
-    assert_eq!(client.get_invoice(&expired_id).status, InvoiceStatus::Expired);
+    assert_eq!(
+        client.get_invoice(&expired_id).status,
+        InvoiceStatus::Expired
+    );
     assert_eq!(client.get_invoice(&paid_id).status, InvoiceStatus::Paid);
 }
 
@@ -1211,7 +1218,10 @@ fn test_valid_32_byte_hashes_accepted() {
     let invoice = client.get_invoice(&id);
 
     assert_eq!(invoice.metadata_hash, MaybeBytes::Some(metadata_hash));
-    assert_eq!(invoice.payment_link_hash, MaybeBytes::Some(payment_link_hash));
+    assert_eq!(
+        invoice.payment_link_hash,
+        MaybeBytes::Some(payment_link_hash)
+    );
 }
 
 #[test]

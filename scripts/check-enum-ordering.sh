@@ -25,9 +25,14 @@ set -euo pipefail
 echo "=== Enum ordering check ==="
 
 errors=0
+status_file="$(mktemp)"
+trap 'rm -f "$status_file"' EXIT
 
 # Find all #[repr(u32)] enum definitions under contracts/ and crates/
 # We use awk to extract the enum name and its variants with explicit discriminants.
+# NOTE: this loop runs in a subshell (piped from `find`), so per-file failures are
+# recorded to status_file rather than the `errors` variable, which would not
+# survive back to the parent shell.
 find contracts crates -name '*.rs' -type f | while read -r file; do
     # Skip test files
     if echo "$file" | grep -q '/tests/'; then
@@ -81,9 +86,9 @@ find contracts crates -name '*.rs' -type f | while read -r file; do
             for ((i=0; i<${#line}; i++)); do
                 ch="${line:$i:1}"
                 if [[ "$ch" == "{" ]]; then
-                    ((brace_depth++))
+                    brace_depth=$((brace_depth + 1))
                 elif [[ "$ch" == "}" ]]; then
-                    ((brace_depth--))
+                    brace_depth=$((brace_depth - 1))
                 fi
             done
 
@@ -117,8 +122,13 @@ find contracts crates -name '*.rs' -type f | while read -r file; do
 
     if [[ $errors -ne 0 ]]; then
         echo "FAILED"
+        echo "1" >> "$status_file"
     fi
 done
+
+if [[ -s "$status_file" ]]; then
+    errors=1
+fi
 
 if [[ $errors -eq 0 ]]; then
     echo "✓ All enums pass append-only ordering check"

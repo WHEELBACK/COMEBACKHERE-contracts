@@ -6,7 +6,7 @@ on:
 
 env:
   CARGO_TERM_COLOR: always
-  STELLAR_CLI_VERSION: "20.0.0"
+  STELLAR_CLI_VERSION: "22.8.2"
 
 jobs:
   wasm-build:
@@ -19,6 +19,9 @@ jobs:
         with:
           toolchain: "1.95.0"
           targets: wasm32-unknown-unknown
+
+      - name: Install stellar-cli build dependencies
+        run: sudo apt-get update && sudo apt-get install -y libdbus-1-dev libudev-dev pkg-config
 
       - name: Install Stellar CLI (pinned)
         run: cargo install --locked stellar-cli --version "$STELLAR_CLI_VERSION"

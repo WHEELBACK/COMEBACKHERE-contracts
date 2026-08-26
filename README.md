@@ -117,7 +117,7 @@ The project is built using the following toolchain:
 | ------------------ | ------------------------ |
 | Rust               | `1.95.0`                 |
 | Compilation Target | `wasm32-unknown-unknown` |
-| Stellar CLI        | `20.0.0`                 |
+| Stellar CLI        | `22.8.2`                 |
 
 > The Rust version is pinned in `rust-toolchain.toml` to ensure consistent builds across development environments.
 

@@ -1,7 +1,7 @@
 use crate::{
     require_admin, require_not_paused, DataKey, Dispute, DisputeStatus, Settlement,
     SettlementHoldReason, SettlementStatus, TreasuryContract, TreasuryContractArgs,
-    TreasuryContractClient,
+    TreasuryContractClient, TreasuryError,
 };
 use multisig::{meets_threshold, record_approval, require_authorized_signer};
 use soroban_sdk::{contractimpl, Address, Env, Symbol, Vec};
@@ -24,7 +24,7 @@ impl TreasuryContract {
         require_not_paused(&env);
         claimant.require_auth();
         if amount <= 0 {
-            panic!("InvalidAmount");
+            soroban_sdk::panic_with_error!(env, TreasuryError::InvalidAmount);
         }
         if let Some(mut settlement) = env
             .storage()
@@ -43,7 +43,9 @@ impl TreasuryContract {
             .instance()
             .get(&DataKey::DisputeCount)
             .unwrap_or(0);
-        let id = count.checked_add(1).unwrap_or_else(|| panic!("ArithmeticOverflow"));
+        let id = count.checked_add(1).unwrap_or_else(|| {
+            soroban_sdk::panic_with_error!(env, TreasuryError::ArithmeticOverflow)
+        });
         let dispute = Dispute {
             id,
             settlement_id,
@@ -75,12 +77,12 @@ impl TreasuryContract {
             .storage()
             .persistent()
             .get(&DataKey::Dispute(dispute_id))
-            .unwrap_or_else(|| panic!("DisputeNotFound"));
+            .unwrap_or_else(|| soroban_sdk::panic_with_error!(env, TreasuryError::DisputeNotFound));
         if dispute.status != DisputeStatus::Raised {
-            panic!("DisputeAlreadyResolved");
+            soroban_sdk::panic_with_error!(env, TreasuryError::DisputeAlreadyResolved);
         }
         if env.ledger().timestamp() < dispute.dispute_expires_at {
-            panic!("DisputeNotExpired");
+            soroban_sdk::panic_with_error!(env, TreasuryError::DisputeNotExpired);
         }
         dispute.status = DisputeStatus::Expired;
         env.storage()
@@ -109,7 +111,7 @@ impl TreasuryContract {
         env.storage()
             .persistent()
             .get(&DataKey::Dispute(dispute_id))
-            .unwrap_or_else(|| panic!("DisputeNotFound"))
+            .unwrap_or_else(|| soroban_sdk::panic_with_error!(env, TreasuryError::DisputeNotFound))
     }
 
     /// Resolves an open dispute in favour of claimant or counterparty (admin-only).
@@ -123,9 +125,9 @@ impl TreasuryContract {
             .storage()
             .persistent()
             .get(&DataKey::Dispute(dispute_id))
-            .unwrap_or_else(|| panic!("DisputeNotFound"));
+            .unwrap_or_else(|| soroban_sdk::panic_with_error!(env, TreasuryError::DisputeNotFound));
         if dispute.status != DisputeStatus::Raised {
-            panic!("DisputeAlreadyResolved");
+            soroban_sdk::panic_with_error!(env, TreasuryError::DisputeAlreadyResolved);
         }
         dispute.status = if in_favor_of_claimant {
             DisputeStatus::ResolvedClaimant
@@ -191,14 +193,14 @@ impl TreasuryContract {
             .storage()
             .persistent()
             .get(&DataKey::Dispute(dispute_id))
-            .unwrap_or_else(|| panic!("DisputeNotFound"));
+            .unwrap_or_else(|| soroban_sdk::panic_with_error!(env, TreasuryError::DisputeNotFound));
         if dispute.status != DisputeStatus::Raised {
-            panic!("DisputeAlreadyResolved");
+            soroban_sdk::panic_with_error!(env, TreasuryError::DisputeAlreadyResolved);
         }
         if dispute.resolution_weight == 0 {
             dispute.resolution_for_claimant = in_favor_of_claimant;
         } else if dispute.resolution_for_claimant != in_favor_of_claimant {
-            panic!("ResolutionDirectionMismatch");
+            soroban_sdk::panic_with_error!(env, TreasuryError::ResolutionDirectionMismatch);
         }
         record_approval(
             &env,
@@ -210,7 +212,9 @@ impl TreasuryContract {
             .storage()
             .instance()
             .get(&DataKey::Threshold)
-            .unwrap_or_else(|| panic!("ThresholdNotConfigured"));
+            .unwrap_or_else(|| {
+                soroban_sdk::panic_with_error!(env, TreasuryError::ThresholdNotConfigured)
+            });
         if meets_threshold(dispute.resolution_weight, threshold) {
             dispute.status = if dispute.resolution_for_claimant {
                 DisputeStatus::ResolvedClaimant

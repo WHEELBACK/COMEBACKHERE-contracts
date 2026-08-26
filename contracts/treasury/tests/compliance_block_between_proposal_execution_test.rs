@@ -11,11 +11,7 @@
 /// separate on-chain instances in the Soroban test environment, which is the
 /// distinction from the treasury-internal unit tests.
 use compliance::{ComplianceContract, ComplianceContractClient};
-use soroban_sdk::{
-    contract, contracterror, contractimpl,
-    testutils::Address as _,
-    Address, Env,
-};
+use soroban_sdk::{contract, contracterror, contractimpl, testutils::Address as _, Address, Env};
 use treasury::{SettlementStatus, TreasuryContract, TreasuryContractClient};
 
 // ─── Error type for the workflow ─────────────────────────────────────────────
@@ -130,7 +126,9 @@ fn execution_succeeds_when_merchant_allowed_throughout() {
     f.compliance.allow_address(&f.admin, &f.merchant);
 
     // Propose settlement while compliant
-    let sid = f.treasury.propose_settlement(&f.admin, &f.merchant, &10_000_000);
+    let sid = f
+        .treasury
+        .propose_settlement(&f.admin, &f.merchant, &10_000_000);
 
     // Execute via the compliance-gated workflow — merchant still allowed
     let workflow = ComplianceGatedWorkflowClient::new(&f.env, &f.workflow_id);
@@ -141,7 +139,10 @@ fn execution_succeeds_when_merchant_allowed_throughout() {
         &f.token_id,
         &f.merchant,
     );
-    assert!(result.is_ok(), "expected execution to succeed for allowed merchant");
+    assert!(
+        result.is_ok(),
+        "expected execution to succeed for allowed merchant"
+    );
 
     // Confirm the treasury records the settlement as Executed
     let settlement = f.treasury.get_settlement(&sid);
@@ -162,7 +163,9 @@ fn execution_blocked_when_merchant_blocked_after_proposal() {
     f.compliance.allow_address(&f.admin, &f.merchant);
 
     // Propose the settlement while merchant is compliant
-    let sid = f.treasury.propose_settlement(&f.admin, &f.merchant, &10_000_000);
+    let sid = f
+        .treasury
+        .propose_settlement(&f.admin, &f.merchant, &10_000_000);
 
     // Simulate a compliance event: merchant is blocked *after* proposal
     f.compliance.block_address(&f.admin, &f.merchant, &None);
@@ -205,7 +208,9 @@ fn execution_blocked_when_merchant_never_allowed() {
     let f = setup();
 
     // merchant is NOT allowed — propose anyway (treasury doesn't gate on compliance)
-    let sid = f.treasury.propose_settlement(&f.admin, &f.merchant, &5_000_000);
+    let sid = f
+        .treasury
+        .propose_settlement(&f.admin, &f.merchant, &5_000_000);
 
     let workflow = ComplianceGatedWorkflowClient::new(&f.env, &f.workflow_id);
     let err = workflow
@@ -233,7 +238,9 @@ fn execution_succeeds_after_block_is_cleared() {
     let f = setup();
 
     f.compliance.allow_address(&f.admin, &f.merchant);
-    let sid = f.treasury.propose_settlement(&f.admin, &f.merchant, &10_000_000);
+    let sid = f
+        .treasury
+        .propose_settlement(&f.admin, &f.merchant, &10_000_000);
 
     // Block mid-flight
     f.compliance.block_address(&f.admin, &f.merchant, &None);
@@ -262,7 +269,10 @@ fn execution_succeeds_after_block_is_cleared() {
         &f.token_id,
         &f.merchant,
     );
-    assert!(result.is_ok(), "execution must succeed after block is cleared");
+    assert!(
+        result.is_ok(),
+        "execution must succeed after block is cleared"
+    );
 
     assert_eq!(
         f.treasury.get_settlement(&sid).status,
@@ -281,8 +291,12 @@ fn compliance_gate_is_per_merchant() {
     // Allow only merchant A
     f.compliance.allow_address(&f.admin, &f.merchant);
 
-    let sid_a = f.treasury.propose_settlement(&f.admin, &f.merchant, &10_000_000);
-    let sid_b = f.treasury.propose_settlement(&f.admin, &merchant_b, &10_000_000);
+    let sid_a = f
+        .treasury
+        .propose_settlement(&f.admin, &f.merchant, &10_000_000);
+    let sid_b = f
+        .treasury
+        .propose_settlement(&f.admin, &merchant_b, &10_000_000);
 
     let workflow = ComplianceGatedWorkflowClient::new(&f.env, &f.workflow_id);
 

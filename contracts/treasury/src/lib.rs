@@ -88,10 +88,8 @@ impl TreasuryContract {
         env.storage()
             .instance()
             .set(&DataKey::Threshold, &new_threshold);
-        env.events().publish(
-            (Symbol::new(&env, "threshold_updated"),),
-            new_threshold,
-        );
+        env.events()
+            .publish((Symbol::new(&env, "threshold_updated"),), new_threshold);
         Ok(())
     }
 
@@ -121,7 +119,7 @@ pub(crate) fn require_admin(env: &Env, admin: &Address) {
     admin.require_auth();
     let stored: Address = env.storage().instance().get(&DataKey::Admin).unwrap();
     if stored != *admin {
-        panic!("Unauthorized");
+        soroban_sdk::panic_with_error!(env, TreasuryError::Unauthorized);
     }
 }
 
@@ -132,7 +130,7 @@ pub(crate) fn require_not_paused(env: &Env) {
         .get(&DataKey::Paused)
         .unwrap_or(false);
     if paused {
-        panic!("ContractPaused");
+        soroban_sdk::panic_with_error!(env, TreasuryError::ContractPaused);
     }
 }
 
