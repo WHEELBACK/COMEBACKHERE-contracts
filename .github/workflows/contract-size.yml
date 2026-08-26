@@ -59,8 +59,12 @@ jobs:
           # ships. wasm-opt only touches code/data, not the custom
           # contractspecv0/contractmetav0/contractenvmetav0 sections that
           # encode the contract's on-chain ABI.
+          # --all-features: the apt-packaged wasm-opt doesn't read the
+          # module's target-features custom section, so it must be told
+          # about every feature LLVM's wasm32 backend may emit (sign-ext,
+          # bulk-memory, etc.) rather than enabling them one by one.
           for wasm in target/wasm32-unknown-unknown/release/*.wasm; do
-            wasm-opt -Oz --strip-debug --strip-dwarf --vacuum --enable-bulk-memory "$wasm" -o "$wasm.opt"
+            wasm-opt -Oz --strip-debug --strip-dwarf --vacuum --all-features "$wasm" -o "$wasm.opt"
             mv "$wasm.opt" "$wasm"
           done
 
