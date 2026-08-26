@@ -12,6 +12,7 @@ on:
       - "contracts/**"
       - "Cargo.toml"
       - "Cargo.lock"
+  workflow_dispatch: {}
 
 env:
   CARGO_TERM_COLOR: always
