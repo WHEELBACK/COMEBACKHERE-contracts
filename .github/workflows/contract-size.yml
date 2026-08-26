@@ -47,6 +47,22 @@ jobs:
             fi
           done
 
+      - name: Install wasm-opt
+        run: sudo apt-get update && sudo apt-get install -y binaryen
+
+      - name: Optimize contract WASM
+        run: |
+          set -e
+          # Mirrors the size reduction `stellar contract optimize` performs
+          # before deployment, so the measured size matches what actually
+          # ships. wasm-opt only touches code/data, not the custom
+          # contractspecv0/contractmetav0/contractenvmetav0 sections that
+          # encode the contract's on-chain ABI.
+          for wasm in target/wasm32-unknown-unknown/release/*.wasm; do
+            wasm-opt -Oz --strip-debug --strip-dwarf --vacuum --enable-bulk-memory "$wasm" -o "$wasm.opt"
+            mv "$wasm.opt" "$wasm"
+          done
+
       - name: Report .wasm sizes
         run: |
           set -e

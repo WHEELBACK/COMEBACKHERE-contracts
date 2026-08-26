@@ -11,8 +11,15 @@ NETWORK_PASSPHRASE="Standalone Network ; February 2017"
 echo "Using network: $NETWORK ($RPC_URL)"
 
 # 1. Build contracts
+# Scoped to the packages actually deployed below (not `--workspace` or an
+# unscoped `cargo build`): the workspace also contains comebackhere-tests,
+# whose `default = ["testutils"]` feature enables soroban-sdk/testutils,
+# which soroban-sdk hard-disables on the wasm32 target.
 echo "Building contracts..."
-cargo build --target wasm32-unknown-unknown --release
+cargo build --target wasm32-unknown-unknown --release \
+    -p comebackhere-compliance \
+    -p comebackhere-invoice \
+    -p comebackhere-treasury
 
 # 2. Setup network
 echo "Ensuring network '$NETWORK' is configured..."
