@@ -1,7 +1,7 @@
 //! End-to-end integration tests spanning all three contracts.
 //!
 //! A workflow contract enforces two sequential gates:
-//!
+//! A workflow contract enforces two sequential gates:
 //! 1. **Invoice gate** – invoice must be `Pending` (not paid, expired, or cancelled).
 //! 2. **Compliance gate** – merchant must be allowed by the compliance contract.
 //!
