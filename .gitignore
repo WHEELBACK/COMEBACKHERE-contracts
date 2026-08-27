@@ -2,3 +2,9 @@ target/
 *.wasm
 coverage/
 **/test_snapshots/
+**/*.snap
+**/*.snap.new
+**/snapshots/
+.DS_Store
+*.orig
+*.bk
