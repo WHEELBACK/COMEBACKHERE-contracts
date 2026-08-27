@@ -273,3 +273,92 @@ Soroban has no automatic storage migration. Once a `#[contracttype]` struct is d
 | Invoice | `Invoice` struct has grown incrementally; all new fields are `Option<T>` | Follow additive-only going forward |
 | Treasury | `Settlement` and `Dispute` structs embed `SettlementHoldReason` from `crates/multisig` | Adding variants to `SettlementHoldReason` is safe; removing or renumbering is not |
 | Compliance | Minimal stored types (`bool`, `u64`) | Low migration risk |
+
+---
+
+## Weighted Quorum Model — `crates/multisig`
+
+### What it is
+
+The `meets_threshold` helper in `crates/multisig` evaluates quorum by comparing
+accumulated *weight* — a `u32` value — against a configured threshold, not by
+counting how many signers have approved. The decisive expression is:
+
+```rust
+weight >= threshold
+```
+
+Weight is accumulated across approval calls: each time `record_approval` is invoked
+for a previously-unseen signer, that signer's registered weight is added to the
+running total.
+
+### Why weight-based, not count-based
+
+The weight model is a deliberate design choice. Operators can assign higher weight
+to signers they trust more or that offer stronger security guarantees — for example,
+an HSM-backed key or a cold-storage multisig controlled by a security team. This
+lets a deployment express **trust asymmetry** that a plain N-of-M count scheme
+cannot represent.
+
+A consequence of this model is that a single signer assigned a weight equal to or
+greater than the threshold can satisfy quorum alone. This is a feature, not a bug —
+it enables patterns like an emergency break-glass admin key — but operators must
+understand the implication: that signer effectively acts unilaterally.
+
+### Economic and security assumptions
+
+A healthy deployment distributes weights such that **no single signer's weight
+meets or exceeds the threshold on its own**, unless that is an explicit operational
+policy (e.g. an emergency admin key that is kept offline and heavily audited).
+
+The threshold should be calibrated so that the minimum number of signers required
+to collude and satisfy quorum matches the deployment's trust model. A higher
+threshold forces more weight to accumulate, reducing the risk that a single
+compromised key can execute a settlement.
+
+### Threshold-setting guidance
+
+Set the threshold to the **sum of weights** that represents acceptable quorum —
+not to a signer count. For example:
+
+| Signer | Weight |
+|---|---|
+| Signer A | 3 |
+| Signer B | 2 |
+| Signer C | 1 |
+
+With `threshold = 4`, the following combinations satisfy quorum:
+- Signer A (weight 3) + any one of B or C
+- Signer B (weight 2) + Signer C (weight 1) — their combined weight is 3, which
+  does **not** reach 4; they must both approve but that is still insufficient
+  without Signer A — adjust weights to match your intent.
+
+Revise weights and threshold together whenever signers are rotated or the trust
+model changes. The `set_threshold` and `set_signer` entrypoints require admin
+authentication precisely to ensure these changes are deliberate and auditable.
+
+### Overflow protection
+
+`record_approval` accumulates weight using `checked_add`. If the accumulated total
+would exceed `u32::MAX` (4 294 967 295), the call panics with
+`TreasuryError::WeightOverflow` rather than silently wrapping around to a small
+number. In practice no deployment should approach this ceiling; the check exists
+as a correctness guarantee, not a routine guard.
+
+### Audit note
+
+The external security audit planned under issue #117 should evaluate whether the
+weight distribution in the actual deployment matches the stated trust model. In
+particular, auditors should verify that no single signer's weight meets or exceeds
+the threshold unless an emergency break-glass policy is explicitly documented and
+justified.
+
+### Storage
+
+Signer weights are stored under `DataKey::Signer(Address)` in instance storage
+(see the Treasury DataKey table above). `signer_weight` returns `0` for any address
+that has not been registered via `set_signer` — it never panics on an unknown
+address. The `.unwrap_or(0)` in `signer_weight`'s implementation is the contract:
+unregistered addresses are silently treated as having zero weight and will be
+rejected by `require_authorized_signer` before they can influence any approval
+accumulation.

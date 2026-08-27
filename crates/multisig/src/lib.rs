@@ -181,3 +181,101 @@ pub fn record_approval(
 pub fn meets_threshold(weight: u32, threshold: u32) -> bool {
     weight >= threshold
 }
+
+#[cfg(feature = "testutils")]
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use soroban_sdk::testutils::Address as _;
+    use soroban_sdk::Env;
+
+    /// Tests the `.unwrap_or(0)` contract in `signer_weight`: an address that was
+    /// never passed to any `set_signer` call (i.e. has no entry under
+    /// `DataKey::Signer(addr)` in instance storage) returns `0` and does not panic.
+    #[test]
+    fn signer_weight_returns_zero_for_never_registered_address() {
+        let env = Env::default();
+        let never_registered = Address::generate(&env);
+        let weight = signer_weight(&env, &never_registered);
+        assert_eq!(weight, 0);
+    }
+
+    /// Tests that `record_approval` correctly accumulates weight up to exactly
+    /// `u32::MAX` without panicking. This pins the upper boundary of the happy
+    /// path: the final `checked_add` that produces `u32::MAX` must succeed.
+    #[test]
+    fn record_approval_accumulates_to_u32_max() {
+        let env = Env::default();
+        env.mock_all_auths();
+
+        let signer_a = Address::generate(&env);
+        let signer_b = Address::generate(&env);
+
+        // Register signer_a with weight u32::MAX - 1 and signer_b with weight 1,
+        // so their combined weight exactly equals u32::MAX.
+        let weight_a: u32 = u32::MAX - 1;
+        let weight_b: u32 = 1;
+        env.storage()
+            .instance()
+            .set(&DataKey::Signer(signer_a.clone()), &weight_a);
+        env.storage()
+            .instance()
+            .set(&DataKey::Signer(signer_b.clone()), &weight_b);
+
+        let mut approvals: Vec<Address> = Vec::new(&env);
+        let mut accumulated_weight: u32 = 0;
+
+        record_approval(&env, &mut approvals, &mut accumulated_weight, &signer_a);
+        assert_eq!(accumulated_weight, u32::MAX - 1);
+
+        // Adding signer_b's weight of 1 should bring the total to exactly u32::MAX —
+        // checked_add must succeed here; u32::MAX is a valid, non-overflowing result.
+        record_approval(&env, &mut approvals, &mut accumulated_weight, &signer_b);
+        assert_eq!(accumulated_weight, u32::MAX);
+    }
+
+    /// Tests that `record_approval` panics with `WeightOverflow` when accumulating
+    /// signer weights would exceed `u32::MAX`. Uses `#[should_panic]` because
+    /// `panic_with_error!` inside a no_std Soroban contract produces a host-level
+    /// panic that propagates out of the call in test mode.
+    ///
+    /// Boundary being tested: the `checked_add` in `record_approval` returns `None`
+    /// when `u32::MAX + 1` would wrap, and the `.unwrap_or_else` branch fires
+    /// `panic_with_error!(env, TreasuryError::WeightOverflow)`.
+    #[test]
+    #[should_panic]
+    fn record_approval_panics_on_weight_overflow() {
+        let env = Env::default();
+        env.mock_all_auths();
+
+        let signer_a = Address::generate(&env);
+        let signer_b = Address::generate(&env);
+        let signer_c = Address::generate(&env);
+
+        // signer_a holds u32::MAX - 1, signer_b holds 1 (sum = u32::MAX),
+        // signer_c holds 1 (adding it would overflow past u32::MAX).
+        let weight_a: u32 = u32::MAX - 1;
+        let weight_b: u32 = 1;
+        let weight_c: u32 = 1;
+        env.storage()
+            .instance()
+            .set(&DataKey::Signer(signer_a.clone()), &weight_a);
+        env.storage()
+            .instance()
+            .set(&DataKey::Signer(signer_b.clone()), &weight_b);
+        env.storage()
+            .instance()
+            .set(&DataKey::Signer(signer_c.clone()), &weight_c);
+
+        let mut approvals: Vec<Address> = Vec::new(&env);
+        let mut accumulated_weight: u32 = 0;
+
+        // Bring accumulated weight up to u32::MAX (no panic expected here).
+        record_approval(&env, &mut approvals, &mut accumulated_weight, &signer_a);
+        record_approval(&env, &mut approvals, &mut accumulated_weight, &signer_b);
+        assert_eq!(accumulated_weight, u32::MAX);
+
+        // This call attempts u32::MAX + 1, which overflows — must panic.
+        record_approval(&env, &mut approvals, &mut accumulated_weight, &signer_c);
+    }
+}

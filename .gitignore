@@ -1,4 +1,37 @@
+# ── Build artifacts ──────────────────────────────────────────────────────────
 target/
 *.wasm
+
+# ── Coverage ─────────────────────────────────────────────────────────────────
 coverage/
+lcov.info
+*.profraw
+*.profdata
+
+# ── Test snapshots ───────────────────────────────────────────────────────────
 **/test_snapshots/
+**/snapshots/
+
+# ── Editor / IDE ─────────────────────────────────────────────────────────────
+.vscode/
+.idea/
+*.iml
+.DS_Store
+Thumbs.db
+
+# ── Rust-specific ────────────────────────────────────────────────────────────
+# Cargo.lock is intentionally NOT listed here — it is committed for workspaces.
+**/*.rs.bk
+
+# ── Environment files ────────────────────────────────────────────────────────
+.env
+.env.local
+.env.*.local
+
+# ── Fuzz artifacts ───────────────────────────────────────────────────────────
+fuzz/corpus/
+fuzz/artifacts/
+
+# ── Temp / log files ─────────────────────────────────────────────────────────
+*.log
+*.tmp
