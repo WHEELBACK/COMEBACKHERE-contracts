@@ -2,3 +2,7 @@ target/
 *.wasm
 coverage/
 **/test_snapshots/
+contracts/invoice/tests/snapshots/
+**/*.snap.new
+.DS_Store
+**/__pycache__/

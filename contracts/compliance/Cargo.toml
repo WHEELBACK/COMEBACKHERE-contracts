@@ -14,6 +14,7 @@ testutils = ["soroban-sdk/testutils"]
 
 [dependencies]
 soroban-sdk.workspace = true
+compliance-errors = { package = "comebackhere-compliance-errors", path = "../../crates/compliance-errors" }
 
 [dev-dependencies]
 soroban-sdk = { workspace = true, features = ["testutils"] }
