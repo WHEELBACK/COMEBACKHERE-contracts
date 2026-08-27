@@ -2,3 +2,22 @@ target/
 *.wasm
 coverage/
 **/test_snapshots/
+
+# Local cargo config cache
+.cargo/
+
+# Coverage profiling data
+*.profraw
+*.profdata
+lcov.info
+
+# Log files
+*.log
+
+# OS metadata
+.DS_Store
+Thumbs.db
+
+# Temporary and backup files
+*.tmp
+*.bak
