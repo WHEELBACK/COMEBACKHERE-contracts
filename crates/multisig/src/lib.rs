@@ -119,6 +119,18 @@ pub struct SignerRotationProposal {
     pub approvals: Vec<Address>,
     pub approval_weight: u32,
     pub status: RotationStatus,
+    /// `old_signer`'s approval weight captured at the moment this rotation was
+    /// *proposed*, not re-read at execution time. This is the weight that gets
+    /// assigned to `new_signer` when the rotation executes.
+    ///
+    /// Without this snapshot, a separate `set_signer`/`remove_signer` call that
+    /// lands between the proposal and its execution would change what weight
+    /// `new_signer` ends up with — a time-of-check-to-time-of-use gap where the
+    /// outcome of the rotation depends on unrelated transactions racing it.
+    /// Pinning the weight at proposal time makes the rotation's effect fully
+    /// determined by its own proposal, independent of what else happens to
+    /// `old_signer` in the meantime.
+    pub captured_old_weight: u32,
 }
 
 #[contracttype]
