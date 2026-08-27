@@ -12,7 +12,12 @@ use soroban_sdk::{contract, contractclient, contractimpl, Address, Env};
 /// the same pattern, and Cargo.toml for why `treasury` is dev-only here.
 #[contractclient(name = "TreasuryOnlyClient")]
 pub trait TreasuryInterface {
-    fn execute_settlement(env: Env, signer: Address, settlement_id: u64, token_contract: Address);
+    fn execute_settlement(
+        env: Env,
+        signer: Address,
+        settlement_id: u64,
+        token_contract: Address,
+    ) -> Result<(), TreasuryError>;
 }
 
 /// Reference on-chain implementation of the `SettlementWorkflow` role described in
