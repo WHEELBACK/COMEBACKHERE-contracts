@@ -273,3 +273,31 @@ Soroban has no automatic storage migration. Once a `#[contracttype]` struct is d
 | Invoice | `Invoice` struct has grown incrementally; all new fields are `Option<T>` | Follow additive-only going forward |
 | Treasury | `Settlement` and `Dispute` structs embed `SettlementHoldReason` from `crates/multisig` | Adding variants to `SettlementHoldReason` is safe; removing or renumbering is not |
 | Compliance | Minimal stored types (`bool`, `u64`) | Low migration risk |
+
+---
+
+## Known Limitations
+
+This is a living list of confirmed, intentionally-deferred gaps — things the
+team already knows about and has chosen not to fix immediately, as opposed to
+undiscovered bugs. It's expected to grow as other in-flight issues land their
+findings; each entry links to the issue tracking it.
+
+- **Treasury's panicking entrypoints are only partially converted to
+  `Result<T, TreasuryError>`.** The conversion is being done incrementally
+  (deposits/signers, disputes/holds, and the remaining panicking entrypoints
+  are separate PRs) because doing it in one PR risks pushing `treasury.wasm`
+  over the CI size budget. See #385, #386, #387, #388.
+- **`SettlementWorkflow`'s precondition that the caller be a registered
+  Treasury signer currently surfaces as a generic `Unauthorized` error**
+  rather than a specific one identifying the missing signer registration.
+  Fixing this requires a documentation/error-message change, tracked
+  separately. See #370.
+- **Storage TTL / rent-bump policy has not yet been audited** across the four
+  contracts. See #402.
+- **The economic soundness of Treasury's threshold-vs-signer-count
+  relationship (quorum unreachability under signer loss/rotation) has not yet
+  had a game-theory review.** See #411.
+
+#117's planned external audit is expected to benefit from this list being
+collected here rather than reconstructed from individual issues.
