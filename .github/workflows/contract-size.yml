@@ -36,55 +36,8 @@ jobs:
           path: target
           key: ${{ runner.os }}-contract-size-${{ hashFiles('Cargo.lock') }}
 
-      - name: Build contracts to WASM
-        run: |
-          set -e
-          echo "=== Building contracts ==="
-          for contract in contracts/*/; do
-            if [ -f "$contract/Cargo.toml" ]; then
-              name=$(basename "$contract")
-              echo "--- Building $name ---"
-              cargo build --package "comebackhere-$name" --target wasm32-unknown-unknown --release 2>&1
-            fi
-          done
-
       - name: Install wasm-opt
         run: sudo apt-get update && sudo apt-get install -y binaryen
 
-      - name: Optimize contract WASM
-        run: |
-          set -e
-          # Mirrors the size reduction `stellar contract optimize` performs
-          # before deployment, so the measured size matches what actually
-          # ships. wasm-opt only touches code/data, not the custom
-          # contractspecv0/contractmetav0/contractenvmetav0 sections that
-          # encode the contract's on-chain ABI.
-          # --all-features: the apt-packaged wasm-opt doesn't read the
-          # module's target-features custom section, so it must be told
-          # about every feature LLVM's wasm32 backend may emit (sign-ext,
-          # bulk-memory, etc.) rather than enabling them one by one.
-          for wasm in target/wasm32-unknown-unknown/release/*.wasm; do
-            wasm-opt -Oz --strip-debug --strip-dwarf --vacuum --all-features "$wasm" -o "$wasm.opt"
-            mv "$wasm.opt" "$wasm"
-          done
-
-      - name: Report .wasm sizes
-        run: |
-          set -e
-          echo "### Contract WASM sizes" >> $GITHUB_STEP_SUMMARY
-          echo '| Contract | Size (bytes) | Status |' >> $GITHUB_STEP_SUMMARY
-          echo '|----------|-------------|--------|' >> $GITHUB_STEP_SUMMARY
-          EXIT_CODE=0
-          for wasm in target/wasm32-unknown-unknown/release/*.wasm; do
-            name=$(basename "$wasm" .wasm)
-            size=$(stat --format=%s "$wasm")
-            if [ "$size" -gt "$MAX_CONTRACT_SIZE" ]; then
-              status=":x: Exceeds ${MAX_CONTRACT_SIZE} bytes"
-              EXIT_CODE=1
-            else
-              status=":white_check_mark: OK"
-            fi
-            echo "| $name | $size | $status |" >> $GITHUB_STEP_SUMMARY
-            echo "$name: ${size} bytes"
-          done
-          exit $EXIT_CODE
+      - name: Build, optimize and measure contracts
+        run: ./scripts/check-contract-size.sh
