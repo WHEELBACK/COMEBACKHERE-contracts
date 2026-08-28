@@ -174,6 +174,16 @@ Because each contract has its own `#[contracterror]` enum the numeric ranges are
 
 `deny.toml` itself needs no change for a new contract; it governs dependency licenses and advisories, not error codes. Verify `cargo deny check` still passes after adding any new dependencies.
 
+### Error handling for new entrypoints
+
+When adding a new entrypoint, choose between these patterns in order of preference:
+
+1. **`Result<T, Error>`-returning functions (preferred).** For new public entrypoints, prefer returning `Result<T, YourContractError>` over panicking. This avoids the wasm size cost of `panic_with_error!` call sites entirely and lets callers handle failure without an aborted transaction. This is the default choice for anything that can fail in an expected way (validation, not-found, unauthorized, etc).
+2. **`panic_with_error!` (exceptional cases only).** Reserve this for truly exceptional conditions or invariant violations that should never occur given correct contract state — not for routine validation failures that a `Result` should carry instead.
+3. **Bare `panic!("string")` (never ship this).** Never use a bare string-message panic in code that ships. It has no discoverable error code for callers, and string panics were themselves the direct cause of treasury's contract silently drifting over Soroban's 64KB size budget — the fix required converting a large number of accumulated `panic!` call sites to `panic_with_error!`, several of which are being converted further to `Result`-returning signatures for the additional size savings that conversion alone couldn't capture. Don't reintroduce this pattern in new code.
+
+Picking `Result` from day one for new entrypoints avoids needing a retroactive size-budget fix later.
+
 ### 4. Update CI workflows
 
 **`build.yml`** — add an explicit build step for the new contract:
