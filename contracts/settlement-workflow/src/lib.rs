@@ -95,7 +95,10 @@ impl SettlementWorkflowContract {
             &token_contract,
         );
         env.events().publish(
-            (Symbol::new(&env, "settlement_workflow_executed"), settlement_id),
+            (
+                Symbol::new(&env, "settlement_workflow_executed"),
+                settlement_id,
+            ),
             (merchant.clone(), token_contract.clone()),
         );
         Ok(())

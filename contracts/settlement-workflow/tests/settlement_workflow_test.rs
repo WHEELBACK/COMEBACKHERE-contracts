@@ -212,15 +212,17 @@ fn batch_rejected_when_compliance_fails() {
         treasury,
         _treasury_id,
         workflow,
-        _token_id,
+        token_id,
     ) = setup();
 
     let good = treasury.propose_settlement(&admin, &merchant, &5_000_000);
     let mut ids = soroban_sdk::Vec::new(&env);
     ids.push_back(good);
 
+    // merchant is not on the compliance allowlist — the batch must be rejected
+    // with ComplianceCheckFailed before any settlement is attempted.
     let err = workflow
-        .try_execute_with_compliance_batch(&ids, &Address::generate(&env), &merchant)
+        .try_execute_with_compliance_batch(&ids, &token_id, &merchant)
         .unwrap_err()
         .unwrap();
     assert_eq!(err, TreasuryError::ComplianceCheckFailed.into());
