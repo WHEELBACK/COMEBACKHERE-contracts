@@ -1,6 +1,9 @@
 use compliance::{ComplianceContract, ComplianceContractClient};
 use settlement_workflow::{SettlementWorkflowContract, SettlementWorkflowContractClient};
-use soroban_sdk::{testutils::Address as _, token, Address, Env};
+use soroban_sdk::{
+    testutils::{Address as _, Events},
+    token, Address, Env, Symbol, TryFromVal,
+};
 use treasury::{TreasuryContract, TreasuryContractClient, TreasuryError};
 
 /// Generous CPU-instruction ceiling for the two-hop cross-contract call chain
@@ -79,7 +82,7 @@ fn execution_blocked_when_compliance_returns_false() {
         .try_execute_with_compliance(&settlement_id, &token_id, &merchant)
         .unwrap_err()
         .unwrap();
-    assert_eq!(err, TreasuryError::ComplianceCheckFailed);
+    assert_eq!(err, TreasuryError::ComplianceCheckFailed.into());
     assert_eq!(token::Client::new(&env, &token_id).balance(&merchant), 0);
 }
 
@@ -132,18 +135,12 @@ fn emits_settlement_workflow_executed_event() {
 
     workflow.execute_with_compliance(&settlement_id, &token_id, &merchant);
 
-    let emitted = env
-        .events()
-        .all()
-        .iter()
-        .any(|(topics, _data)| {
-            topics
-                .first()
-                .map(|t| t == soroban_sdk::Val::from(soroban_sdk::Symbol::new(&env, "settlement_workflow_executed")))
-                .unwrap_or(false)
-        });
-    assert!(
-        emitted,
+    let (_, topics, _) = env.events().all().last().unwrap();
+    let emitted_symbol =
+        Symbol::try_from_val(&env, &topics.get_unchecked(0)).expect("topic 0 is a Symbol");
+    assert_eq!(
+        emitted_symbol,
+        Symbol::new(&env, "settlement_workflow_executed"),
         "expected a settlement_workflow_executed event to be emitted"
     );
 }
@@ -163,7 +160,7 @@ fn initialize_is_idempotent_and_pins_trusted_instances() {
         .try_initialize(&compliance_id, &treasury_id)
         .unwrap_err()
         .unwrap();
-    assert_eq!(err, TreasuryError::AlreadyInitialized);
+    assert_eq!(err, TreasuryError::AlreadyInitialized.into());
 }
 
 #[test]
@@ -194,7 +191,10 @@ fn batch_executes_multiple_settlements_and_skips_invalid_ids() {
     ids.push_back(good_2);
 
     let executed = workflow.execute_with_compliance_batch(&ids, &token_id, &merchant);
-    assert_eq!(executed, soroban_sdk::Vec::from_array(&env, [good_1, good_2]));
+    assert_eq!(
+        executed,
+        soroban_sdk::Vec::from_array(&env, [good_1, good_2])
+    );
     assert_eq!(
         token::Client::new(&env, &token_id).balance(&merchant),
         10_000_000
@@ -223,7 +223,7 @@ fn batch_rejected_when_compliance_fails() {
         .try_execute_with_compliance_batch(&ids, &Address::generate(&env), &merchant)
         .unwrap_err()
         .unwrap();
-    assert_eq!(err, TreasuryError::ComplianceCheckFailed);
+    assert_eq!(err, TreasuryError::ComplianceCheckFailed.into());
 }
 
 #[test]
@@ -247,13 +247,12 @@ fn execute_with_compliance_stays_under_instruction_budget() {
     token::StellarAssetClient::new(&env, &token_id).mint(&treasury_id, &10_000_000);
     env.cost_estimate().budget().reset_tracker();
 
-    workflow
-        .execute_with_compliance(&settlement_id, &token_id, &merchant)
-        .unwrap();
+    workflow.execute_with_compliance(&settlement_id, &token_id, &merchant);
 
     let instructions = env.cost_estimate().budget().cpu_instruction_cost();
     assert!(
         instructions <= MAX_EXECUTE_INSTRUCTIONS,
-        "execute_with_compliance used {instructions} instructions, expected <= {MAX_EXECUTE_INSTRUCTIONS}"
+        "execute_with_compliance used {instructions} instructions, \
+         expected <= {MAX_EXECUTE_INSTRUCTIONS}"
     );
 }

@@ -28,11 +28,12 @@ jobs:
 
       - name: Verify Stellar CLI version
         run: |
-          INSTALLED=$(stellar --version | awk '{print $2}')
+          INSTALLED=$(stellar --version | awk '{print $2}' | tr -d '[:space:]')
           if [ "$INSTALLED" != "$STELLAR_CLI_VERSION" ]; then
             echo "Expected stellar-cli $STELLAR_CLI_VERSION, got $INSTALLED"
             exit 1
           fi
+          echo "✓ stellar-cli version $INSTALLED verified."
 
       - name: Cache Rust dependencies
         uses: Swatinem/rust-cache@v2
