@@ -1,6 +1,14 @@
+# ── Build artifacts ──────────────────────────────────────────────────────────
 target/
 *.wasm
+
+# ── Coverage ─────────────────────────────────────────────────────────────────
 coverage/
+lcov.info
+*.profraw
+*.profdata
+
+# ── Test snapshots ───────────────────────────────────────────────────────────
 **/test_snapshots/
 contracts/invoice/tests/snapshots/
 **/*.snap.new
