@@ -24,7 +24,7 @@ use treasury::{
 /// Expected version of `crates/multisig` (see its `Cargo.toml`). Bump this only
 /// alongside a review of every exhaustive match below - if they still compile,
 /// the ABI-relevant shape of multisig's types is unchanged.
-const EXPECTED_MULTISIG_VERSION: &str = "0.2.0";
+const EXPECTED_MULTISIG_VERSION: &str = "0.3.0";
 
 const MULTISIG_CARGO_TOML: &str = include_str!("../../../crates/multisig/Cargo.toml");
 
@@ -98,6 +98,8 @@ fn treasury_error_shape_is_unchanged() {
     assert_eq!(TreasuryError::InsufficientBalance as u32, 31);
     assert_eq!(TreasuryError::NotPaused as u32, 32);
     assert_eq!(TreasuryError::RotationProposalCooldown as u32, 33);
+    assert_eq!(TreasuryError::WithdrawalLimitExceeded as u32, 34);
+    assert_eq!(TreasuryError::InvalidSplitRatio as u32, 35);
 
     // No wildcard arm: adding, removing, or renaming a variant fails this compile.
     fn assert_exhaustive(err: TreasuryError) {
@@ -134,7 +136,9 @@ fn treasury_error_shape_is_unchanged() {
             | TreasuryError::DestinationNotAllowed
             | TreasuryError::InsufficientBalance
             | TreasuryError::NotPaused
-            | TreasuryError::RotationProposalCooldown => {}
+            | TreasuryError::RotationProposalCooldown
+            | TreasuryError::WithdrawalLimitExceeded
+            | TreasuryError::InvalidSplitRatio => {}
         }
     }
     assert_exhaustive(TreasuryError::AlreadyOnHold);
@@ -168,6 +172,7 @@ fn assert_dispute_status_exhaustive(status: DisputeStatus) {
         DisputeStatus::ResolvedClaimant => {}
         DisputeStatus::ResolvedCounterparty => {}
         DisputeStatus::Expired => {}
+        DisputeStatus::ResolvedSplit => {}
     }
 }
 
@@ -212,6 +217,7 @@ fn dispute_enum_variants_are_unchanged() {
         DisputeStatus::ResolvedClaimant,
         DisputeStatus::ResolvedCounterparty,
         DisputeStatus::Expired,
+        DisputeStatus::ResolvedSplit,
     ] {
         assert_dispute_status_exhaustive(status);
     }
@@ -286,6 +292,7 @@ fn dispute_struct_shape_is_unchanged() {
         resolution_weight,
         resolution_for_claimant,
         dispute_expires_at,
+        claimant_share_bps,
     } = dispute;
 
     assert_eq!(id, did);
@@ -298,6 +305,7 @@ fn dispute_struct_shape_is_unchanged() {
     assert_eq!(resolution_weight, 0);
     assert!(!resolution_for_claimant);
     assert_eq!(dispute_expires_at, 1_000);
+    assert_eq!(claimant_share_bps, 0);
 }
 
 /// Builds a real `SignerRotationProposal` through the deployed contract and

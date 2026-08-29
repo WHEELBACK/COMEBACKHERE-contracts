@@ -61,6 +61,10 @@ pub enum DataKey {
     BlockCount,
     /// Reserved for a future tiered-compliance model; not yet used by any entrypoint.
     Tier(Address),
+    /// Timestamp of the caller's last `bulk_allow_addresses` call. See [`BULK_OP_COOLDOWN_SECS`].
+    LastBulkAllow(Address),
+    /// Timestamp of the caller's last `bulk_block_addresses` call. See [`BULK_OP_COOLDOWN_SECS`].
+    LastBulkBlock(Address),
 }
 
 /// Coarse classification of an address's compliance state.
@@ -108,7 +112,7 @@ pub struct AddressStatus {
 /// Primary error type for the compliance contract.
 ///
 /// Variants must only be appended at the end (highest numeric value) to preserve
-/// on-chain backwards compatibility. Range: 1..=5 (see `ARCHITECTURE.md`).
+/// on-chain backwards compatibility. Range: 1..=6 (see `ARCHITECTURE.md`).
 #[contracterror]
 #[derive(Copy, Clone, Debug, PartialEq)]
 #[repr(u32)]
@@ -118,6 +122,9 @@ pub enum ContractError {
     AlreadyInitialized = 3,
     BatchTooLarge = 4,
     AddressIndexFull = 5,
+    /// A bulk allow/block call was made before [`BULK_OP_COOLDOWN_SECS`] elapsed since the
+    /// caller's previous bulk call (see #454).
+    BulkOperationCooldown = 6,
 }
 
 /// Upper bound on the number of distinct addresses tracked in `DataKey::AddressIndex`.
@@ -130,6 +137,15 @@ const MAX_TRACKED_ADDRESSES: u32 = 50_000;
 /// Maximum number of addresses accepted per batch admin call, consistent with
 /// the batch caps used elsewhere in the workspace (see #8/#21/#29).
 pub const MAX_BATCH_SIZE: u32 = 50;
+
+/// Minimum time (seconds) a caller must wait between successive calls to the *same* bulk
+/// entrypoint (`bulk_allow_addresses` or `bulk_block_addresses`). `MAX_BATCH_SIZE` bounds how
+/// many addresses a single call can affect, but without a time dimension a compromised admin
+/// key could still call one bulk entrypoint repeatedly in quick succession and affect an
+/// unbounded number of addresses in aggregate (see #454). Tracked separately per entrypoint
+/// (rather than shared) so that legitimate admin flows — e.g. allowing a batch and then
+/// immediately blocking a different batch — are not penalized for using both in succession.
+pub const BULK_OP_COOLDOWN_SECS: u64 = 60;
 
 #[contract]
 pub struct ComplianceContract;
@@ -164,6 +180,7 @@ impl ComplianceContract {
     ) -> Result<(), ContractError> {
         Self::require_admin(&env, &admin)?;
         Self::require_not_paused(&env)?;
+        Self::check_bulk_op_cooldown(&env, DataKey::LastBulkAllow(admin.clone()))?;
         if addresses.len() > MAX_BATCH_SIZE {
             return Err(ContractError::BatchTooLarge);
         }
@@ -348,6 +365,7 @@ impl ComplianceContract {
         addresses: Vec<Address>,
     ) -> Result<(), ContractError> {
         Self::require_admin(&env, &admin)?;
+        Self::check_bulk_op_cooldown(&env, DataKey::LastBulkBlock(admin.clone()))?;
         if addresses.len() > MAX_BATCH_SIZE {
             return Err(ContractError::BatchTooLarge);
         }
@@ -840,6 +858,20 @@ impl ComplianceContract {
             }
         }
         Err(ContractError::Unauthorized)
+    }
+
+    /// Enforces [`BULK_OP_COOLDOWN_SECS`] between successive calls keyed by `key`
+    /// (a `LastBulkAllow`/`LastBulkBlock` variant), and records `now` as the new
+    /// last-call timestamp on success.
+    fn check_bulk_op_cooldown(env: &Env, key: DataKey) -> Result<(), ContractError> {
+        let now = env.ledger().timestamp();
+        if let Some(last) = env.storage().instance().get::<_, u64>(&key) {
+            if now < last.saturating_add(BULK_OP_COOLDOWN_SECS) {
+                return Err(ContractError::BulkOperationCooldown);
+            }
+        }
+        env.storage().instance().set(&key, &now);
+        Ok(())
     }
 
     fn require_not_paused(env: &Env) -> Result<(), ContractError> {

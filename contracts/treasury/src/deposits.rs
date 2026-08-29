@@ -51,6 +51,7 @@ impl TreasuryContract {
         if balance < amount {
             soroban_sdk::panic_with_error!(env, TreasuryError::InsufficientBalance);
         }
+        enforce_withdrawal_limit(&env, &to, amount);
         balance = balance.checked_sub(amount).unwrap_or_else(|| {
             soroban_sdk::panic_with_error!(env, TreasuryError::ArithmeticOverflow)
         });
@@ -90,11 +91,59 @@ impl TreasuryContract {
         let token_client = token::Client::new(&env, &token_contract);
         let balance = token_client.balance(&treasury);
         if balance > 0 {
+            enforce_withdrawal_limit(&env, &recipient, balance);
             token_client.transfer(&treasury, &recipient, &balance);
         }
         env.events()
             .publish((Symbol::new(&env, "treasury_drained"),), recipient);
     }
+}
+
+/// Enforces the admin-configured withdrawal-per-window cap (see
+/// `TreasuryContract::set_withdrawal_limit`) against `amount` for `tracked`, rolling the
+/// window over once it has elapsed. A `limit <= 0` (the default) leaves withdrawals uncapped.
+/// Panics: `WithdrawalLimitExceeded`, `ArithmeticOverflow`.
+fn enforce_withdrawal_limit(env: &Env, tracked: &Address, amount: i128) {
+    let limit: i128 = env
+        .storage()
+        .instance()
+        .get(&DataKey::WithdrawalLimitPerWindow)
+        .unwrap_or(0);
+    if limit <= 0 {
+        return;
+    }
+    let window_secs: u64 = env
+        .storage()
+        .instance()
+        .get(&DataKey::WithdrawalWindowSecs)
+        .unwrap_or(0);
+    let now = env.ledger().timestamp();
+    let window_start: u64 = env
+        .storage()
+        .persistent()
+        .get(&DataKey::WithdrawalWindowStart(tracked.clone()))
+        .unwrap_or(0);
+    let window_elapsed = window_secs == 0 || now >= window_start.saturating_add(window_secs);
+    let withdrawn_so_far: i128 = if window_elapsed {
+        env.storage()
+            .persistent()
+            .set(&DataKey::WithdrawalWindowStart(tracked.clone()), &now);
+        0
+    } else {
+        env.storage()
+            .persistent()
+            .get(&DataKey::WithdrawnInWindow(tracked.clone()))
+            .unwrap_or(0)
+    };
+    let new_total = withdrawn_so_far.checked_add(amount).unwrap_or_else(|| {
+        soroban_sdk::panic_with_error!(env, TreasuryError::ArithmeticOverflow)
+    });
+    if new_total > limit {
+        soroban_sdk::panic_with_error!(env, TreasuryError::WithdrawalLimitExceeded);
+    }
+    env.storage()
+        .persistent()
+        .set(&DataKey::WithdrawnInWindow(tracked.clone()), &new_total);
 }
 
 fn deposit_one(env: &Env, from: &Address, token_contract: &Address, amount: i128) {
