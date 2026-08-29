@@ -18,6 +18,27 @@ log_error() { log "ERROR" "$@" >&2; }
 NETWORK="local"
 RPC_URL="http://localhost:8000/soroban/rpc"
 NETWORK_PASSPHRASE="Standalone Network ; February 2017"
+DRY_RUN=false
+
+# Parse flags
+while [[ $# -gt 0 ]]; do
+    case $1 in
+        --dry-run)
+            DRY_RUN=true
+            shift
+            ;;
+        *)
+            echo "Unknown flag: $1"
+            echo "Usage: $0 [--dry-run]"
+            exit 1
+            ;;
+    esac
+done
+
+if [ "$DRY_RUN" = true ]; then
+    echo "DRY RUN MODE: Commands will be printed but not executed"
+    echo ""
+fi
 
 log_info "Using network: $NETWORK ($RPC_URL)"
 
