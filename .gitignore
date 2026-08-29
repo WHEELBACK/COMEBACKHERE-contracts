@@ -10,28 +10,7 @@ lcov.info
 
 # ── Test snapshots ───────────────────────────────────────────────────────────
 **/test_snapshots/
-**/snapshots/
-
-# ── Editor / IDE ─────────────────────────────────────────────────────────────
-.vscode/
-.idea/
-*.iml
+contracts/invoice/tests/snapshots/
+**/*.snap.new
 .DS_Store
-Thumbs.db
-
-# ── Rust-specific ────────────────────────────────────────────────────────────
-# Cargo.lock is intentionally NOT listed here — it is committed for workspaces.
-**/*.rs.bk
-
-# ── Environment files ────────────────────────────────────────────────────────
-.env
-.env.local
-.env.*.local
-
-# ── Fuzz artifacts ───────────────────────────────────────────────────────────
-fuzz/corpus/
-fuzz/artifacts/
-
-# ── Temp / log files ─────────────────────────────────────────────────────────
-*.log
-*.tmp
+**/__pycache__/

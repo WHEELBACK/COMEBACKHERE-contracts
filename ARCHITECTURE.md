@@ -54,10 +54,14 @@ sequenceDiagram
     Note over Treasury: approval_weight >= threshold
 
     SettlementWorkflow->>Compliance: is_allowed(merchant)
-    Compliance-->>SettlementWorkflow: true
-    SettlementWorkflow->>Treasury: execute_settlement(signer, id, token)
-    Treasury->>Token: transfer(treasury → merchant, amount)
-    Note over Treasury: Settlement{status=Executed}
+    Compliance-->>SettlementWorkflow: true / false
+    alt is_allowed(merchant) == true
+        SettlementWorkflow->>Treasury: execute_settlement(signer, id, token)
+        Treasury->>Token: transfer(treasury → merchant, amount)
+        Note over Treasury: Settlement{status=Executed}
+    else is_allowed(merchant) == false
+        Note over SettlementWorkflow: returns Err(TreasuryError::ComplianceCheckFailed), Treasury untouched
+    end
 
     Invoice-->>Invoice: release_escrow(admin, id)
     Note over Invoice: status = Released
@@ -196,8 +200,8 @@ SettlementProposalWorkflow
   └── Treasury::propose_settlement(...)     → creates Settlement record
 
 SettlementWorkflow
-  ├── Compliance::is_allowed(merchant)      → compliance gate (must be true)
-  └── Treasury::execute_settlement(...)     → transfers tokens to merchant
+  ├── Compliance::is_allowed(merchant)      → compliance gate; if false, returns Err(ComplianceCheckFailed)
+  └── Treasury::execute_settlement(...)     → called ONLY if the gate passes; transfers tokens to merchant
 
 Treasury::execute_settlement
   └── Token::transfer(treasury → merchant)  → SEP-41 token transfer

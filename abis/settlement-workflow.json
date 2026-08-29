@@ -1,10 +1,10 @@
 {
-  "name": "invoice",
+  "name": "settlement-workflow",
   "version": "1.0.0",
   "functions": [
     {
       "name": "create_invoice",
-      "inputs": ["payer_id", "payee_id", "amount", "currency", "due_date"],
+      "inputs": [],
       "outputs": ["invoice_id"],
       "description": "Creates a new invoice"
     },
@@ -16,7 +16,7 @@
     },
     {
       "name": "update_invoice",
-      "inputs": ["invoice_id", "updated_fields"],
+      "inputs": ["invoice_id", "updated_data"],
       "outputs": ["invoice"],
       "description": "Updates an existing invoice"
     },
@@ -31,12 +31,6 @@
       "inputs": ["invoice_id"],
       "outputs": ["payment_plan"],
       "description": "Generates a payment plan for an invoice"
-    },
-    {
-      "name": "apply_discount",
-      "inputs": ["invoice_id", "discount_amount", "discount_type"],
-      "outputs": ["invoice"],
-      "description": "Applies a discount to an invoice"
     }
   ],
   "events": [
@@ -45,9 +39,7 @@
       "payload": {
         "invoice_id": "string",
         "amount": "decimal",
-        "due_date": "timestamp",
-        "payer_id": "string",
-        "payee_id": "string"
+        "due_date": "timestamp"
       }
     },
     {
