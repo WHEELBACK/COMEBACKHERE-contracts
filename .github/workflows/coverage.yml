@@ -24,9 +24,42 @@ jobs:
       - name: Generate coverage report
         run: cargo tarpaulin --workspace --out xml
 
-      - name: Upload coverage to Codecov
+      # ── Aggregate upload ────────────────────────────────────────────────
+      # Uploads the full workspace coverage report so the project-level and
+      # patch status checks in codecov.yml can evaluate overall coverage.
+      - name: Upload coverage to Codecov (aggregate)
         uses: codecov/codecov-action@v4
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
           files: ./cobertura.xml
+          fail_ci_if_error: false
+
+      # ── Per-contract flag uploads ────────────────────────────────────────
+      # Each contract gets its own upload under a named flag.  Codecov uses the
+      # `flags[].paths` entries in codecov.yml to scope each flag to its
+      # contract's source tree, enabling per-contract coverage tracking and
+      # carryforward behaviour between commits.
+
+      - name: Upload coverage to Codecov (invoice flag)
+        uses: codecov/codecov-action@v4
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }}
+          files: ./cobertura.xml
+          flags: invoice
+          fail_ci_if_error: false
+
+      - name: Upload coverage to Codecov (treasury flag)
+        uses: codecov/codecov-action@v4
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }}
+          files: ./cobertura.xml
+          flags: treasury
+          fail_ci_if_error: false
+
+      - name: Upload coverage to Codecov (compliance flag)
+        uses: codecov/codecov-action@v4
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }}
+          files: ./cobertura.xml
+          flags: compliance
           fail_ci_if_error: false
