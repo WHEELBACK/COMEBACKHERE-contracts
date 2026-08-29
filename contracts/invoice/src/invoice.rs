@@ -1,4 +1,6 @@
-use soroban_sdk::{contracterror, contracttype, Address, Bytes};
+use soroban_sdk::{contracttype, Address, Bytes};
+
+pub use invoice_errors::InvoiceError;
 
 /// USDC on Stellar uses 7 decimal places: 1 USDC = 10_000_000 stroops.
 pub const USDC_FACTOR: i128 = 10_000_000;
@@ -12,48 +14,6 @@ pub const MAX_BATCH_EXPIRE: u32 = 100;
 
 /// Maximum bytes accepted for optional invoice hash fields.
 pub const MAX_HASH_BYTES: u32 = 64;
-
-#[contracterror]
-#[derive(Copy, Clone, Debug, Eq, PartialEq)]
-#[repr(u32)]
-pub enum InvoiceError {
-    Unauthorized = 1,
-    ContractPaused = 2,
-    InvalidAmount = 3,
-    NotPending = 4,
-    Expired = 5,
-    NotFound = 6,
-    AlreadyInitialized = 7,
-    ZeroDuration = 8,
-    ExpiryOverflow = 9,
-    NotPaid = 10,
-    /// Invoice has not been released from escrow.
-    NotReleased = 11,
-    /// Amount is below the minimum USDC unit (must be >= USDC_FACTOR stroops).
-    AmountPrecision = 12,
-    /// Merchant nonce has already been used for a previous invoice.
-    DuplicateNonce = 13,
-    /// expires_in_seconds exceeds MAX_EXPIRY_SECONDS.
-    ExpiryTooLong = 14,
-    /// Provided metadata_hash does not match the stored hash on the invoice.
-    MetadataMismatch = 15,
-    /// No pending admin transfer to accept.
-    NoPendingAdmin = 16,
-    /// payment_link_hash was provided but is not exactly 32 bytes.
-    InvalidPaymentLinkHash = 17,
-    /// Invoice is not in RefundRequested status.
-    NotRefundRequested = 18,
-    /// Provided payment token does not match the invoice's expected token.
-    TokenMismatch = 19,
-    /// Batch input exceeds MAX_BATCH_SIZE.
-    BatchTooLarge = 20,
-    /// create_invoice called again before CreationCooldown has elapsed for this merchant.
-    CooldownActive = 21,
-    /// InvoiceCount overflow would wrap the next invoice ID.
-    InvoiceCountOverflow = 22,
-    /// metadata_hash or payment_link_hash exceeds MAX_HASH_BYTES.
-    HashTooLong = 23,
-}
 
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]

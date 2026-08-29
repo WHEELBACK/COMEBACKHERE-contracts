@@ -25,6 +25,8 @@ use soroban_sdk::{
     contract, contracterror, contractimpl, contracttype, Address, Bytes, Env, Symbol, Vec,
 };
 
+pub use compliance_errors::ComplianceError;
+
 #[contracttype]
 #[derive(Clone)]
 /// Storage key enum for the compliance contract.
@@ -74,17 +76,6 @@ pub enum AddressState {
     Blocked,
     /// A time-bound allow or block whose expiry timestamp has passed.
     Expired,
-}
-
-/// Legacy error enum retained for on-chain backwards compatibility.
-///
-/// `ComplianceError` predates `ContractError`. It must not be renumbered.
-/// New error variants belong in [`ContractError`], not here.
-#[contracterror]
-#[derive(Clone, Copy, Debug, PartialEq)]
-#[repr(u32)]
-pub enum ComplianceError {
-    AlreadyInitialized = 1,
 }
 
 /// Rich compliance status for a single address, returned by `address_status`.
