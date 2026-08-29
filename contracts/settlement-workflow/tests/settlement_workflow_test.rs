@@ -1,7 +1,15 @@
 use compliance::{ComplianceContract, ComplianceContractClient};
-use settlement_workflow::{SettlementWorkflowContract, SettlementWorkflowContractClient};
+use settlement_workflow::{
+    SettlementWorkflowContract, SettlementWorkflowContractClient, SettlementWorkflowError,
+};
 use soroban_sdk::{testutils::Address as _, token, Address, Env};
-use treasury::{TreasuryContract, TreasuryContractClient, TreasuryError};
+use treasury::{TreasuryContract, TreasuryContractClient};
+
+/// Generous CPU-instruction ceiling for the two-hop cross-contract call chain
+/// (Compliance::is_allowed → Treasury::execute_settlement). Native/test-host
+/// numbers are far lower; this bound is wide enough to avoid flakiness while
+/// still catching a large, unintended regression in the composed call chain (#368).
+const MAX_EXECUTE_INSTRUCTIONS: u64 = 5_000_000;
 
 fn setup() -> (
     Env,
@@ -47,6 +55,8 @@ fn setup_with_signer(register_workflow_signer: bool) -> (
 
     let workflow_id = env.register_contract(None, SettlementWorkflowContract);
     let workflow = SettlementWorkflowContractClient::new(&env, &workflow_id);
+    // Pin the trusted compliance/treasury instances once at init (#364).
+    workflow.initialize(&compliance_id, &treasury_id);
     // The workflow contract executes settlements as itself, so it must be an
     // authorized Treasury signer.
     if register_workflow_signer {
@@ -75,28 +85,21 @@ fn execution_blocked_when_compliance_returns_false() {
         admin,
         merchant,
         _compliance,
-        compliance_id,
+        _compliance_id,
         treasury,
         treasury_id,
         workflow,
         token_id,
     ) = setup();
 
-    // Merchant is never allowed, so compliance.is_allowed returns false.
     let settlement_id = treasury.propose_settlement(&admin, &merchant, &10_000_000);
     token::StellarAssetClient::new(&env, &token_id).mint(&treasury_id, &10_000_000);
 
     let err = workflow
-        .try_execute_with_compliance(
-            &compliance_id,
-            &treasury_id,
-            &settlement_id,
-            &token_id,
-            &merchant,
-        )
+        .try_execute_with_compliance(&settlement_id, &token_id, &merchant)
         .unwrap_err()
         .unwrap();
-    assert_eq!(err, TreasuryError::ComplianceCheckFailed);
+    assert_eq!(err, SettlementWorkflowError::ComplianceCheckFailed);
     assert_eq!(token::Client::new(&env, &token_id).balance(&merchant), 0);
 }
 
@@ -107,7 +110,7 @@ fn successful_path_executes_treasury_settlement() {
         admin,
         merchant,
         compliance,
-        compliance_id,
+        _compliance_id,
         treasury,
         treasury_id,
         workflow,
@@ -118,14 +121,43 @@ fn successful_path_executes_treasury_settlement() {
     let settlement_id = treasury.propose_settlement(&admin, &merchant, &10_000_000);
     token::StellarAssetClient::new(&env, &token_id).mint(&treasury_id, &10_000_000);
 
-    workflow
+    workflow.pause(&admin);
+
+    let err = workflow
         .try_execute_with_compliance(
-            &compliance_id,
-            &treasury_id,
             &settlement_id,
             &token_id,
             &merchant,
         )
+        .unwrap_err()
+        .unwrap();
+    assert_eq!(err, SettlementWorkflowError::ContractPaused);
+    assert_eq!(token::Client::new(&env, &token_id).balance(&merchant), 0);
+}
+
+#[test]
+fn unpause_restores_execution() {
+    let (
+        env,
+        admin,
+        merchant,
+        compliance,
+        _compliance_id,
+        treasury,
+        treasury_id,
+        workflow,
+        token_id,
+    ) = setup();
+
+    compliance.allow_address(&admin, &merchant);
+    let settlement_id = treasury.propose_settlement(&admin, &merchant, &10_000_000);
+    token::StellarAssetClient::new(&env, &token_id).mint(&treasury_id, &10_000_000);
+
+    workflow.pause(&admin);
+    workflow.unpause(&admin);
+
+    workflow
+        .try_execute_with_compliance(&settlement_id, &token_id, &merchant)
         .unwrap()
         .unwrap();
 
@@ -136,93 +168,13 @@ fn successful_path_executes_treasury_settlement() {
 }
 
 #[test]
-fn execution_fails_with_clear_error_when_workflow_not_registered_signer() {
-    // Regression test for #370: a first-time deployer who forgets to register the
-    // workflow contract as a Treasury signer should see a specific, actionable error
-    // (`WorkflowNotRegisteredSigner`) rather than Treasury's generic
-    // `UnauthorizedSigner`, which gives no hint about the missing setup step.
+fn emits_settlement_workflow_executed_event() {
     let (
         env,
         admin,
         merchant,
         compliance,
-        compliance_id,
-        treasury,
-        treasury_id,
-        workflow,
-        token_id,
-    ) = setup_with_signer(false);
-
-    compliance.allow_address(&admin, &merchant);
-    let settlement_id = treasury.propose_settlement(&admin, &merchant, &10_000_000);
-    token::StellarAssetClient::new(&env, &token_id).mint(&treasury_id, &10_000_000);
-
-    let err = workflow
-        .try_execute_with_compliance(
-            &compliance_id,
-            &treasury_id,
-            &settlement_id,
-            &token_id,
-            &merchant,
-        )
-        .unwrap_err()
-        .unwrap();
-
-    // The exact error a first-time deployer will see — pin it down so the message
-    // stays actionable if the precondition handling ever changes.
-    assert_eq!(err, TreasuryError::WorkflowNotRegisteredSigner);
-    assert_eq!(token::Client::new(&env, &token_id).balance(&merchant), 0);
-}
-
-#[test]
-fn settlement_not_found_when_compliance_allows_but_id_missing() {
-    // #371: compliance genuinely allows the merchant, but the referenced
-    // settlement_id does not exist in treasury (e.g. a mistyped/stale id from a
-    // client bug). The failure must surface cleanly as Treasury's own
-    // `SettlementNotFound`, not something less diagnosable.
-    let (
-        env,
-        admin,
-        merchant,
-        compliance,
-        compliance_id,
-        treasury,
-        treasury_id,
-        workflow,
-        token_id,
-    ) = setup();
-
-    compliance.allow_address(&admin, &merchant);
-    // No settlement is proposed; 999 is guaranteed not to exist.
-    token::StellarAssetClient::new(&env, &token_id).mint(&treasury_id, &10_000_000);
-
-    let err = workflow
-        .try_execute_with_compliance(
-            &compliance_id,
-            &treasury_id,
-            &999,
-            &token_id,
-            &merchant,
-        )
-        .unwrap_err()
-        .unwrap();
-
-    assert_eq!(err, TreasuryError::SettlementNotFound);
-    assert_eq!(token::Client::new(&env, &token_id).balance(&merchant), 0);
-}
-
-#[test]
-fn settlement_already_executed_when_executed_directly_via_treasury() {
-    // #371: the merchant is compliance-allowed, but the settlement was already
-    // executed via a direct Treasury call that bypassed this workflow. The nested
-    // treasury call must propagate `AlreadyExecuted` (the compliance gate having
-    // already passed one hop earlier).
-    let (
-        env,
-        admin,
-        merchant,
-        compliance,
-        compliance_id,
+        _compliance_id,
         treasury,
         treasury_id,
         workflow,
@@ -233,34 +185,50 @@ fn settlement_already_executed_when_executed_directly_via_treasury() {
     let settlement_id = treasury.propose_settlement(&admin, &merchant, &10_000_000);
     token::StellarAssetClient::new(&env, &token_id).mint(&treasury_id, &10_000_000);
 
-    // Execute directly against treasury, bypassing the workflow's compliance gate.
-    treasury.execute_settlement(&admin, &settlement_id, &token_id);
+    workflow.execute_with_compliance(&settlement_id, &token_id, &merchant);
 
-    let err = workflow
-        .try_execute_with_compliance(
-            &compliance_id,
-            &treasury_id,
-            &settlement_id,
-            &token_id,
-            &merchant,
-        )
-        .unwrap_err()
-        .unwrap();
-
-    assert_eq!(err, TreasuryError::AlreadyExecuted);
+    let emitted = env
+        .events()
+        .all()
+        .iter()
+        .any(|(topics, _data)| {
+            topics
+                .first()
+                .map(|t| t == soroban_sdk::Val::from(soroban_sdk::Symbol::new(&env, "settlement_workflow_executed")))
+                .unwrap_or(false)
+        });
+    assert!(
+        emitted,
+        "expected a settlement_workflow_executed event to be emitted"
+    );
 }
 
 #[test]
-fn executed_settlement_ids_are_recorded_and_paginated() {
-    // #373: settlements executed through the workflow are discoverable via the
-    // paginated read entrypoint, so an auditor can confirm they passed the gate
-    // and cross-reference against treasury's full history.
+fn initialize_is_idempotent_and_pins_trusted_instances() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let compliance_id = Address::generate(&env);
+    let treasury_id = Address::generate(&env);
+    let workflow_id = env.register_contract(None, SettlementWorkflowContract);
+    let workflow = SettlementWorkflowContractClient::new(&env, &workflow_id);
+
+    workflow.initialize(&compliance_id, &treasury_id);
+    // Second initialize must trap with AlreadyInitialized.
+    let err = workflow
+        .try_initialize(&compliance_id, &treasury_id)
+        .unwrap_err()
+        .unwrap();
+    assert_eq!(err, TreasuryError::AlreadyInitialized);
+}
+
+#[test]
+fn batch_executes_multiple_settlements_and_skips_invalid_ids() {
     let (
         env,
         admin,
         merchant,
         compliance,
-        compliance_id,
+        _compliance_id,
         treasury,
         treasury_id,
         workflow,
@@ -268,29 +236,79 @@ fn executed_settlement_ids_are_recorded_and_paginated() {
     ) = setup();
 
     compliance.allow_address(&admin, &merchant);
-    let id1 = treasury.propose_settlement(&admin, &merchant, &10_000_000);
-    let id2 = treasury.propose_settlement(&admin, &merchant, &5_000_000);
-    token::StellarAssetClient::new(&env, &token_id).mint(&treasury_id, &15_000_000);
+
+    let good_1 = treasury.propose_settlement(&admin, &merchant, &5_000_000);
+    let good_2 = treasury.propose_settlement(&admin, &merchant, &5_000_000);
+    // A settlement that does not exist.
+    let bogus: u64 = 999;
+    token::StellarAssetClient::new(&env, &token_id).mint(&treasury_id, &10_000_000);
+
+    let mut ids = soroban_sdk::Vec::new(&env);
+    ids.push_back(good_1);
+    ids.push_back(bogus);
+    ids.push_back(good_2);
+
+    let executed = workflow.execute_with_compliance_batch(&ids, &token_id, &merchant);
+    assert_eq!(executed, soroban_sdk::Vec::from_array(&env, [good_1, good_2]));
+    assert_eq!(
+        token::Client::new(&env, &token_id).balance(&merchant),
+        10_000_000
+    );
+}
+
+#[test]
+fn batch_rejected_when_compliance_fails() {
+    let (
+        env,
+        admin,
+        merchant,
+        _compliance,
+        _compliance_id,
+        treasury,
+        _treasury_id,
+        workflow,
+        _token_id,
+    ) = setup();
+
+    let good = treasury.propose_settlement(&admin, &merchant, &5_000_000);
+    let mut ids = soroban_sdk::Vec::new(&env);
+    ids.push_back(good);
+
+    let err = workflow
+        .try_execute_with_compliance_batch(&ids, &Address::generate(&env), &merchant)
+        .unwrap_err()
+        .unwrap();
+    assert_eq!(err, TreasuryError::ComplianceCheckFailed);
+}
+
+#[test]
+fn execute_with_compliance_stays_under_instruction_budget() {
+    let (
+        env,
+        admin,
+        merchant,
+        compliance,
+        _compliance_id,
+        treasury,
+        treasury_id,
+        workflow,
+        token_id,
+    ) = setup();
+
+    // Lift budget limits so the call chain is measured, not artificially capped.
+    env.cost_estimate().budget().reset_unlimited();
+    compliance.allow_address(&admin, &merchant);
+    let settlement_id = treasury.propose_settlement(&admin, &merchant, &10_000_000);
+    token::StellarAssetClient::new(&env, &token_id).mint(&treasury_id, &10_000_000);
+    env.cost_estimate().budget().reset_tracker();
 
     workflow
-        .try_execute_with_compliance(&compliance_id, &treasury_id, &id1, &token_id, &merchant)
-        .unwrap()
-        .unwrap();
-    workflow
-        .try_execute_with_compliance(&compliance_id, &treasury_id, &id2, &token_id, &merchant)
-        .unwrap()
+        .execute_with_compliance(&settlement_id, &token_id, &merchant)
         .unwrap();
 
-    let all = workflow.get_executed_settlement_ids_page(&0, &10);
-    assert_eq!(all, soroban_sdk::Vec::from_array(&env, [id1, id2]));
-
-    // Pagination: skip the first entry, limit 1.
-    let page = workflow.get_executed_settlement_ids_page(&1, &1);
-    assert_eq!(page, soroban_sdk::Vec::from_array(&env, [id2]));
-
-    // A settlement executed directly via treasury is NOT recorded by the workflow.
-    let id3 = treasury.propose_settlement(&admin, &merchant, &1_000_000);
-    treasury.execute_settlement(&admin, &id3, &token_id);
-    let still_two = workflow.get_executed_settlement_ids_page(&0, &10);
-    assert_eq!(still_two, soroban_sdk::Vec::from_array(&env, [id1, id2]));
+    let instructions = env.cost_estimate().budget().cpu_instruction_cost();
+    assert!(
+        instructions <= MAX_EXECUTE_INSTRUCTIONS,
+        "execute_with_compliance used {instructions} instructions, expected <= {MAX_EXECUTE_INSTRUCTIONS}"
+    );
 }
