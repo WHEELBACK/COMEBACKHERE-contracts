@@ -150,6 +150,23 @@ pub enum DataKey {
 }
 
 /// Returns the approval weight assigned to `signer`, or `0` if not registered.
+///
+/// # Examples
+///
+/// ```rust,no_run
+/// use soroban_sdk::{Address, Env};
+/// use multisig::signer_weight;
+///
+/// // In a contract or test context where `env` and `signer` are available:
+/// # let env: Env = unimplemented!();
+/// # let signer: Address = unimplemented!();
+/// let weight = signer_weight(&env, &signer);
+/// if weight == 0 {
+///     // signer is not registered; treat as unauthorized
+/// } else {
+///     // signer has `weight` votes toward threshold
+/// }
+/// ```
 pub fn signer_weight(env: &Env, signer: &Address) -> u32 {
     env.storage()
         .instance()
@@ -159,6 +176,30 @@ pub fn signer_weight(env: &Env, signer: &Address) -> u32 {
 
 /// Requires `signer` to authenticate and have a non-zero weight in the signer registry.
 /// Panics: `UnauthorizedSigner`.
+///
+/// # Examples
+///
+/// ```rust,no_run
+/// use soroban_sdk::{Address, Env, Vec};
+/// use multisig::{require_authorized_signer, record_approval, meets_threshold};
+///
+/// // Typical usage inside a contract approval handler:
+/// # let env: Env = unimplemented!();
+/// # let signer: Address = unimplemented!();
+/// # let mut approvals: Vec<Address> = unimplemented!();
+/// # let mut weight: u32 = 0;
+/// # let threshold: u32 = 2;
+/// // 1. Authenticate and assert the signer is registered.
+/// require_authorized_signer(&env, &signer);
+///
+/// // 2. Record the approval and accumulate weight.
+/// record_approval(&env, &mut approvals, &mut weight, &signer);
+///
+/// // 3. Check whether quorum is now satisfied.
+/// if meets_threshold(weight, threshold) {
+///     // execute the guarded action
+/// }
+/// ```
 pub fn require_authorized_signer(env: &Env, signer: &Address) {
     signer.require_auth();
     if signer_weight(env, signer) == 0 {
@@ -169,6 +210,30 @@ pub fn require_authorized_signer(env: &Env, signer: &Address) {
 /// Adds `signer`'s weight to `weight` and appends `signer` to `approvals`, unless `signer` has
 /// already approved (in which case this is a no-op). Captures the dedup-then-accumulate pattern
 /// used for settlement, dispute, and rotation approvals.
+///
+/// # Examples
+///
+/// ```rust,no_run
+/// use soroban_sdk::{Address, Env, Vec};
+/// use multisig::{record_approval, meets_threshold};
+///
+/// // Accumulate approvals from multiple signers toward a threshold of 3.
+/// # let env: Env = unimplemented!();
+/// # let signer_a: Address = unimplemented!();
+/// # let signer_b: Address = unimplemented!();
+/// # let mut approvals: Vec<Address> = unimplemented!();
+/// # let mut weight: u32 = 0;
+/// # let threshold: u32 = 3;
+/// record_approval(&env, &mut approvals, &mut weight, &signer_a);
+/// record_approval(&env, &mut approvals, &mut weight, &signer_b);
+///
+/// // Duplicate call from signer_a is a no-op — weight stays the same.
+/// record_approval(&env, &mut approvals, &mut weight, &signer_a);
+///
+/// if meets_threshold(weight, threshold) {
+///     // quorum reached — proceed with execution
+/// }
+/// ```
 pub fn record_approval(
     env: &Env,
     approvals: &mut Vec<Address>,
@@ -184,6 +249,24 @@ pub fn record_approval(
 }
 
 /// Returns whether `weight` satisfies simple weighted-threshold quorum, i.e. `weight >= threshold`.
+///
+/// # Examples
+///
+/// ```rust
+/// use multisig::meets_threshold;
+///
+/// // Exact threshold: quorum reached.
+/// assert!(meets_threshold(3, 3));
+///
+/// // Above threshold: quorum reached.
+/// assert!(meets_threshold(5, 3));
+///
+/// // Below threshold: quorum not reached.
+/// assert!(!meets_threshold(2, 3));
+///
+/// // Zero threshold is trivially satisfied by any weight.
+/// assert!(meets_threshold(0, 0));
+/// ```
 pub fn meets_threshold(weight: u32, threshold: u32) -> bool {
     weight >= threshold
 }
