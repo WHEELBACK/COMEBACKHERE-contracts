@@ -1,13 +1,20 @@
 #![no_std]
 
-pub use compliance::ComplianceError;
-pub use invoice::InvoiceError;
+pub use compliance_errors::ComplianceError;
+pub use invoice_errors::InvoiceError;
 pub use treasury::TreasuryError;
 
 /// Unified error type spanning all three COMEBACKHERE contracts.
 ///
 /// Integration clients and cross-contract tests can import this single type
 /// and handle errors from any contract with one `match` arm.
+///
+/// This crate must never be a dependency of a contract crate itself (only of
+/// off-chain clients and cross-contract test fixtures) - see the
+/// settlement-workflow link failure this repo hit from exactly that mistake.
+/// `protocol-errors` exists to sit outside the on-chain dependency graph, not
+/// inside it, and that stays true even once this crate depends on nothing but
+/// the three error enums themselves.
 #[derive(Copy, Clone, Debug, PartialEq)]
 pub enum ProtocolError {
     Invoice(InvoiceError),
@@ -61,14 +68,20 @@ mod tests {
     #[test]
     fn from_treasury_error() {
         let e = ProtocolError::from(TreasuryError::SettlementNotFound);
-        assert_eq!(e, ProtocolError::Treasury(TreasuryError::SettlementNotFound));
+        assert_eq!(
+            e,
+            ProtocolError::Treasury(TreasuryError::SettlementNotFound)
+        );
         assert_eq!(e.contract_name(), "treasury");
     }
 
     #[test]
     fn from_compliance_error() {
         let e = ProtocolError::from(ComplianceError::AlreadyInitialized);
-        assert_eq!(e, ProtocolError::Compliance(ComplianceError::AlreadyInitialized));
+        assert_eq!(
+            e,
+            ProtocolError::Compliance(ComplianceError::AlreadyInitialized)
+        );
         assert_eq!(e.contract_name(), "compliance");
     }
 

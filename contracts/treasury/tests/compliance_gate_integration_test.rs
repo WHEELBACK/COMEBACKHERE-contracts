@@ -113,7 +113,7 @@ fn setup() -> (
 
     let treasury_id = env.register_contract(None, TreasuryContract);
     let treasury = TreasuryContractClient::new(&env, &treasury_id);
-    treasury.initialize(&admin, &1);
+    treasury.initialize(&admin, &1, &soroban_sdk::Vec::new(&env));
 
     let token_id = env.register_contract(None, TestTokenContract);
     (
@@ -316,4 +316,111 @@ fn execute_settlement_fails_when_merchant_blocked_mid_flight() {
     assert_eq!(err, WorkflowError::ComplianceFailed);
     // Merchant received nothing.
     assert_eq!(token.balance(&merchant), 0);
+}
+
+#[test]
+fn execute_settlement_fails_when_merchant_blocked_after_full_approval() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let admin = Address::generate(&env);
+    let merchant = Address::generate(&env);
+
+    // Deploy compliance
+    let compliance_id = env.register_contract(None, ComplianceContract);
+    let compliance = ComplianceContractClient::new(&env, &compliance_id);
+    compliance.initialize(&admin);
+
+    // Allow merchant initially
+    compliance.allow_address(&admin, &merchant);
+
+    // Deploy treasury with threshold=2
+    let treasury_id = env.register_contract(None, TreasuryContract);
+    let treasury = TreasuryContractClient::new(&env, &treasury_id);
+    treasury.initialize(&admin, &2, &soroban_sdk::Vec::new(&env));
+
+    // Deploy workflow and register it as a second signer (weight 1)
+    let workflow_id = env.register_contract(None, SettlementWorkflow);
+    let workflow = SettlementWorkflowClient::new(&env, &workflow_id);
+    treasury.set_signer(&admin, &workflow_id, &1);
+
+    // Deploy token and fund treasury
+    let token_id = env.register_contract(None, TestTokenContract);
+    let token = TestTokenContractClient::new(&env, &token_id);
+    token.mint(&treasury_id, &10_000_000);
+
+    // Propose settlement (admin weight = 1 < threshold 2 → still Pending)
+    let settlement_id = treasury.propose_settlement(&admin, &merchant, &10_000_000);
+
+    // Approve settlement via workflow (weight 1 + 1 = 2 ≥ 2 → meets threshold)
+    treasury.approve_settlement(&workflow_id, &settlement_id);
+
+    // Now block the merchant in compliance while settlement is fully approved but not yet executed
+    compliance.block_address(&admin, &merchant, &None);
+
+    // Execution via workflow must fail: compliance gate sees the block.
+    let err = workflow
+        .try_execute_with_compliance(
+            &compliance_id,
+            &treasury_id,
+            &settlement_id,
+            &token_id,
+            &merchant,
+        )
+        .unwrap_err()
+        .unwrap();
+    assert_eq!(err, WorkflowError::ComplianceFailed);
+    assert_eq!(token.balance(&merchant), 0);
+}
+
+#[test]
+fn execute_settlement_succeeds_when_merchant_allowed_after_full_approval() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let admin = Address::generate(&env);
+    let merchant = Address::generate(&env);
+
+    // Deploy compliance
+    let compliance_id = env.register_contract(None, ComplianceContract);
+    let compliance = ComplianceContractClient::new(&env, &compliance_id);
+    compliance.initialize(&admin);
+
+    // Do NOT allow merchant initially — compliance will reject
+
+    // Deploy treasury with threshold=2
+    let treasury_id = env.register_contract(None, TreasuryContract);
+    let treasury = TreasuryContractClient::new(&env, &treasury_id);
+    treasury.initialize(&admin, &2, &soroban_sdk::Vec::new(&env));
+
+    // Deploy workflow and register it as a second signer (weight 1)
+    let workflow_id = env.register_contract(None, SettlementWorkflow);
+    let workflow = SettlementWorkflowClient::new(&env, &workflow_id);
+    treasury.set_signer(&admin, &workflow_id, &1);
+
+    // Deploy token and fund treasury
+    let token_id = env.register_contract(None, TestTokenContract);
+    let token = TestTokenContractClient::new(&env, &token_id);
+    token.mint(&treasury_id, &10_000_000);
+
+    // Propose settlement
+    let settlement_id = treasury.propose_settlement(&admin, &merchant, &10_000_000);
+
+    // Approve via workflow (meets threshold)
+    treasury.approve_settlement(&workflow_id, &settlement_id);
+
+    // Now allow the merchant — compliance was failing, now passes
+    compliance.allow_address(&admin, &merchant);
+
+    // Execution via workflow should succeed
+    assert!(workflow
+        .try_execute_with_compliance(
+            &compliance_id,
+            &treasury_id,
+            &settlement_id,
+            &token_id,
+            &merchant,
+        )
+        .is_ok());
+    assert_eq!(token.balance(&merchant), 10_000_000);
 }

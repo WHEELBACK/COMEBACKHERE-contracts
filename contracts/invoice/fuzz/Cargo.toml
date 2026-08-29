@@ -1,0 +1,29 @@
+[package]
+name = "invoice-fuzz"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+[package.metadata]
+cargo-fuzz = true
+
+# Standalone workspace: kept out of the root workspace so `cargo test --all`
+# and normal `cargo build` at the repo root are unaffected by the fuzz crate,
+# which requires the nightly toolchain + cargo-fuzz to build/run.
+[workspace]
+
+[dependencies]
+libfuzzer-sys = "0.4"
+arbitrary = { version = "1", features = ["derive"] }
+soroban-sdk = { version = "22.0.0", features = ["testutils"] }
+
+[dependencies.invoice]
+path = ".."
+features = ["testutils"]
+
+[[bin]]
+name = "amount_precision"
+path = "fuzz_targets/amount_precision.rs"
+test = false
+doc = false
+bench = false

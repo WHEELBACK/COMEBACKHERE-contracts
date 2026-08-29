@@ -14,7 +14,26 @@
 // - Optional types (Option<u64>) serialize to null or value
 
 use crate::invoice::Invoice;
-use soroban_sdk::{Address, Env, Symbol};
+use soroban_sdk::{contracttype, Address, Env, Symbol};
+
+/// Emitted when an amendment changes an invoice's amount fields.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct InvoiceAmountUpdatedEvent {
+    pub id: u64,
+    pub old_amount_usdc: i128,
+    pub new_amount_usdc: i128,
+    pub old_gross_usdc: i128,
+    pub new_gross_usdc: i128,
+}
+
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct InvoiceExpiryExtendedEvent {
+    pub id: u64,
+    pub old_expires_at: u64,
+    pub new_expires_at: u64,
+}
 
 pub fn invoice_created(env: &Env, id: u64, invoice: &Invoice) {
     env.events()
@@ -38,14 +57,40 @@ pub fn invoice_cancelled(env: &Env, id: u64, invoice: &Invoice) {
 
 pub fn invoice_refund_requested(env: &Env, id: u64, invoice: &Invoice) {
     env.events().publish(
-        (Symbol::new(env, "invoice_refund_req"), id),
+        (Symbol::new(env, "invoice_refund_requested"), id),
         invoice.clone(),
     );
 }
 
-pub fn escrow_released(env: &Env, id: u64, invoice: &Invoice) {
+pub fn refund_approved(env: &Env, id: u64, invoice: &Invoice) {
     env.events()
-        .publish((Symbol::new(env, "escrow_released"), id), invoice.clone());
+        .publish((Symbol::new(env, "refund_approved"), id), invoice.clone());
+}
+
+pub fn refund_rejected(env: &Env, id: u64, invoice: &Invoice) {
+    env.events()
+        .publish((Symbol::new(env, "refund_rejected"), id), invoice.clone());
+}
+
+/// Minimal payload emitted when escrow is released for a paid invoice.
+#[contracttype]
+#[derive(Clone)]
+pub struct EscrowReleasedEvent {
+    pub id: u64,
+    pub merchant: Address,
+    pub amount_usdc: i128,
+    pub released_at: u64,
+}
+
+pub fn escrow_released(env: &Env, id: u64, invoice: &Invoice) {
+    let payload = EscrowReleasedEvent {
+        id,
+        merchant: invoice.merchant.clone(),
+        amount_usdc: invoice.amount_usdc,
+        released_at: env.ledger().timestamp(),
+    };
+    env.events()
+        .publish((Symbol::new(env, "escrow_released"), id), payload);
 }
 
 pub fn contract_paused(env: &Env, admin: &Address) {
@@ -56,4 +101,49 @@ pub fn contract_paused(env: &Env, admin: &Address) {
 pub fn contract_unpaused(env: &Env, admin: &Address) {
     env.events()
         .publish((Symbol::new(env, "contract_unpaused"),), admin);
+}
+
+pub fn invoice_amended(env: &Env, event: &InvoiceAmountUpdatedEvent) {
+    env.events().publish(
+        (Symbol::new(env, "invoice_amended"), event.id),
+        event.clone(),
+    );
+}
+
+pub fn invoice_expiry_extended(env: &Env, event: &InvoiceExpiryExtendedEvent) {
+    env.events().publish(
+        (Symbol::new(env, "invoice_expiry_extended"), event.id),
+        event.clone(),
+    );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{invoice_expiry_extended, InvoiceExpiryExtendedEvent};
+    use soroban_sdk::{contract, testutils::Events, Env, Symbol, TryFromVal};
+
+    #[contract]
+    struct TestContract;
+
+    #[test]
+    fn invoice_expiry_extended_emits_event() {
+        let env = Env::default();
+        let contract_id = env.register(TestContract, ());
+        env.as_contract(&contract_id, || {
+            invoice_expiry_extended(
+                &env,
+                &InvoiceExpiryExtendedEvent {
+                    id: 1,
+                    old_expires_at: 100,
+                    new_expires_at: 200,
+                },
+            );
+        });
+
+        let (_, topics, _) = env.events().all().last().unwrap();
+        assert_eq!(
+            Symbol::try_from_val(&env, &topics.get_unchecked(0)).unwrap(),
+            Symbol::new(&env, "invoice_expiry_extended")
+        );
+    }
 }

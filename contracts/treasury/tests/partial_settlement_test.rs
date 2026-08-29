@@ -7,7 +7,7 @@ fn setup(env: &Env, total: i128) -> (TreasuryContractClient<'_>, Address, Addres
     let contract_id = env.register_contract(None, TreasuryContract);
     let client = TreasuryContractClient::new(env, &contract_id);
     // threshold=1, admin weight=1 → admin approval alone is sufficient
-    client.initialize(&admin, &1);
+    client.initialize(&admin, &1, &soroban_sdk::Vec::new(env));
 
     let token_id = env.register_stellar_asset_contract(admin.clone());
     soroban_sdk::token::StellarAssetClient::new(env, &token_id).mint(&contract_id, &total);
@@ -39,7 +39,7 @@ fn partially_executed_settlement_absent_from_pending_list() {
 }
 
 #[test]
-#[should_panic(expected = "ThresholdNotMet")]
+#[should_panic(expected = "Error(Contract, #5)")]
 fn partially_execute_without_sufficient_approvals_panics() {
     let env = Env::default();
     env.mock_all_auths();
@@ -47,7 +47,7 @@ fn partially_execute_without_sufficient_approvals_panics() {
     let merchant = Address::generate(&env);
     let contract_id = env.register_contract(None, TreasuryContract);
     let client = TreasuryContractClient::new(&env, &contract_id);
-    client.initialize(&admin, &10); // threshold=10, admin weight=1
+    client.initialize(&admin, &10, &soroban_sdk::Vec::new(&env)); // threshold=10, admin weight=1
     let token_id = env.register_stellar_asset_contract(admin.clone());
     soroban_sdk::token::StellarAssetClient::new(&env, &token_id).mint(&contract_id, &1_000_000);
     let sid = client.propose_settlement(&admin, &merchant, &1_000_000);
@@ -55,7 +55,7 @@ fn partially_execute_without_sufficient_approvals_panics() {
 }
 
 #[test]
-#[should_panic(expected = "InvalidAmount")]
+#[should_panic(expected = "Error(Contract, #7)")]
 fn partially_execute_exceeding_amount_panics() {
     let env = Env::default();
     env.mock_all_auths();
@@ -65,7 +65,7 @@ fn partially_execute_exceeding_amount_panics() {
 }
 
 #[test]
-#[should_panic(expected = "InvalidAmount")]
+#[should_panic(expected = "Error(Contract, #7)")]
 fn partially_execute_zero_amount_panics() {
     let env = Env::default();
     env.mock_all_auths();
@@ -89,4 +89,62 @@ fn partially_execute_already_executed_panics() {
     let settlement = client.get_settlement(&sid);
     assert_ne!(settlement.status, SettlementStatus::Pending);
     assert_eq!(settlement.status, SettlementStatus::PartiallyExecuted);
+}
+
+#[test]
+#[should_panic(expected = "Error(Contract, #7)")]
+fn cumulative_partial_approvals_exceeding_amount_panics() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, admin, _token_id, sid) = setup(&env, 10_000_000);
+    let signer_two = Address::generate(&env);
+    client.set_signer(&admin, &signer_two, &1);
+
+    // First approval covers just under half the settlement.
+    client.approve_partial_settlement(&admin, &sid, &5_000_000);
+    // Second approval pushes the cumulative approved total to amount + 1.
+    client.approve_partial_settlement(&signer_two, &sid, &5_000_001);
+}
+
+/// Full three-step partial settlement flow:
+/// 1. partially_execute_settlement succeeds and sets status to PartiallyExecuted
+/// 2. exactly partial_amount tokens are transferred to the merchant
+/// 3. the resulting state is the AlreadyExecuted precondition for execute_settlement
+///
+/// Step 3 is verified by asserting the stored status is no longer Pending — the same
+/// approach used by `partially_execute_already_executed_panics` above, because a
+/// second contract invocation that panics after a prior cross-contract token transfer
+/// causes a non-unwinding abort in the Soroban native test environment.
+#[test]
+fn partial_settlement_full_sequence() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let admin = Address::generate(&env);
+    let merchant = Address::generate(&env);
+    let total = 10_000_000i128;
+    let partial_amount = 3_000_000i128;
+
+    let contract_id = env.register_contract(None, TreasuryContract);
+    let client = TreasuryContractClient::new(&env, &contract_id);
+    client.initialize(&admin, &1, &soroban_sdk::Vec::new(&env));
+
+    let token_id = env.register_stellar_asset_contract(admin.clone());
+    soroban_sdk::token::StellarAssetClient::new(&env, &token_id).mint(&contract_id, &total);
+
+    let sid = client.propose_settlement(&admin, &merchant, &total);
+
+    client.partially_execute_settlement(&admin, &sid, &partial_amount, &token_id);
+
+    // Step 1: status must be PartiallyExecuted
+    let settlement = client.get_settlement(&sid);
+    assert_eq!(settlement.status, SettlementStatus::PartiallyExecuted);
+
+    // Step 2: exactly partial_amount was transferred to the merchant
+    let merchant_balance = soroban_sdk::token::Client::new(&env, &token_id).balance(&merchant);
+    assert_eq!(merchant_balance, partial_amount);
+
+    // Step 3: status is no longer Pending, so execute_settlement's guard
+    // `if status != Pending { panic!("AlreadyExecuted") }` would fire on any follow-up call.
+    assert_ne!(settlement.status, SettlementStatus::Pending);
 }

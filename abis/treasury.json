@@ -1,0 +1,89 @@
+{
+  "name": "treasury",
+  "version": "1.0.0",
+  "functions": [
+    {
+      "name": "create_escrow",
+      "inputs": ["account_id", "amount"],
+      "outputs": ["escrow_id"],
+      "description": "Creates a new escrow account"
+    },
+    {
+      "name": "get_escrow",
+      "inputs": ["escrow_id"],
+      "outputs": ["escrow"],
+      "description": "Retrieves an escrow account by ID"
+    },
+    {
+      "name": "deposit_to_escrow",
+      "inputs": ["escrow_id", "amount"],
+      "outputs": ["deposit_id"],
+      "description": "Deposits funds into an escrow account"
+    },
+    {
+      "name": "withdraw_from_escrow",
+      "inputs": ["escrow_id", "amount"],
+      "outputs": ["withdrawal_id"],
+      "description": "Withdraws funds from an escrow account"
+    },
+    {
+      "name": "release_escrow",
+      "inputs": ["escrow_id"],
+      "outputs": ["result"],
+      "description": "Releases funds from an escrow account"
+    },
+    {
+      "name": "add_holder",
+      "inputs": ["escrow_id", "holder_id"],
+      "outputs": ["result"],
+      "description": "Adds a holder to an escrow account"
+    },
+    {
+      "name": "remove_holder",
+      "inputs": ["escrow_id", "holder_id"],
+      "outputs": ["result"],
+      "description": "Removes a holder from an escrow account"
+    }
+  ],
+  "events": [
+    {
+      "name": "escrow_created",
+      "payload": {
+        "escrow_id": "string",
+        "amount": "decimal",
+        "account_id": "string"
+      }
+    },
+    {
+      "name": "escrow_deposited",
+      "payload": {
+        "escrow_id": "string",
+        "amount": "decimal",
+        "source_account": "string"
+      }
+    },
+    {
+      "name": "escrow_withdrawn",
+      "payload": {
+        "escrow_id": "string",
+        "amount": "decimal",
+        "destination_account": "string"
+      }
+    },
+    {
+      "name": "holder_added",
+      "payload": {
+        "escrow_id": "string",
+        "holder_id": "string",
+        "role": "string"
+      }
+    },
+    {
+      "name": "holder_removed",
+      "payload": {
+        "escrow_id": "string",
+        "holder_id": "string"
+      }
+    }
+  ]
+}

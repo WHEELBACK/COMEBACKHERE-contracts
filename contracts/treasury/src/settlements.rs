@@ -1,0 +1,642 @@
+use crate::{
+    require_admin, require_not_paused, DataKey, Settlement, SettlementHoldReason, SettlementStatus,
+    TreasuryContract, TreasuryContractArgs, TreasuryContractClient, TreasuryError,
+    MAX_ALLOWED_TOKENS,
+};
+use multisig::{meets_threshold, record_approval, require_authorized_signer, signer_weight};
+use soroban_sdk::{contractimpl, token, Address, Env, Symbol, Vec};
+
+const SETTLEMENT_TTL: u64 = 7 * 24 * 60 * 60;
+
+/// Maximum number of settlement IDs accepted per batch call, consistent with
+/// the batch caps used elsewhere in the workspace (see #8/#21).
+const MAX_BATCH_SIZE: u32 = 50;
+
+#[contractimpl]
+impl TreasuryContract {
+    /// Proposes a new settlement of `amount` tokens payable to `merchant_address`.
+    /// Preconditions: contract not paused; `signer` must be an authorised signer with non-zero weight.
+    /// Panics: `ContractPaused`, `UnauthorizedSigner`.
+    /// Errors: `InvalidAmount`, `ArithmeticOverflow`.
+    /// Emits: `settlement_proposed`.
+    pub fn propose_settlement(
+        env: Env,
+        signer: Address,
+        merchant_address: Address,
+        amount: i128,
+    ) -> Result<u64, TreasuryError> {
+        require_not_paused(&env);
+        require_authorized_signer(&env, &signer);
+        if amount <= 0 {
+            return Err(TreasuryError::InvalidAmount);
+        }
+        let count: u64 = env
+            .storage()
+            .instance()
+            .get(&DataKey::SettlementCount)
+            .unwrap_or(0);
+        let id = count
+            .checked_add(1)
+            .ok_or(TreasuryError::ArithmeticOverflow)?;
+        let mut approvals = Vec::new(&env);
+        let mut weight = 0u32;
+        record_approval(&env, &mut approvals, &mut weight, &signer);
+        let settlement = Settlement {
+            id,
+            merchant_address,
+            amount,
+            approvals,
+            approval_weight: weight,
+            status: SettlementStatus::Pending,
+            hold_reason: SettlementHoldReason::None,
+            proposed_at: env.ledger().timestamp(),
+        };
+        env.storage()
+            .persistent()
+            .set(&DataKey::Settlement(id), &settlement);
+        env.storage().instance().set(&DataKey::SettlementCount, &id);
+        env.events()
+            .publish((Symbol::new(&env, "settlement_proposed"), id), settlement);
+        Ok(id)
+    }
+
+    /// Alias of `propose_settlement` for partial-settlement workflows.
+    pub fn propose_partial_settlement(
+        env: Env,
+        signer: Address,
+        merchant_address: Address,
+        amount: i128,
+    ) -> Result<u64, TreasuryError> {
+        Self::propose_settlement(env, signer, merchant_address, amount)
+    }
+
+    /// Adds `signer`'s weight to the approval set of a pending settlement.
+    /// Panics: `ContractPaused`, `UnauthorizedSigner`.
+    /// Errors: `SettlementNotFound`, `AlreadyExecuted`.
+    /// Emits: `settlement_approved`.
+    pub fn approve_settlement(
+        env: Env,
+        signer: Address,
+        settlement_id: u64,
+    ) -> Result<Settlement, TreasuryError> {
+        require_not_paused(&env);
+        require_authorized_signer(&env, &signer);
+        let mut settlement: Settlement = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Settlement(settlement_id))
+            .ok_or(TreasuryError::SettlementNotFound)?;
+        if settlement.status != SettlementStatus::Pending {
+            return Err(TreasuryError::AlreadyExecuted);
+        }
+        record_approval(
+            &env,
+            &mut settlement.approvals,
+            &mut settlement.approval_weight,
+            &signer,
+        );
+        env.storage()
+            .persistent()
+            .set(&DataKey::Settlement(settlement_id), &settlement);
+        env.events().publish(
+            (Symbol::new(&env, "settlement_approved"), settlement_id),
+            settlement.clone(),
+        );
+        Ok(settlement)
+    }
+
+    /// Approves multiple pending settlements in one call, reducing transaction overhead for
+    /// high-volume signers. IDs that don't exist or aren't `Pending` are skipped rather than
+    /// aborting the whole batch; a single bad ID never rolls back the others' approvals.
+    /// Panics: `ContractPaused`, `UnauthorizedSigner`.
+    /// Errors: `BatchTooLarge`, `WeightOverflow`.
+    /// Emits: `settlement_approved` for each settlement actually approved.
+    pub fn batch_approve_settlements(
+        env: Env,
+        signer: Address,
+        ids: Vec<u64>,
+    ) -> Result<Vec<Settlement>, TreasuryError> {
+        require_not_paused(&env);
+        require_authorized_signer(&env, &signer);
+        if ids.len() > MAX_BATCH_SIZE {
+            return Err(TreasuryError::BatchTooLarge);
+        }
+        let weight = signer_weight(&env, &signer);
+        let mut approved = Vec::new(&env);
+        for id in ids.iter() {
+            let settlement_opt: Option<Settlement> =
+                env.storage().persistent().get(&DataKey::Settlement(id));
+            if let Some(mut settlement) = settlement_opt {
+                if settlement.status == SettlementStatus::Pending {
+                    if !settlement.approvals.contains(&signer) {
+                        settlement.approval_weight = settlement
+                            .approval_weight
+                            .checked_add(weight)
+                            .ok_or(TreasuryError::WeightOverflow)?;
+                        settlement.approvals.push_back(signer.clone());
+                    }
+                    env.storage()
+                        .persistent()
+                        .set(&DataKey::Settlement(id), &settlement);
+                    env.events().publish(
+                        (Symbol::new(&env, "settlement_approved"), id),
+                        settlement.clone(),
+                    );
+                    approved.push_back(settlement);
+                }
+                // non-pending settlements are silently skipped
+            }
+            // missing settlement IDs are silently skipped
+        }
+        Ok(approved)
+    }
+
+    /// Approves a pending settlement with a `partial_amount` cap; accumulates `signer`'s weight.
+    /// Panics: `ContractPaused`, `UnauthorizedSigner`.
+    /// Errors: `SettlementNotFound`, `AlreadyExecuted`, `InvalidAmount`.
+    /// Emits: `settlement_partial_approved`.
+    pub fn approve_partial_settlement(
+        env: Env,
+        signer: Address,
+        settlement_id: u64,
+        partial_amount: i128,
+    ) -> Result<Settlement, TreasuryError> {
+        require_not_paused(&env);
+        require_authorized_signer(&env, &signer);
+        let mut settlement: Settlement = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Settlement(settlement_id))
+            .ok_or(TreasuryError::SettlementNotFound)?;
+        if settlement.status != SettlementStatus::Pending {
+            return Err(TreasuryError::AlreadyExecuted);
+        }
+        if partial_amount <= 0 || partial_amount >= settlement.amount {
+            return Err(TreasuryError::InvalidAmount);
+        }
+        let approved_total: i128 = env
+            .storage()
+            .persistent()
+            .get(&DataKey::PartialApprovedTotal(settlement_id))
+            .unwrap_or(0);
+        if approved_total + partial_amount > settlement.amount {
+            return Err(TreasuryError::InvalidAmount);
+        }
+        env.storage().persistent().set(
+            &DataKey::PartialApprovedTotal(settlement_id),
+            &(approved_total + partial_amount),
+        );
+        record_approval(
+            &env,
+            &mut settlement.approvals,
+            &mut settlement.approval_weight,
+            &signer,
+        );
+        env.storage()
+            .persistent()
+            .set(&DataKey::Settlement(settlement_id), &settlement);
+        env.events().publish(
+            (
+                Symbol::new(&env, "settlement_partial_approved"),
+                settlement_id,
+            ),
+            settlement.clone(),
+        );
+        Ok(settlement)
+    }
+
+    /// Transfers the settlement amount to the merchant via `token_contract`.
+    /// Preconditions: not paused; approval weight meets threshold; token is on allowlist (if non-empty).
+    /// Panics: `ContractPaused`, `UnauthorizedSigner`.
+    /// Errors: `SettlementNotFound`, `SettlementOnHold`, `AlreadyExecuted`, `ThresholdNotConfigured`,
+    ///         `ThresholdNotMet`, `InvalidTokenContract`, `TokenNotAllowed`.
+    /// Emits: `settlement_executed`.
+    /// Note: this function performs **no** compliance check — Treasury does not
+    /// consult Compliance. Callers wanting a compliance-gated execution path should
+    /// use `SettlementWorkflowContract::execute_with_compliance` (see
+    /// `contracts/settlement-workflow`) instead, which gates this exact call behind
+    /// `Compliance::is_allowed` and is the recommended, compliance-checked entry point
+    /// for executing a settlement (per ARCHITECTURE.md's description of
+    /// SettlementWorkflow's role).
+    pub fn execute_settlement(
+        env: Env,
+        signer: Address,
+        settlement_id: u64,
+        token_contract: Address,
+    ) -> Result<(), TreasuryError> {
+        require_not_paused(&env);
+        require_authorized_signer(&env, &signer);
+        let mut settlement: Settlement = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Settlement(settlement_id))
+            .ok_or(TreasuryError::SettlementNotFound)?;
+        if settlement.status == SettlementStatus::OnHold {
+            return Err(TreasuryError::SettlementOnHold);
+        }
+        if settlement.status != SettlementStatus::Pending {
+            return Err(TreasuryError::AlreadyExecuted);
+        }
+        let threshold: u32 = env
+            .storage()
+            .instance()
+            .get(&DataKey::Threshold)
+            .ok_or(TreasuryError::ThresholdNotConfigured)?;
+        if threshold == 0 {
+            return Err(TreasuryError::ThresholdNotConfigured);
+        }
+        if !meets_threshold(settlement.approval_weight, threshold) {
+            return Err(TreasuryError::ThresholdNotMet);
+        }
+        if token_contract == env.current_contract_address() {
+            return Err(TreasuryError::InvalidTokenContract);
+        }
+        let allowlist: Vec<Address> = env
+            .storage()
+            .instance()
+            .get(&DataKey::TokenAllowlist)
+            .unwrap_or_else(|| Vec::new(&env));
+        if !allowlist.is_empty() && !allowlist.contains(&token_contract) {
+            return Err(TreasuryError::TokenNotAllowed);
+        }
+        let payout_address = env
+            .storage()
+            .instance()
+            .get::<DataKey, Address>(&DataKey::MerchantPayoutAddress(
+                settlement.merchant_address.clone(),
+            ))
+            .unwrap_or_else(|| settlement.merchant_address.clone());
+        let treasury = env.current_contract_address();
+        let token_client = token::Client::new(&env, &token_contract);
+        token_client.transfer(&treasury, &payout_address, &settlement.amount);
+        settlement.status = SettlementStatus::Executed;
+        env.storage()
+            .persistent()
+            .set(&DataKey::Settlement(settlement_id), &settlement);
+        env.events().publish(
+            (Symbol::new(&env, "settlement_executed"), settlement_id),
+            settlement,
+        );
+        Ok(())
+    }
+
+    /// Transfers `partial_amount` tokens to the merchant and marks the settlement as `PartiallyExecuted`.
+    /// Panics: `ContractPaused`, `UnauthorizedSigner`.
+    /// Errors: `SettlementNotFound`, `AlreadyExecuted`, `InvalidAmount`, `ThresholdNotConfigured`,
+    ///         `ThresholdNotMet`, `InvalidTokenContract`.
+    /// Emits: `settlement_partial_executed`.
+    pub fn partially_execute_settlement(
+        env: Env,
+        signer: Address,
+        settlement_id: u64,
+        partial_amount: i128,
+        token_contract: Address,
+    ) -> Result<(), TreasuryError> {
+        require_not_paused(&env);
+        require_authorized_signer(&env, &signer);
+        let mut settlement: Settlement = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Settlement(settlement_id))
+            .ok_or(TreasuryError::SettlementNotFound)?;
+        if settlement.status != SettlementStatus::Pending {
+            return Err(TreasuryError::AlreadyExecuted);
+        }
+        if partial_amount <= 0 || partial_amount >= settlement.amount {
+            return Err(TreasuryError::InvalidAmount);
+        }
+        let threshold: u32 = env
+            .storage()
+            .instance()
+            .get(&DataKey::Threshold)
+            .ok_or(TreasuryError::ThresholdNotConfigured)?;
+        if threshold == 0 {
+            return Err(TreasuryError::ThresholdNotConfigured);
+        }
+        if !meets_threshold(settlement.approval_weight, threshold) {
+            return Err(TreasuryError::ThresholdNotMet);
+        }
+        if token_contract == env.current_contract_address() {
+            return Err(TreasuryError::InvalidTokenContract);
+        }
+        let treasury = env.current_contract_address();
+        let token_client = token::Client::new(&env, &token_contract);
+        token_client.transfer(&treasury, &settlement.merchant_address, &partial_amount);
+        settlement.status = SettlementStatus::PartiallyExecuted;
+        env.storage()
+            .persistent()
+            .set(&DataKey::Settlement(settlement_id), &settlement);
+        env.events().publish(
+            (
+                Symbol::new(&env, "settlement_partial_executed"),
+                settlement_id,
+            ),
+            settlement,
+        );
+        Ok(())
+    }
+
+    /// Cancels a pending settlement, preventing further approvals or execution.
+    /// Panics: `ContractPaused`, `UnauthorizedSigner`.
+    /// Errors: `SettlementNotFound`, `SettlementNotCancellable`.
+    /// Emits: `settlement_cancelled`.
+    pub fn cancel_settlement(
+        env: Env,
+        signer: Address,
+        settlement_id: u64,
+    ) -> Result<(), TreasuryError> {
+        require_not_paused(&env);
+        require_authorized_signer(&env, &signer);
+        let mut settlement: Settlement = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Settlement(settlement_id))
+            .ok_or(TreasuryError::SettlementNotFound)?;
+        if settlement.status != SettlementStatus::Pending {
+            return Err(TreasuryError::SettlementNotCancellable);
+        }
+        settlement.status = SettlementStatus::Cancelled;
+        env.storage()
+            .persistent()
+            .set(&DataKey::Settlement(settlement_id), &settlement);
+        env.events().publish(
+            (Symbol::new(&env, "settlement_cancelled"), settlement_id),
+            settlement,
+        );
+        Ok(())
+    }
+
+    pub fn batch_cancel_settlements(env: Env, admin: Address, ids: Vec<u64>) {
+        require_admin(&env, &admin);
+        for id in ids.iter() {
+            let settlement_opt: Option<Settlement> =
+                env.storage().persistent().get(&DataKey::Settlement(id));
+            if let Some(mut settlement) = settlement_opt {
+                if settlement.status == SettlementStatus::Pending {
+                    settlement.status = SettlementStatus::Cancelled;
+                    env.storage()
+                        .persistent()
+                        .set(&DataKey::Settlement(id), &settlement);
+                    env.events()
+                        .publish((Symbol::new(&env, "settlement_cancelled"), id), settlement);
+                }
+                // non-pending settlements are silently skipped
+            }
+            // missing settlement IDs are silently skipped
+        }
+    }
+
+    /// **Emergency admin escape hatch (see #457).** Force-cancels a single, specifically
+    /// identified settlement that is stuck in `Pending` or `OnHold` and cannot be resolved
+    /// through the normal `cancel_settlement`/dispute-resolution paths — for example because
+    /// the signer weight required to reach either the settlement threshold or the dispute
+    /// resolution threshold has become permanently unreachable. This is deliberately narrow:
+    /// it force-cancels one settlement by ID, it does not touch signer weights, thresholds, or
+    /// any other settlement, and it is not a general-purpose bypass of the multisig process.
+    ///
+    /// This entrypoint bypasses the normal signer-quorum requirement by design, since the
+    /// quorum being unavailable is exactly the failure mode it exists to recover from. It
+    /// should only ever be invoked as a last resort once normal recovery paths are confirmed
+    /// unavailable, and every call is independently auditable via the `settlement_force_cancelled`
+    /// event (distinct from `settlement_cancelled`), which records the admin who invoked it.
+    /// If/when a timelock mechanism lands for admin actions, this entrypoint should be gated
+    /// behind it.
+    ///
+    /// Panics: `SettlementNotFound`, `ForceCancelNotAllowed` (settlement is already
+    /// `Executed`, `PartiallyExecuted`, `PartiallySettled`, `Cancelled`, or `Expired`).
+    /// Emits: `settlement_force_cancelled`.
+    pub fn force_cancel_settlement(env: Env, admin: Address, settlement_id: u64) {
+        require_admin(&env, &admin);
+        let mut settlement: Settlement = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Settlement(settlement_id))
+            .unwrap_or_else(|| {
+                soroban_sdk::panic_with_error!(env, TreasuryError::SettlementNotFound)
+            });
+        if settlement.status != SettlementStatus::Pending
+            && settlement.status != SettlementStatus::OnHold
+        {
+            soroban_sdk::panic_with_error!(env, TreasuryError::ForceCancelNotAllowed);
+        }
+        settlement.status = SettlementStatus::Cancelled;
+        env.storage()
+            .persistent()
+            .set(&DataKey::Settlement(settlement_id), &settlement);
+        env.events().publish(
+            (
+                Symbol::new(&env, "settlement_force_cancelled"),
+                settlement_id,
+            ),
+            (admin, settlement),
+        );
+    }
+
+    pub fn get_pending_settlements(env: Env) -> Vec<Settlement> {
+        let count: u64 = env
+            .storage()
+            .instance()
+            .get(&DataKey::SettlementCount)
+            .unwrap_or(0);
+        let mut pending = Vec::new(&env);
+        let mut id = 1u64;
+        while id <= count {
+            if let Some(settlement) = env
+                .storage()
+                .persistent()
+                .get::<DataKey, Settlement>(&DataKey::Settlement(id))
+            {
+                if settlement.status == SettlementStatus::Pending {
+                    pending.push_back(settlement);
+                }
+            }
+            id += 1;
+        }
+        pending
+    }
+
+    /// Returns a page of pending settlements: skips the first `start` entries and returns up to `limit`.
+    pub fn get_pending_settlements_page(env: Env, start: u64, limit: u64) -> Vec<Settlement> {
+        let count: u64 = env
+            .storage()
+            .instance()
+            .get(&DataKey::SettlementCount)
+            .unwrap_or(0);
+        let mut page = Vec::new(&env);
+        let mut skipped: u64 = 0;
+        let mut id = 1u64;
+        while id <= count {
+            if let Some(settlement) = env
+                .storage()
+                .persistent()
+                .get::<DataKey, Settlement>(&DataKey::Settlement(id))
+            {
+                if settlement.status == SettlementStatus::Pending {
+                    if skipped < start {
+                        skipped += 1;
+                    } else if (page.len() as u64) < limit {
+                        page.push_back(settlement);
+                    } else {
+                        break;
+                    }
+                }
+            }
+            id += 1;
+        }
+        page
+    }
+
+    /// Returns aggregate metrics over all pending settlements: `(count, total_value)`.
+    /// Computed in a single call so operational monitoring doesn't need to paginate
+    /// through `get_pending_settlements_page` and sum client-side just to answer
+    /// "how much is currently pending settlement". No running total is currently
+    /// maintained in storage, so this aggregates on read like `get_pending_settlements`.
+    pub fn get_pending_metrics(env: Env) -> (u64, i128) {
+        let count: u64 = env
+            .storage()
+            .instance()
+            .get(&DataKey::SettlementCount)
+            .unwrap_or(0);
+        let mut pending_count: u64 = 0;
+        let mut total_value: i128 = 0;
+        let mut id = 1u64;
+        while id <= count {
+            if let Some(settlement) = env
+                .storage()
+                .persistent()
+                .get::<DataKey, Settlement>(&DataKey::Settlement(id))
+            {
+                if settlement.status == SettlementStatus::Pending {
+                    pending_count += 1;
+                    total_value += settlement.amount;
+                }
+            }
+            id += 1;
+        }
+        (pending_count, total_value)
+    }
+
+    /// Returns the settlement with the given `settlement_id`.
+    /// Panics: `SettlementNotFound`.
+    pub fn get_settlement(env: Env, settlement_id: u64) -> Settlement {
+        env.storage()
+            .persistent()
+            .get(&DataKey::Settlement(settlement_id))
+            .unwrap_or_else(|| {
+                soroban_sdk::panic_with_error!(env, TreasuryError::SettlementNotFound)
+            })
+    }
+
+    /// Expires a pending settlement once `SETTLEMENT_TTL` has elapsed since it was proposed.
+    /// Confirmed semantics (see #34): this is genuinely time-based — the TTL check below is
+    /// mandatory regardless of caller — and admin-gated for the call itself, mirroring the
+    /// invoice contract's `batch_expire` precedent rather than being open to any caller.
+    /// Panics: `Unauthorized`.
+    /// Errors: `SettlementNotFound`, `AlreadyExecuted`, `TtlNotElapsed`.
+    /// Emits: `settlement_expired`.
+    pub fn expire_settlement(
+        env: Env,
+        admin: Address,
+        settlement_id: u64,
+    ) -> Result<(), TreasuryError> {
+        require_admin(&env, &admin);
+        let mut settlement: Settlement = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Settlement(settlement_id))
+            .ok_or(TreasuryError::SettlementNotFound)?;
+        if settlement.status != SettlementStatus::Pending {
+            return Err(TreasuryError::AlreadyExecuted);
+        }
+        if env.ledger().timestamp() <= settlement.proposed_at + SETTLEMENT_TTL {
+            return Err(TreasuryError::TtlNotElapsed);
+        }
+        settlement.status = SettlementStatus::Expired;
+        env.storage()
+            .persistent()
+            .set(&DataKey::Settlement(settlement_id), &settlement);
+        env.events().publish(
+            (Symbol::new(&env, "settlement_expired"), settlement_id),
+            settlement,
+        );
+        Ok(())
+    }
+
+    /// Sets or updates the payout address for `merchant` (merchant-only, not paused).
+    /// Emits: `merchant_payout_updated`.
+    pub fn update_merchant_payout_address(
+        env: Env,
+        merchant: Address,
+        new_payout_address: Address,
+    ) {
+        require_not_paused(&env);
+        merchant.require_auth();
+        env.storage().instance().set(
+            &DataKey::MerchantPayoutAddress(merchant.clone()),
+            &new_payout_address,
+        );
+        env.events().publish(
+            (Symbol::new(&env, "merchant_payout_updated"), merchant),
+            new_payout_address,
+        );
+    }
+
+    /// Returns the registered payout address for `merchant`, or `None` if not set.
+    pub fn get_merchant_payout_address(env: Env, merchant: Address) -> Option<Address> {
+        env.storage()
+            .instance()
+            .get(&DataKey::MerchantPayoutAddress(merchant))
+    }
+
+    /// Adds `token` to the settlement token allowlist (admin-only). No-op if already present.
+    /// Emits: `token_allowed`.
+    pub fn add_allowed_token(env: Env, admin: Address, token: Address) {
+        require_admin(&env, &admin);
+        let mut allowlist: Vec<Address> = env
+            .storage()
+            .instance()
+            .get(&DataKey::TokenAllowlist)
+            .unwrap_or_else(|| Vec::new(&env));
+        if !allowlist.contains(&token) {
+            if allowlist.len() >= MAX_ALLOWED_TOKENS {
+                soroban_sdk::panic_with_error!(env, TreasuryError::AllowlistFull);
+            }
+            allowlist.push_back(token.clone());
+            env.storage()
+                .instance()
+                .set(&DataKey::TokenAllowlist, &allowlist);
+            env.events()
+                .publish((Symbol::new(&env, "token_allowed"),), token);
+        }
+    }
+
+    /// Removes `token` from the settlement token allowlist (admin-only).
+    /// Emits: `token_removed`.
+    pub fn remove_allowed_token(env: Env, admin: Address, token: Address) {
+        require_admin(&env, &admin);
+        let allowlist: Vec<Address> = env
+            .storage()
+            .instance()
+            .get(&DataKey::TokenAllowlist)
+            .unwrap_or_else(|| Vec::new(&env));
+        let mut updated = Vec::new(&env);
+        for t in allowlist.iter() {
+            if t != token {
+                updated.push_back(t);
+            }
+        }
+        env.storage()
+            .instance()
+            .set(&DataKey::TokenAllowlist, &updated);
+        env.events()
+            .publish((Symbol::new(&env, "token_removed"),), token);
+    }
+
+    /// Returns the current list of allowed token contract addresses.
+    pub fn get_allowed_tokens(env: Env) -> Vec<Address> {
+        env.storage()
+            .instance()
+            .get(&DataKey::TokenAllowlist)
+            .unwrap_or_else(|| Vec::new(&env))
+    }
+}

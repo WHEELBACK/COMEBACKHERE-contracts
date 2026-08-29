@@ -5,7 +5,7 @@ fn setup(env: &Env, threshold: u32) -> (TreasuryContractClient<'_>, Address) {
     let admin = Address::generate(env);
     let contract_id = env.register_contract(None, TreasuryContract);
     let client = TreasuryContractClient::new(env, &contract_id);
-    client.initialize(&admin, &threshold);
+    client.initialize(&admin, &threshold, &soroban_sdk::Vec::new(env));
     (client, admin)
 }
 
@@ -15,15 +15,38 @@ fn admin_can_update_threshold() {
     env.mock_all_auths();
     let (client, admin) = setup(&env, 2);
 
-    client.update_threshold(&admin, &5);
-
     let merchant = Address::generate(&env);
     let backup = Address::generate(&env);
-    client.set_signer(&admin, &backup, &1);
+    client.set_signer(&admin, &backup, &4);
+    // admin(1) + backup(4) = total weight 5; threshold 5 is reachable
+    client.update_threshold(&admin, &5);
+
     let sid = client.propose_settlement(&admin, &merchant, &1_000_000);
     let s = client.approve_settlement(&backup, &sid);
-    // admin(1) + backup(1) = weight 2; new threshold is 5 → still pending
     assert_eq!(s.approvals.len(), 2);
+}
+
+#[test]
+#[should_panic(expected = "Error(Contract, #18)")]
+fn threshold_above_total_weight_is_rejected() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, admin) = setup(&env, 2);
+
+    // only signer is admin with weight 1; threshold 2 exceeds total weight
+    client.update_threshold(&admin, &2);
+}
+
+#[test]
+fn threshold_equal_to_total_weight_is_accepted() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, admin) = setup(&env, 2);
+
+    let backup = Address::generate(&env);
+    client.set_signer(&admin, &backup, &2);
+    // admin(1) + backup(2) = total weight 3
+    client.update_threshold(&admin, &3);
 }
 
 #[test]
@@ -48,7 +71,7 @@ fn threshold_update_takes_effect_for_future_executions() {
 }
 
 #[test]
-#[should_panic(expected = "Unauthorized")]
+#[should_panic(expected = "Error(Contract, #9)")]
 fn non_admin_cannot_update_threshold() {
     let env = Env::default();
     env.mock_all_auths();
@@ -59,7 +82,7 @@ fn non_admin_cannot_update_threshold() {
 }
 
 #[test]
-#[should_panic(expected = "Unauthorized")]
+#[should_panic(expected = "Error(Contract, #9)")]
 fn wrong_admin_address_is_rejected() {
     let env = Env::default();
     env.mock_all_auths();

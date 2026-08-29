@@ -6,7 +6,7 @@ fn setup(env: &Env, threshold: u32) -> (TreasuryContractClient<'_>, Address, Add
     let merchant = Address::generate(env);
     let contract_id = env.register_contract(None, TreasuryContract);
     let client = TreasuryContractClient::new(env, &contract_id);
-    client.initialize(&admin, &threshold);
+    client.initialize(&admin, &threshold, &soroban_sdk::Vec::new(env));
     let token_id = env.register_stellar_asset_contract(admin.clone());
     soroban_sdk::token::StellarAssetClient::new(env, &token_id).mint(&contract_id, &100_000_000);
     (client, admin, merchant, token_id)
@@ -14,7 +14,7 @@ fn setup(env: &Env, threshold: u32) -> (TreasuryContractClient<'_>, Address, Add
 
 // Zero additional approvals: proposer's weight (1) < threshold (2) → ThresholdNotMet.
 #[test]
-#[should_panic(expected = "ThresholdNotMet")]
+#[should_panic(expected = "Error(Contract, #5)")]
 fn test_zero_additional_approvals_panics() {
     let env = Env::default();
     env.mock_all_auths();
@@ -26,7 +26,7 @@ fn test_zero_additional_approvals_panics() {
 
 // Approvals below threshold: two signers each with weight 1, threshold 3 → ThresholdNotMet.
 #[test]
-#[should_panic(expected = "ThresholdNotMet")]
+#[should_panic(expected = "Error(Contract, #5)")]
 fn test_below_threshold_panics() {
     let env = Env::default();
     env.mock_all_auths();
@@ -41,7 +41,7 @@ fn test_below_threshold_panics() {
 
 // threshold - 1 approvals: propose first, then accumulate threshold-1 approvals.
 #[test]
-#[should_panic(expected = "ThresholdNotMet")]
+#[should_panic(expected = "Error(Contract, #5)")]
 fn test_threshold_minus_one_approvals_panics() {
     let env = Env::default();
     env.mock_all_auths();
@@ -94,7 +94,7 @@ fn test_threshold_one_proposer_satisfies_alone() {
 
 // Unanimous threshold: all registered signers must approve.
 #[test]
-#[should_panic(expected = "ThresholdNotMet")]
+#[should_panic(expected = "Error(Contract, #5)")]
 fn test_unanimous_threshold_partial_approvals_panics() {
     let env = Env::default();
     env.mock_all_auths();
@@ -140,7 +140,7 @@ fn test_weighted_signer_satisfies_threshold_alone() {
     let merchant = Address::generate(&env);
     let contract_id = env.register_contract(None, TreasuryContract);
     let client = TreasuryContractClient::new(&env, &contract_id);
-    client.initialize(&admin, &5);
+    client.initialize(&admin, &5, &soroban_sdk::Vec::new(&env));
     // override admin weight to 5
     client.set_signer(&admin, &admin, &5);
     let token_id = env.register_stellar_asset_contract(admin.clone());

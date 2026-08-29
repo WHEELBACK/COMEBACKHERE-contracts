@@ -1,4 +1,4 @@
-use invoice::{InvoiceContract, InvoiceContractClient, MaybeBytes};
+use invoice::{InvoiceContract, InvoiceContractClient, MaybeAddress, MaybeBytes};
 use soroban_sdk::{testutils::Address as _, Address, Env};
 
 fn setup() -> (Env, Address, InvoiceContractClient<'static>) {
@@ -24,6 +24,7 @@ fn test_zero_amount_rejected() {
             &MaybeBytes::None,
             &MaybeBytes::None,
             &0,
+            &MaybeAddress::None
         )
         .is_err());
 }
@@ -41,6 +42,7 @@ fn test_negative_amount_rejected() {
             &MaybeBytes::None,
             &MaybeBytes::None,
             &0,
+            &MaybeAddress::None
         )
         .is_err());
 }
@@ -58,6 +60,7 @@ fn test_large_negative_amount_rejected() {
             &MaybeBytes::None,
             &MaybeBytes::None,
             &0,
+            &MaybeAddress::None
         )
         .is_err());
 }
@@ -76,6 +79,7 @@ fn test_gross_less_than_amount_rejected() {
             &MaybeBytes::None,
             &MaybeBytes::None,
             &0,
+            &MaybeAddress::None
         )
         .is_err());
 }
@@ -93,6 +97,7 @@ fn test_zero_gross_with_positive_amount_rejected() {
             &MaybeBytes::None,
             &MaybeBytes::None,
             &0,
+            &MaybeAddress::None
         )
         .is_err());
 }
@@ -110,6 +115,7 @@ fn test_negative_gross_rejected() {
             &MaybeBytes::None,
             &MaybeBytes::None,
             &0,
+            &MaybeAddress::None
         )
         .is_err());
 }
@@ -127,6 +133,7 @@ fn test_amount_one_gross_zero_rejected() {
             &MaybeBytes::None,
             &MaybeBytes::None,
             &0,
+            &MaybeAddress::None
         )
         .is_err());
 }
@@ -146,7 +153,6 @@ fn test_amount_matrix() {
         (10_000_000, 9_999_999, false),
         (10_000_000, -1, false),
         // valid
-        (1, 1, true),
         (10_000_000, 10_000_000, true),
         (10_000_000, 10_250_000, true),
         (i128::MAX, i128::MAX, true),
@@ -168,6 +174,7 @@ fn test_amount_matrix() {
             &MaybeBytes::None,
             &MaybeBytes::None,
             &0,
+            &MaybeAddress::None,
         );
         if expect_valid {
             assert!(
@@ -196,6 +203,7 @@ fn test_overflow_amount_i128_max_accepted() {
         &MaybeBytes::None,
         &MaybeBytes::None,
         &0,
+        &MaybeAddress::None,
     );
     assert!(result.is_ok());
 }

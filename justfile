@@ -8,6 +8,14 @@ build:
 test:
     cargo test
 
+# Run scoped mutation testing for treasury settlement math
+mutants-treasury:
+    cargo mutants --package comebackhere-treasury --timeout 60 --test-threads 1 --in-place --no-shuffle --list-test-cases --exclude "contracts/treasury/tests/" || true
+
+# Run only cross-contract integration tests (tests/ workspace package)
+test-integration:
+    cargo test -p tests
+
 # Format all code
 fmt:
     cargo fmt --all
@@ -31,6 +39,15 @@ check: fmt lint test deny
 # Run all quality gates before pushing
 check-all: fmt lint test audit
     @echo "✓ All quality gates passed"
+
+# Literal mirror of the Pre-commit CI job's command sequence (see .github/workflows/pre-commit.yml
+# and .pre-commit-config.yaml) — run this before pushing for an authoritative local answer to
+# "will Pre-commit pass".
+precommit:
+    cargo fmt --all -- --check
+    cargo clippy -- -D warnings
+    scripts/check-enum-ordering.sh
+    @echo "✓ Pre-commit checks passed"
 
 # Deploy all three contracts to testnet.
 #

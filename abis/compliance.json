@@ -1,0 +1,70 @@
+{
+  "name": "compliance",
+  "version": "1.0.0",
+  "functions": [
+    {
+      "name": "validate_invoice",
+      "inputs": ["invoice_id"],
+      "outputs": ["validation_result"],
+      "description": "Validates an invoice against business rules"
+    },
+    {
+      "name": "check_compliance",
+      "inputs": ["invoice_id", "customer_id"],
+      "outputs": ["compliance_status"],
+      "description": "Checks if an invoice complies with regulatory requirements"
+    },
+    {
+      "name": "generate_compliance_report",
+      "inputs": ["period_start", "period_end"],
+      "outputs": ["report"],
+      "description": "Generates a compliance report for a period"
+    },
+    {
+      "name": "flag_non_compliant",
+      "inputs": ["invoice_id"],
+      "outputs": ["flagged_invoices"],
+      "description": "Flags invoices that violate compliance rules"
+    },
+    {
+      "name": "audit_log_entry",
+      "inputs": ["action", "entity_id", "timestamp"],
+      "outputs": ["audit_record"],
+      "description": "Creates an audit log entry"
+    }
+  ],
+  "events": [
+    {
+      "name": "compliance_check_passed",
+      "payload": {
+        "invoice_id": "string",
+        "rules_checked": "array[string]",
+        "passed": "boolean"
+      }
+    },
+    {
+      "name": "compliance_check_failed",
+      "payload": {
+        "invoice_id": "string",
+        "violations": "array[string]",
+        "severity": "string"
+      }
+    },
+    {
+      "name": "non_compliant_invoice_flagged",
+      "payload": {
+        "invoice_id": "string",
+        "violations": "array[string]",
+        "action": "flag"
+      }
+    },
+    {
+      "name": "audit_log_created",
+      "payload": {
+        "action": "string",
+        "entity_id": "string",
+        "timestamp": "timestamp"
+      }
+    }
+  ]
+}

@@ -1,13 +1,41 @@
 [workspace]
-members = ["contracts/invoice", "contracts/treasury", "contracts/compliance", "tests", "crates/compliance-client"]
+members = [
+    "contracts/invoice",
+    "contracts/treasury",
+    "contracts/compliance",
+    "contracts/settlement-workflow",
+    "tests",
+    "crates/compliance-client",
+    "crates/multisig",
+    "crates/invoice-errors",
+    "crates/compliance-errors",
+    "crates/protocol-errors",
+]
 resolver = "2"
 
 [workspace.package]
 edition = "2021"
 license = "MIT"
-repository = "https://github.com/dreamgeneX/COMEBACKHERE"
+repository = "https://github.com/WHEELBACK/COMEBACKHERE-contracts"
 
 [workspace.dependencies]
-soroban-sdk = { version = "20.0.0" }
+soroban-sdk = { version = "22.0.0" }
 stellar-xdr = "0.0.18"
-derive_arbitrary = "=1.3.2"
+
+[profile.release]
+opt-level = "z"
+# Deliberate, confirmed tradeoff: keep overflow checking enabled in release
+# builds even though this is a real, measured size cost (disabling it saved
+# ~768 bytes on treasury's compiled wasm alone during the treasury wasm-size
+# investigation, and even then didn't fully close the size gap on its own).
+# These are financial contracts handling real settlement amounts, where an
+# undetected integer overflow could have serious consequences, so safety is
+# prioritized over the size savings here. Do not disable this as part of a
+# future size-optimization pass without re-confirming that tradeoff.
+overflow-checks = true
+debug = 0
+strip = "symbols"
+debug-assertions = false
+panic = "abort"
+codegen-units = 1
+lto = true

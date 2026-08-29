@@ -1,0 +1,83 @@
+{
+  "name": "invoice",
+  "version": "1.0.0",
+  "functions": [
+    {
+      "name": "create_invoice",
+      "inputs": ["payer_id", "payee_id", "amount", "currency", "due_date"],
+      "outputs": ["invoice_id"],
+      "description": "Creates a new invoice"
+    },
+    {
+      "name": "get_invoice",
+      "inputs": ["invoice_id"],
+      "outputs": ["invoice"],
+      "description": "Retrieves an invoice by ID"
+    },
+    {
+      "name": "update_invoice",
+      "inputs": ["invoice_id", "updated_fields"],
+      "outputs": ["invoice"],
+      "description": "Updates an existing invoice"
+    },
+    {
+      "name": "cancel_invoice",
+      "inputs": ["invoice_id"],
+      "outputs": ["result"],
+      "description": "Cancels an invoice"
+    },
+    {
+      "name": "generate_payment_plan",
+      "inputs": ["invoice_id"],
+      "outputs": ["payment_plan"],
+      "description": "Generates a payment plan for an invoice"
+    },
+    {
+      "name": "apply_discount",
+      "inputs": ["invoice_id", "discount_amount", "discount_type"],
+      "outputs": ["invoice"],
+      "description": "Applies a discount to an invoice"
+    }
+  ],
+  "events": [
+    {
+      "name": "invoice_created",
+      "payload": {
+        "invoice_id": "string",
+        "amount": "decimal",
+        "due_date": "timestamp",
+        "payer_id": "string",
+        "payee_id": "string"
+      }
+    },
+    {
+      "name": "invoice_updated",
+      "payload": {
+        "invoice_id": "string",
+        "changes": "map[string,any]"
+      }
+    },
+    {
+      "name": "invoice_cancelled",
+      "payload": {
+        "invoice_id": "string",
+        "reason": "string"
+      }
+    },
+    {
+      "name": "payment_received",
+      "payload": {
+        "invoice_id": "string",
+        "amount": "decimal",
+        "transaction_id": "string"
+      }
+    },
+    {
+      "name": "payment_failed",
+      "payload": {
+        "invoice_id": "string",
+        "reason": "string"
+      }
+    }
+  ]
+}
