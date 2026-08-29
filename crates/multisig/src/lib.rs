@@ -150,7 +150,9 @@ pub enum DataKey {
     Paused,
     DisputeCount,
     Dispute(u64),
-    Balance(Address),
+    /// Deposit balance for (holder, token_contract), segregated per token so
+    /// concurrently-allowlisted tokens never share an accounting bucket (#448).
+    Balance(Address, Address),
     TokenAllowlist,
     RotationCount,
     SignerRotation(u64),

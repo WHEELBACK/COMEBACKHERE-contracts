@@ -29,7 +29,7 @@ The Treasury contract manages funds and settlements using a multi-signature appr
 | `withdraw` | `to` | `to: Address, token_contract: Address, amount: i128` | `()` | `ContractPaused`, `Unauthorized`, `InvalidAmount`, `InsufficientBalance` |
 | `add_allowed_token` | `admin` | `admin: Address, token: Address` | `()` | `Unauthorized` |
 | `remove_allowed_token` | `admin` | `admin: Address, token: Address` | `()` | `Unauthorized` |
-| `get_balance` | None | `address: Address` | `i128` | None |
+| `get_balance` | None | `address: Address, token_contract: Address` | `i128` | None |
 | `get_allowed_tokens` | None | None | `Vec<Address>` | None |
 | `propose_signer_rotation` | `proposer` | `proposer: Address, old_signer: Address, new_signer: Address` | `u64` | `UnauthorizedSigner` |
 | `approve_signer_rotation` | `approver` | `approver: Address, rotation_id: u64` | `SignerRotationProposal` | `UnauthorizedSigner`, `RotationNotFound`, `RotationAlreadyExecuted` |
@@ -93,6 +93,19 @@ stellar contract invoke \
   --settlement_id 0 \
   --token_contract $TOKEN
 ```
+
+---
+
+## Multi-token deposit accounting (#448)
+
+Deposit balances are stored under `DataKey::Balance(holder, token_contract)` in
+`crates/multisig/src/lib.rs` — every entry is keyed by *both* the depositor/withdrawer address
+and the token contract, so balances for concurrently-allowlisted tokens are segregated and never
+mix. `deposit`, `batch_deposit`, `withdraw`, and `get_balance` all read/write this per-(holder,
+token) bucket. Note `execute_settlement`/`partially_execute_settlement` don't consult
+`DataKey::Balance` at all — they pay merchants directly out of the treasury's on-chain token
+balance via `token::Client::transfer`, so the deposit ledger and the settlement flow are
+independent accounting paths by design.
 
 ---
 

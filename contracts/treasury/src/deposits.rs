@@ -61,7 +61,7 @@ impl TreasuryContract {
         let mut balance: i128 = env
             .storage()
             .persistent()
-            .get(&DataKey::Balance(to.clone()))
+            .get(&DataKey::Balance(to.clone(), token_contract.clone()))
             .unwrap_or(0);
         if balance < amount {
             return Err(TreasuryError::InsufficientBalance);
@@ -71,7 +71,7 @@ impl TreasuryContract {
             .ok_or(TreasuryError::ArithmeticOverflow)?;
         env.storage()
             .persistent()
-            .set(&DataKey::Balance(to.clone()), &balance);
+            .set(&DataKey::Balance(to.clone(), token_contract.clone()), &balance);
         let treasury = env.current_contract_address();
         let token_client = token::Client::new(&env, &token_contract);
         token_client.transfer(&treasury, &to, &amount);
@@ -80,12 +80,14 @@ impl TreasuryContract {
         Ok(())
     }
 
-    /// Returns the recorded deposit balance for `address`, or 0 if never deposited.
+    /// Returns the recorded deposit balance for `address` under `token_contract`, or 0 if never
+    /// deposited. Balances are segregated per token contract (#448); this never mixes holdings
+    /// across different allowlisted tokens.
     /// Read-only, no authentication required.
-    pub fn get_balance(env: Env, address: Address) -> i128 {
+    pub fn get_balance(env: Env, address: Address, token_contract: Address) -> i128 {
         env.storage()
             .persistent()
-            .get(&DataKey::Balance(address))
+            .get(&DataKey::Balance(address, token_contract))
             .unwrap_or(0)
     }
 
@@ -130,7 +132,7 @@ fn deposit_one(env: &Env, from: &Address, token_contract: &Address, amount: i128
     let mut balance: i128 = env
         .storage()
         .persistent()
-        .get(&DataKey::Balance(from.clone()))
+        .get(&DataKey::Balance(from.clone(), token_contract.clone()))
         .unwrap_or(0);
     balance = balance
         .checked_add(amount)
