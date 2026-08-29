@@ -1,7 +1,7 @@
 #![no_std]
 
-pub use compliance::ComplianceError;
-pub use invoice::InvoiceError;
+pub use compliance_errors::ComplianceError;
+pub use invoice_errors::InvoiceError;
 pub use treasury::TreasuryError;
 
 /// Unified error type spanning all three COMEBACKHERE contracts.
