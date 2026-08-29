@@ -8,6 +8,13 @@ pub use treasury::TreasuryError;
 ///
 /// Integration clients and cross-contract tests can import this single type
 /// and handle errors from any contract with one `match` arm.
+///
+/// This crate must never be a dependency of a contract crate itself (only of
+/// off-chain clients and cross-contract test fixtures) - see the
+/// settlement-workflow link failure this repo hit from exactly that mistake.
+/// `protocol-errors` exists to sit outside the on-chain dependency graph, not
+/// inside it, and that stays true even once this crate depends on nothing but
+/// the three error enums themselves.
 #[derive(Copy, Clone, Debug, PartialEq)]
 pub enum ProtocolError {
     Invoice(InvoiceError),

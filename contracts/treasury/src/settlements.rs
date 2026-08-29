@@ -16,27 +16,28 @@ const MAX_BATCH_SIZE: u32 = 50;
 impl TreasuryContract {
     /// Proposes a new settlement of `amount` tokens payable to `merchant_address`.
     /// Preconditions: contract not paused; `signer` must be an authorised signer with non-zero weight.
-    /// Panics: `ContractPaused`, `UnauthorizedSigner`, `InvalidAmount`.
+    /// Panics: `ContractPaused`, `UnauthorizedSigner`.
+    /// Errors: `InvalidAmount`, `ArithmeticOverflow`.
     /// Emits: `settlement_proposed`.
     pub fn propose_settlement(
         env: Env,
         signer: Address,
         merchant_address: Address,
         amount: i128,
-    ) -> u64 {
+    ) -> Result<u64, TreasuryError> {
         require_not_paused(&env);
         require_authorized_signer(&env, &signer);
         if amount <= 0 {
-            soroban_sdk::panic_with_error!(env, TreasuryError::InvalidAmount);
+            return Err(TreasuryError::InvalidAmount);
         }
         let count: u64 = env
             .storage()
             .instance()
             .get(&DataKey::SettlementCount)
             .unwrap_or(0);
-        let id = count.checked_add(1).unwrap_or_else(|| {
-            soroban_sdk::panic_with_error!(env, TreasuryError::ArithmeticOverflow)
-        });
+        let id = count
+            .checked_add(1)
+            .ok_or(TreasuryError::ArithmeticOverflow)?;
         let mut approvals = Vec::new(&env);
         let mut weight = 0u32;
         record_approval(&env, &mut approvals, &mut weight, &signer);
@@ -56,7 +57,7 @@ impl TreasuryContract {
         env.storage().instance().set(&DataKey::SettlementCount, &id);
         env.events()
             .publish((Symbol::new(&env, "settlement_proposed"), id), settlement);
-        id
+        Ok(id)
     }
 
     /// Alias of `propose_settlement` for partial-settlement workflows.
@@ -65,25 +66,28 @@ impl TreasuryContract {
         signer: Address,
         merchant_address: Address,
         amount: i128,
-    ) -> u64 {
+    ) -> Result<u64, TreasuryError> {
         Self::propose_settlement(env, signer, merchant_address, amount)
     }
 
     /// Adds `signer`'s weight to the approval set of a pending settlement.
-    /// Panics: `ContractPaused`, `UnauthorizedSigner`, `SettlementNotFound`, `AlreadyExecuted`.
+    /// Panics: `ContractPaused`, `UnauthorizedSigner`.
+    /// Errors: `SettlementNotFound`, `AlreadyExecuted`.
     /// Emits: `settlement_approved`.
-    pub fn approve_settlement(env: Env, signer: Address, settlement_id: u64) -> Settlement {
+    pub fn approve_settlement(
+        env: Env,
+        signer: Address,
+        settlement_id: u64,
+    ) -> Result<Settlement, TreasuryError> {
         require_not_paused(&env);
         require_authorized_signer(&env, &signer);
         let mut settlement: Settlement = env
             .storage()
             .persistent()
             .get(&DataKey::Settlement(settlement_id))
-            .unwrap_or_else(|| {
-                soroban_sdk::panic_with_error!(env, TreasuryError::SettlementNotFound)
-            });
+            .ok_or(TreasuryError::SettlementNotFound)?;
         if settlement.status != SettlementStatus::Pending {
-            soroban_sdk::panic_with_error!(env, TreasuryError::AlreadyExecuted);
+            return Err(TreasuryError::AlreadyExecuted);
         }
         record_approval(
             &env,
@@ -98,19 +102,24 @@ impl TreasuryContract {
             (Symbol::new(&env, "settlement_approved"), settlement_id),
             settlement.clone(),
         );
-        settlement
+        Ok(settlement)
     }
 
     /// Approves multiple pending settlements in one call, reducing transaction overhead for
     /// high-volume signers. IDs that don't exist or aren't `Pending` are skipped rather than
     /// aborting the whole batch; a single bad ID never rolls back the others' approvals.
-    /// Panics: `ContractPaused`, `UnauthorizedSigner`, `BatchTooLarge`, `WeightOverflow`.
+    /// Panics: `ContractPaused`, `UnauthorizedSigner`.
+    /// Errors: `BatchTooLarge`, `WeightOverflow`.
     /// Emits: `settlement_approved` for each settlement actually approved.
-    pub fn batch_approve_settlements(env: Env, signer: Address, ids: Vec<u64>) -> Vec<Settlement> {
+    pub fn batch_approve_settlements(
+        env: Env,
+        signer: Address,
+        ids: Vec<u64>,
+    ) -> Result<Vec<Settlement>, TreasuryError> {
         require_not_paused(&env);
         require_authorized_signer(&env, &signer);
         if ids.len() > MAX_BATCH_SIZE {
-            soroban_sdk::panic_with_error!(env, TreasuryError::BatchTooLarge);
+            return Err(TreasuryError::BatchTooLarge);
         }
         let weight = signer_weight(&env, &signer);
         let mut approved = Vec::new(&env);
@@ -123,9 +132,7 @@ impl TreasuryContract {
                         settlement.approval_weight = settlement
                             .approval_weight
                             .checked_add(weight)
-                            .unwrap_or_else(|| {
-                                soroban_sdk::panic_with_error!(env, TreasuryError::WeightOverflow)
-                            });
+                            .ok_or(TreasuryError::WeightOverflow)?;
                         settlement.approvals.push_back(signer.clone());
                     }
                     env.storage()
@@ -141,32 +148,31 @@ impl TreasuryContract {
             }
             // missing settlement IDs are silently skipped
         }
-        approved
+        Ok(approved)
     }
 
     /// Approves a pending settlement with a `partial_amount` cap; accumulates `signer`'s weight.
-    /// Panics: `ContractPaused`, `UnauthorizedSigner`, `SettlementNotFound`, `AlreadyExecuted`, `InvalidAmount`.
+    /// Panics: `ContractPaused`, `UnauthorizedSigner`.
+    /// Errors: `SettlementNotFound`, `AlreadyExecuted`, `InvalidAmount`.
     /// Emits: `settlement_partial_approved`.
     pub fn approve_partial_settlement(
         env: Env,
         signer: Address,
         settlement_id: u64,
         partial_amount: i128,
-    ) -> Settlement {
+    ) -> Result<Settlement, TreasuryError> {
         require_not_paused(&env);
         require_authorized_signer(&env, &signer);
         let mut settlement: Settlement = env
             .storage()
             .persistent()
             .get(&DataKey::Settlement(settlement_id))
-            .unwrap_or_else(|| {
-                soroban_sdk::panic_with_error!(env, TreasuryError::SettlementNotFound)
-            });
+            .ok_or(TreasuryError::SettlementNotFound)?;
         if settlement.status != SettlementStatus::Pending {
-            soroban_sdk::panic_with_error!(env, TreasuryError::AlreadyExecuted);
+            return Err(TreasuryError::AlreadyExecuted);
         }
         if partial_amount <= 0 || partial_amount >= settlement.amount {
-            soroban_sdk::panic_with_error!(env, TreasuryError::InvalidAmount);
+            return Err(TreasuryError::InvalidAmount);
         }
         let approved_total: i128 = env
             .storage()
@@ -174,7 +180,7 @@ impl TreasuryContract {
             .get(&DataKey::PartialApprovedTotal(settlement_id))
             .unwrap_or(0);
         if approved_total + partial_amount > settlement.amount {
-            soroban_sdk::panic_with_error!(env, TreasuryError::InvalidAmount);
+            return Err(TreasuryError::InvalidAmount);
         }
         env.storage().persistent().set(
             &DataKey::PartialApprovedTotal(settlement_id),
@@ -196,14 +202,14 @@ impl TreasuryContract {
             ),
             settlement.clone(),
         );
-        settlement
+        Ok(settlement)
     }
 
     /// Transfers the settlement amount to the merchant via `token_contract`.
     /// Preconditions: not paused; approval weight meets threshold; token is on allowlist (if non-empty).
-    /// Panics: `ContractPaused`, `UnauthorizedSigner`, `SettlementNotFound`, `SettlementOnHold`,
-    ///         `AlreadyExecuted`, `ThresholdNotConfigured`, `ThresholdNotMet`,
-    ///         `InvalidTokenContract`, `TokenNotAllowed`.
+    /// Panics: `ContractPaused`, `UnauthorizedSigner`.
+    /// Errors: `SettlementNotFound`, `SettlementOnHold`, `AlreadyExecuted`, `ThresholdNotConfigured`,
+    ///         `ThresholdNotMet`, `InvalidTokenContract`, `TokenNotAllowed`.
     /// Emits: `settlement_executed`.
     /// Note: this function performs **no** compliance check — Treasury does not
     /// consult Compliance. Callers wanting a compliance-gated execution path should
@@ -217,37 +223,33 @@ impl TreasuryContract {
         signer: Address,
         settlement_id: u64,
         token_contract: Address,
-    ) {
+    ) -> Result<(), TreasuryError> {
         require_not_paused(&env);
         require_authorized_signer(&env, &signer);
         let mut settlement: Settlement = env
             .storage()
             .persistent()
             .get(&DataKey::Settlement(settlement_id))
-            .unwrap_or_else(|| {
-                soroban_sdk::panic_with_error!(env, TreasuryError::SettlementNotFound)
-            });
+            .ok_or(TreasuryError::SettlementNotFound)?;
         if settlement.status == SettlementStatus::OnHold {
-            soroban_sdk::panic_with_error!(env, TreasuryError::SettlementOnHold);
+            return Err(TreasuryError::SettlementOnHold);
         }
         if settlement.status != SettlementStatus::Pending {
-            soroban_sdk::panic_with_error!(env, TreasuryError::AlreadyExecuted);
+            return Err(TreasuryError::AlreadyExecuted);
         }
         let threshold: u32 = env
             .storage()
             .instance()
             .get(&DataKey::Threshold)
-            .unwrap_or_else(|| {
-                soroban_sdk::panic_with_error!(env, TreasuryError::ThresholdNotConfigured)
-            });
+            .ok_or(TreasuryError::ThresholdNotConfigured)?;
         if threshold == 0 {
-            soroban_sdk::panic_with_error!(env, TreasuryError::ThresholdNotConfigured);
+            return Err(TreasuryError::ThresholdNotConfigured);
         }
         if !meets_threshold(settlement.approval_weight, threshold) {
-            soroban_sdk::panic_with_error!(env, TreasuryError::ThresholdNotMet);
+            return Err(TreasuryError::ThresholdNotMet);
         }
         if token_contract == env.current_contract_address() {
-            soroban_sdk::panic_with_error!(env, TreasuryError::InvalidTokenContract);
+            return Err(TreasuryError::InvalidTokenContract);
         }
         let allowlist: Vec<Address> = env
             .storage()
@@ -255,7 +257,7 @@ impl TreasuryContract {
             .get(&DataKey::TokenAllowlist)
             .unwrap_or_else(|| Vec::new(&env));
         if !allowlist.is_empty() && !allowlist.contains(&token_contract) {
-            soroban_sdk::panic_with_error!(env, TreasuryError::TokenNotAllowed);
+            return Err(TreasuryError::TokenNotAllowed);
         }
         let payout_address = env
             .storage()
@@ -275,11 +277,13 @@ impl TreasuryContract {
             (Symbol::new(&env, "settlement_executed"), settlement_id),
             settlement,
         );
+        Ok(())
     }
 
     /// Transfers `partial_amount` tokens to the merchant and marks the settlement as `PartiallyExecuted`.
-    /// Panics: `ContractPaused`, `UnauthorizedSigner`, `SettlementNotFound`, `AlreadyExecuted`,
-    ///         `InvalidAmount`, `ThresholdNotConfigured`, `ThresholdNotMet`.
+    /// Panics: `ContractPaused`, `UnauthorizedSigner`.
+    /// Errors: `SettlementNotFound`, `AlreadyExecuted`, `InvalidAmount`, `ThresholdNotConfigured`,
+    ///         `ThresholdNotMet`, `InvalidTokenContract`.
     /// Emits: `settlement_partial_executed`.
     pub fn partially_execute_settlement(
         env: Env,
@@ -287,37 +291,33 @@ impl TreasuryContract {
         settlement_id: u64,
         partial_amount: i128,
         token_contract: Address,
-    ) {
+    ) -> Result<(), TreasuryError> {
         require_not_paused(&env);
         require_authorized_signer(&env, &signer);
         let mut settlement: Settlement = env
             .storage()
             .persistent()
             .get(&DataKey::Settlement(settlement_id))
-            .unwrap_or_else(|| {
-                soroban_sdk::panic_with_error!(env, TreasuryError::SettlementNotFound)
-            });
+            .ok_or(TreasuryError::SettlementNotFound)?;
         if settlement.status != SettlementStatus::Pending {
-            soroban_sdk::panic_with_error!(env, TreasuryError::AlreadyExecuted);
+            return Err(TreasuryError::AlreadyExecuted);
         }
         if partial_amount <= 0 || partial_amount >= settlement.amount {
-            soroban_sdk::panic_with_error!(env, TreasuryError::InvalidAmount);
+            return Err(TreasuryError::InvalidAmount);
         }
         let threshold: u32 = env
             .storage()
             .instance()
             .get(&DataKey::Threshold)
-            .unwrap_or_else(|| {
-                soroban_sdk::panic_with_error!(env, TreasuryError::ThresholdNotConfigured)
-            });
+            .ok_or(TreasuryError::ThresholdNotConfigured)?;
         if threshold == 0 {
-            soroban_sdk::panic_with_error!(env, TreasuryError::ThresholdNotConfigured);
+            return Err(TreasuryError::ThresholdNotConfigured);
         }
         if !meets_threshold(settlement.approval_weight, threshold) {
-            soroban_sdk::panic_with_error!(env, TreasuryError::ThresholdNotMet);
+            return Err(TreasuryError::ThresholdNotMet);
         }
         if token_contract == env.current_contract_address() {
-            soroban_sdk::panic_with_error!(env, TreasuryError::InvalidTokenContract);
+            return Err(TreasuryError::InvalidTokenContract);
         }
         let treasury = env.current_contract_address();
         let token_client = token::Client::new(&env, &token_contract);
@@ -333,23 +333,27 @@ impl TreasuryContract {
             ),
             settlement,
         );
+        Ok(())
     }
 
     /// Cancels a pending settlement, preventing further approvals or execution.
-    /// Panics: `ContractPaused`, `UnauthorizedSigner`, `SettlementNotFound`, `SettlementNotCancellable`.
+    /// Panics: `ContractPaused`, `UnauthorizedSigner`.
+    /// Errors: `SettlementNotFound`, `SettlementNotCancellable`.
     /// Emits: `settlement_cancelled`.
-    pub fn cancel_settlement(env: Env, signer: Address, settlement_id: u64) {
+    pub fn cancel_settlement(
+        env: Env,
+        signer: Address,
+        settlement_id: u64,
+    ) -> Result<(), TreasuryError> {
         require_not_paused(&env);
         require_authorized_signer(&env, &signer);
         let mut settlement: Settlement = env
             .storage()
             .persistent()
             .get(&DataKey::Settlement(settlement_id))
-            .unwrap_or_else(|| {
-                soroban_sdk::panic_with_error!(env, TreasuryError::SettlementNotFound)
-            });
+            .ok_or(TreasuryError::SettlementNotFound)?;
         if settlement.status != SettlementStatus::Pending {
-            soroban_sdk::panic_with_error!(env, TreasuryError::SettlementNotCancellable);
+            return Err(TreasuryError::SettlementNotCancellable);
         }
         settlement.status = SettlementStatus::Cancelled;
         env.storage()
@@ -359,6 +363,7 @@ impl TreasuryContract {
             (Symbol::new(&env, "settlement_cancelled"), settlement_id),
             settlement,
         );
+        Ok(())
     }
 
     pub fn batch_cancel_settlements(env: Env, admin: Address, ids: Vec<u64>) {
@@ -450,22 +455,25 @@ impl TreasuryContract {
     /// Confirmed semantics (see #34): this is genuinely time-based — the TTL check below is
     /// mandatory regardless of caller — and admin-gated for the call itself, mirroring the
     /// invoice contract's `batch_expire` precedent rather than being open to any caller.
-    /// Panics: `SettlementNotFound`, `AlreadyExecuted`, `TtlNotElapsed`.
+    /// Panics: `Unauthorized`.
+    /// Errors: `SettlementNotFound`, `AlreadyExecuted`, `TtlNotElapsed`.
     /// Emits: `settlement_expired`.
-    pub fn expire_settlement(env: Env, admin: Address, settlement_id: u64) {
+    pub fn expire_settlement(
+        env: Env,
+        admin: Address,
+        settlement_id: u64,
+    ) -> Result<(), TreasuryError> {
         require_admin(&env, &admin);
         let mut settlement: Settlement = env
             .storage()
             .persistent()
             .get(&DataKey::Settlement(settlement_id))
-            .unwrap_or_else(|| {
-                soroban_sdk::panic_with_error!(env, TreasuryError::SettlementNotFound)
-            });
+            .ok_or(TreasuryError::SettlementNotFound)?;
         if settlement.status != SettlementStatus::Pending {
-            soroban_sdk::panic_with_error!(env, TreasuryError::AlreadyExecuted);
+            return Err(TreasuryError::AlreadyExecuted);
         }
         if env.ledger().timestamp() <= settlement.proposed_at + SETTLEMENT_TTL {
-            soroban_sdk::panic_with_error!(env, TreasuryError::TtlNotElapsed);
+            return Err(TreasuryError::TtlNotElapsed);
         }
         settlement.status = SettlementStatus::Expired;
         env.storage()
@@ -475,6 +483,7 @@ impl TreasuryContract {
             (Symbol::new(&env, "settlement_expired"), settlement_id),
             settlement,
         );
+        Ok(())
     }
 
     /// Sets or updates the payout address for `merchant` (merchant-only, not paused).
