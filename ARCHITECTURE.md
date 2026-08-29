@@ -54,10 +54,14 @@ sequenceDiagram
     Note over Treasury: approval_weight >= threshold
 
     SettlementWorkflow->>Compliance: is_allowed(merchant)
-    Compliance-->>SettlementWorkflow: true
-    SettlementWorkflow->>Treasury: execute_settlement(signer, id, token)
-    Treasury->>Token: transfer(treasury → merchant, amount)
-    Note over Treasury: Settlement{status=Executed}
+    Compliance-->>SettlementWorkflow: true / false
+    alt is_allowed(merchant) == true
+        SettlementWorkflow->>Treasury: execute_settlement(signer, id, token)
+        Treasury->>Token: transfer(treasury → merchant, amount)
+        Note over Treasury: Settlement{status=Executed}
+    else is_allowed(merchant) == false
+        Note over SettlementWorkflow: returns Err(TreasuryError::ComplianceCheckFailed), Treasury untouched
+    end
 
     Invoice-->>Invoice: release_escrow(admin, id)
     Note over Invoice: status = Released
@@ -196,8 +200,8 @@ SettlementProposalWorkflow
   └── Treasury::propose_settlement(...)     → creates Settlement record
 
 SettlementWorkflow
-  ├── Compliance::is_allowed(merchant)      → compliance gate (must be true)
-  └── Treasury::execute_settlement(...)     → transfers tokens to merchant
+  ├── Compliance::is_allowed(merchant)      → compliance gate; if false, returns Err(ComplianceCheckFailed)
+  └── Treasury::execute_settlement(...)     → called ONLY if the gate passes; transfers tokens to merchant
 
 Treasury::execute_settlement
   └── Token::transfer(treasury → merchant)  → SEP-41 token transfer
@@ -276,28 +280,89 @@ Soroban has no automatic storage migration. Once a `#[contracttype]` struct is d
 
 ---
 
-## Known Limitations
+## Weighted Quorum Model — `crates/multisig`
 
-This is a living list of confirmed, intentionally-deferred gaps — things the
-team already knows about and has chosen not to fix immediately, as opposed to
-undiscovered bugs. It's expected to grow as other in-flight issues land their
-findings; each entry links to the issue tracking it.
+### What it is
 
-- **Treasury's panicking entrypoints are only partially converted to
-  `Result<T, TreasuryError>`.** The conversion is being done incrementally
-  (deposits/signers, disputes/holds, and the remaining panicking entrypoints
-  are separate PRs) because doing it in one PR risks pushing `treasury.wasm`
-  over the CI size budget. See #385, #386, #387, #388.
-- **`SettlementWorkflow`'s precondition that the caller be a registered
-  Treasury signer currently surfaces as a generic `Unauthorized` error**
-  rather than a specific one identifying the missing signer registration.
-  Fixing this requires a documentation/error-message change, tracked
-  separately. See #370.
-- **Storage TTL / rent-bump policy has not yet been audited** across the four
-  contracts. See #402.
-- **The economic soundness of Treasury's threshold-vs-signer-count
-  relationship (quorum unreachability under signer loss/rotation) has not yet
-  had a game-theory review.** See #411.
+The `meets_threshold` helper in `crates/multisig` evaluates quorum by comparing
+accumulated *weight* — a `u32` value — against a configured threshold, not by
+counting how many signers have approved. The decisive expression is:
 
-#117's planned external audit is expected to benefit from this list being
-collected here rather than reconstructed from individual issues.
+```rust
+weight >= threshold
+```
+
+Weight is accumulated across approval calls: each time `record_approval` is invoked
+for a previously-unseen signer, that signer's registered weight is added to the
+running total.
+
+### Why weight-based, not count-based
+
+The weight model is a deliberate design choice. Operators can assign higher weight
+to signers they trust more or that offer stronger security guarantees — for example,
+an HSM-backed key or a cold-storage multisig controlled by a security team. This
+lets a deployment express **trust asymmetry** that a plain N-of-M count scheme
+cannot represent.
+
+A consequence of this model is that a single signer assigned a weight equal to or
+greater than the threshold can satisfy quorum alone. This is a feature, not a bug —
+it enables patterns like an emergency break-glass admin key — but operators must
+understand the implication: that signer effectively acts unilaterally.
+
+### Economic and security assumptions
+
+A healthy deployment distributes weights such that **no single signer's weight
+meets or exceeds the threshold on its own**, unless that is an explicit operational
+policy (e.g. an emergency admin key that is kept offline and heavily audited).
+
+The threshold should be calibrated so that the minimum number of signers required
+to collude and satisfy quorum matches the deployment's trust model. A higher
+threshold forces more weight to accumulate, reducing the risk that a single
+compromised key can execute a settlement.
+
+### Threshold-setting guidance
+
+Set the threshold to the **sum of weights** that represents acceptable quorum —
+not to a signer count. For example:
+
+| Signer | Weight |
+|---|---|
+| Signer A | 3 |
+| Signer B | 2 |
+| Signer C | 1 |
+
+With `threshold = 4`, the following combinations satisfy quorum:
+- Signer A (weight 3) + any one of B or C
+- Signer B (weight 2) + Signer C (weight 1) — their combined weight is 3, which
+  does **not** reach 4; they must both approve but that is still insufficient
+  without Signer A — adjust weights to match your intent.
+
+Revise weights and threshold together whenever signers are rotated or the trust
+model changes. The `set_threshold` and `set_signer` entrypoints require admin
+authentication precisely to ensure these changes are deliberate and auditable.
+
+### Overflow protection
+
+`record_approval` accumulates weight using `checked_add`. If the accumulated total
+would exceed `u32::MAX` (4 294 967 295), the call panics with
+`TreasuryError::WeightOverflow` rather than silently wrapping around to a small
+number. In practice no deployment should approach this ceiling; the check exists
+as a correctness guarantee, not a routine guard.
+
+### Audit note
+
+The external security audit planned under issue #117 should evaluate whether the
+weight distribution in the actual deployment matches the stated trust model. In
+particular, auditors should verify that no single signer's weight meets or exceeds
+the threshold unless an emergency break-glass policy is explicitly documented and
+justified.
+
+### Storage
+
+Signer weights are stored under `DataKey::Signer(Address)` in instance storage
+(see the Treasury DataKey table above). `signer_weight` returns `0` for any address
+that has not been registered via `set_signer` — it never panics on an unknown
+address. The `.unwrap_or(0)` in `signer_weight`'s implementation is the contract:
+unregistered addresses are silently treated as having zero weight and will be
+rejected by `require_authorized_signer` before they can influence any approval
+accumulation.
