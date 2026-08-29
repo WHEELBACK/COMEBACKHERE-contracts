@@ -2,7 +2,7 @@
 set -e
 
 # COMEBACKHERE Contract Initialization Script
-# Deploys and initializes Compliance, Invoice, and Treasury contracts on a local Soroban network.
+# Deploys and initializes Compliance, Invoice, Treasury, and Settlement Workflow contracts on a local Soroban network.
 
 # Structured log-line convention shared across scripts/*.sh: every line is
 # `[UTC timestamp] [LEVEL] message`, so output stays greppable/pipeable for
@@ -16,7 +16,7 @@ log_info() { log "INFO" "$@"; }
 log_error() { log "ERROR" "$@" >&2; }
 
 NETWORK="local"
-RPC_URL="http://localhost:8000"
+RPC_URL="http://localhost:8000/soroban/rpc"
 NETWORK_PASSPHRASE="Standalone Network ; February 2017"
 
 log_info "Using network: $NETWORK ($RPC_URL)"
@@ -30,7 +30,8 @@ log_info "Building contracts..."
 cargo build --target wasm32-unknown-unknown --release \
     -p comebackhere-compliance \
     -p comebackhere-invoice \
-    -p comebackhere-treasury
+    -p comebackhere-treasury \
+    -p comebackhere-settlement-workflow
 
 # 2. Setup network
 log_info "Ensuring network '$NETWORK' is configured..."
@@ -87,11 +88,28 @@ stellar contract invoke \
     --network "$NETWORK" \
     -- initialize --admin "$ADMIN_ADDRESS" --threshold 1
 
-log_info "============================================================"
-log_info "Deployment Successful!"
-log_info "============================================================"
-log_info "Compliance ID: $COMPLIANCE_ID"
-log_info "Invoice ID:    $INVOICE_ID"
-log_info "Treasury ID:   $TREASURY_ID"
-log_info "Admin Address: $ADMIN_ADDRESS"
-log_info "============================================================"
+# 7. Deploy and Initialize Settlement Workflow
+echo "Deploying Settlement Workflow contract..."
+SETTLEMENT_WORKFLOW_ID=$(stellar contract deploy \
+    --wasm target/wasm32-unknown-unknown/release/settlement_workflow.wasm \
+    --source admin \
+    --network "$NETWORK")
+echo "Settlement Workflow ID: $SETTLEMENT_WORKFLOW_ID"
+
+echo "Initializing Settlement Workflow contract..."
+stellar contract invoke \
+    --id "$SETTLEMENT_WORKFLOW_ID" \
+    --source admin \
+    --network "$NETWORK" \
+    -- initialize --compliance_id "$COMPLIANCE_ID" --treasury_id "$TREASURY_ID"
+
+echo ""
+echo "============================================================"
+echo "Deployment Successful!"
+echo "============================================================"
+echo "Compliance ID:          $COMPLIANCE_ID"
+echo "Invoice ID:             $INVOICE_ID"
+echo "Treasury ID:            $TREASURY_ID"
+echo "Settlement Workflow ID: $SETTLEMENT_WORKFLOW_ID"
+echo "Admin Address:          $ADMIN_ADDRESS"
+echo "============================================================"

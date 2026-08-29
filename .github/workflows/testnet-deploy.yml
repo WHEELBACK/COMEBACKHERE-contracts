@@ -1,0 +1,160 @@
+name: Testnet Deploy
+
+on:
+  workflow_dispatch:
+    inputs:
+      confirm:
+        description: "Type target branch name to confirm deployment (e.g. main)"
+        required: true
+        type: string
+
+env:
+  CARGO_TERM_COLOR: always
+  STELLAR_CLI_VERSION: "22.8.2"
+
+jobs:
+  deploy-testnet:
+    name: Deploy Contracts to Stellar Testnet
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Validate confirmation input
+        run: |
+          CONFIRM_INPUT="${{ inputs.confirm }}"
+          EXPECTED_BRANCH="${{ github.ref_name }}"
+          if [ "$CONFIRM_INPUT" != "$EXPECTED_BRANCH" ]; then
+            echo "::error::Confirmation input '$CONFIRM_INPUT' does not match target branch '$EXPECTED_BRANCH'. Deployment aborted."
+            exit 1
+          fi
+          echo "Confirmation validated: deployment authorized on branch '$EXPECTED_BRANCH'."
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.95.0"
+          targets: wasm32-unknown-unknown
+
+      - name: Install stellar-cli build dependencies
+        run: sudo apt-get update && sudo apt-get install -y libdbus-1-dev libudev-dev pkg-config
+
+      - name: Install Stellar CLI (pinned)
+        run: cargo install --locked stellar-cli --version "$STELLAR_CLI_VERSION"
+
+      - name: Cache Cargo dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry/
+            ~/.cargo/git/
+            target/
+          key: ${{ runner.os }}-cargo-testnet-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-testnet-
+
+      - name: Configure Stellar Testnet Network
+        run: |
+          stellar network add --rpc-url "https://soroban-testnet.stellar.org" --network-passphrase "Test SDF Network ; September 2015" testnet 2>/dev/null || true
+
+      - name: Setup Deployer Identity
+        run: |
+          stellar keys generate deployer --network testnet 2>/dev/null || true
+          stellar keys fund deployer --network testnet 2>/dev/null || true
+          DEPLOYER_ADDR=$(stellar keys address deployer)
+          echo "DEPLOYER_ADDRESS=$DEPLOYER_ADDR" >> $GITHUB_ENV
+          echo "Deployer Address: $DEPLOYER_ADDR"
+
+      - name: Build contract WASM binaries
+        run: |
+          cargo build --target wasm32-unknown-unknown --release \
+            -p comebackhere-compliance \
+            -p comebackhere-invoice \
+            -p comebackhere-treasury \
+            -p comebackhere-settlement-workflow
+
+      - name: Deploy and Initialize Contracts on Testnet
+        run: |
+          set -e
+          NETWORK="testnet"
+          SOURCE="deployer"
+
+          echo "Deploying Compliance contract..."
+          COMPLIANCE_ID=$(stellar contract deploy \
+            --wasm target/wasm32-unknown-unknown/release/compliance.wasm \
+            --source "$SOURCE" \
+            --network "$NETWORK")
+          echo "Compliance ID: $COMPLIANCE_ID"
+
+          echo "Initializing Compliance contract..."
+          stellar contract invoke \
+            --id "$COMPLIANCE_ID" \
+            --source "$SOURCE" \
+            --network "$NETWORK" \
+            -- initialize --admin "$DEPLOYER_ADDRESS"
+
+          echo "Deploying Invoice contract..."
+          INVOICE_ID=$(stellar contract deploy \
+            --wasm target/wasm32-unknown-unknown/release/invoice.wasm \
+            --source "$SOURCE" \
+            --network "$NETWORK")
+          echo "Invoice ID: $INVOICE_ID"
+
+          echo "Initializing Invoice contract..."
+          stellar contract invoke \
+            --id "$INVOICE_ID" \
+            --source "$SOURCE" \
+            --network "$NETWORK" \
+            -- initialize --admin "$DEPLOYER_ADDRESS"
+
+          echo "Deploying Treasury contract..."
+          TREASURY_ID=$(stellar contract deploy \
+            --wasm target/wasm32-unknown-unknown/release/treasury.wasm \
+            --source "$SOURCE" \
+            --network "$NETWORK")
+          echo "Treasury ID: $TREASURY_ID"
+
+          echo "Initializing Treasury contract..."
+          stellar contract invoke \
+            --id "$TREASURY_ID" \
+            --source "$SOURCE" \
+            --network "$NETWORK" \
+            -- initialize --admin "$DEPLOYER_ADDRESS" --threshold 1
+
+          echo "Deploying Settlement Workflow contract..."
+          SETTLEMENT_WORKFLOW_ID=$(stellar contract deploy \
+            --wasm target/wasm32-unknown-unknown/release/settlement_workflow.wasm \
+            --source "$SOURCE" \
+            --network "$NETWORK")
+          echo "Settlement Workflow ID: $SETTLEMENT_WORKFLOW_ID"
+
+          echo "Initializing Settlement Workflow contract..."
+          stellar contract invoke \
+            --id "$SETTLEMENT_WORKFLOW_ID" \
+            --source "$SOURCE" \
+            --network "$NETWORK" \
+            -- initialize --compliance_id "$COMPLIANCE_ID" --treasury_id "$TREASURY_ID"
+
+          echo "COMPLIANCE_ID=$COMPLIANCE_ID" >> $GITHUB_ENV
+          echo "INVOICE_ID=$INVOICE_ID" >> $GITHUB_ENV
+          echo "TREASURY_ID=$TREASURY_ID" >> $GITHUB_ENV
+          echo "SETTLEMENT_WORKFLOW_ID=$SETTLEMENT_WORKFLOW_ID" >> $GITHUB_ENV
+
+      - name: Write Workflow Summary
+        run: |
+          cat << EOF >> $GITHUB_STEP_SUMMARY
+          ### Stellar Testnet Shared Deployment Summary
+
+          The current state of contracts has been successfully deployed to Stellar Testnet.
+
+          | Contract | Contract ID |
+          |---|---|
+          | **Compliance** | \`$COMPLIANCE_ID\` |
+          | **Invoice** | \`$INVOICE_ID\` |
+          | **Treasury** | \`$TREASURY_ID\` |
+          | **Settlement Workflow** | \`$SETTLEMENT_WORKFLOW_ID\` |
+
+          - **Deployer / Admin Address:** \`$DEPLOYER_ADDRESS\`
+          - **Network:** Stellar Testnet (\`https://soroban-testnet.stellar.org\`)
+          - **Network Passphrase:** \`Test SDF Network ; September 2015\`
+          EOF

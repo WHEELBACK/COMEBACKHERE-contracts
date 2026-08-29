@@ -9,7 +9,12 @@ use soroban_sdk::{contractimpl, Address, Env, Symbol, Vec};
 impl TreasuryContract {
     /// Registers or updates the approval weight of `signer` (admin-only). Weight 0 deactivates the signer.
     /// Emits: `signer_weight_set`.
-    pub fn set_signer(env: Env, admin: Address, signer: Address, weight: u32) {
+    pub fn set_signer(
+        env: Env,
+        admin: Address,
+        signer: Address,
+        weight: u32,
+    ) -> Result<(), TreasuryError> {
         require_admin(&env, &admin);
         env.storage()
             .instance()
@@ -35,6 +40,7 @@ impl TreasuryContract {
         }
         env.events()
             .publish((Symbol::new(&env, "signer_weight_set"), signer), weight);
+        Ok(())
     }
 
     /// Removes `signer` from the active signer registry (admin-only).
@@ -43,7 +49,11 @@ impl TreasuryContract {
     /// Existing settlement approval snapshots are not changed, so removing a
     /// signer does not retroactively invalidate in-flight approvals.
     /// Emits: `signer_removed`.
-    pub fn remove_signer(env: Env, admin: Address, signer: Address) {
+    pub fn remove_signer(
+        env: Env,
+        admin: Address,
+        signer: Address,
+    ) -> Result<(), TreasuryError> {
         require_admin(&env, &admin);
         env.storage()
             .instance()
@@ -62,6 +72,7 @@ impl TreasuryContract {
         env.storage().instance().set(&DataKey::SignerList, &updated);
         env.events()
             .publish((Symbol::new(&env, "signer_removed"),), signer);
+        Ok(())
     }
 
     /// Returns the current approval weight for `signer`, or `0` if not registered.
@@ -90,14 +101,14 @@ impl TreasuryContract {
 
     /// Proposes replacing `old_signer` with `new_signer` in the authorised signer set.
     /// Enforces a 1-hour cooldown per proposer to prevent rotation spam.
-    /// Panics: `UnauthorizedSigner`, `RotationProposalCooldown`.
+    /// Errors: `UnauthorizedSigner`, `RotationProposalCooldown`, `ArithmeticOverflow`.
     /// Emits: `rotation_proposed`.
     pub fn propose_signer_rotation(
         env: Env,
         proposer: Address,
         old_signer: Address,
         new_signer: Address,
-    ) -> u64 {
+    ) -> Result<u64, TreasuryError> {
         require_authorized_signer(&env, &proposer);
 
         // Cooldown: each proposer may only submit one rotation proposal per hour.
@@ -106,7 +117,7 @@ impl TreasuryContract {
         let cooldown_key = DataKey::LastRotationProposal(proposer.clone());
         if let Some(last) = env.storage().instance().get::<DataKey, u64>(&cooldown_key) {
             if now < last.saturating_add(COOLDOWN_SECS) {
-                soroban_sdk::panic_with_error!(env, TreasuryError::RotationProposalCooldown);
+                return Err(TreasuryError::RotationProposalCooldown);
             }
         }
         env.storage().instance().set(&cooldown_key, &now);
@@ -116,12 +127,16 @@ impl TreasuryContract {
             .instance()
             .get(&DataKey::RotationCount)
             .unwrap_or(0);
-        let id = count.checked_add(1).unwrap_or_else(|| {
-            soroban_sdk::panic_with_error!(env, TreasuryError::ArithmeticOverflow)
-        });
+        let id = count
+            .checked_add(1)
+            .ok_or(TreasuryError::ArithmeticOverflow)?;
         let mut approvals = Vec::new(&env);
         let mut weight = 0u32;
         record_approval(&env, &mut approvals, &mut weight, &proposer);
+        // Snapshot old_signer's weight now, at proposal time, so a later
+        // set_signer/remove_signer racing against this proposal's execution
+        // cannot change what weight new_signer receives (see approve_signer_rotation).
+        let captured_old_weight = signer_weight(&env, &old_signer);
         let proposal = SignerRotationProposal {
             id,
             old_signer,
@@ -129,6 +144,7 @@ impl TreasuryContract {
             approvals,
             approval_weight: weight,
             status: RotationStatus::Pending,
+            captured_old_weight,
         };
         env.storage()
             .persistent()
@@ -136,27 +152,31 @@ impl TreasuryContract {
         env.storage().instance().set(&DataKey::RotationCount, &id);
         env.events()
             .publish((Symbol::new(&env, "rotation_proposed"), id), proposal);
-        id
+        Ok(id)
     }
 
     /// Approves a pending signer rotation; executes the swap when cumulative weight meets threshold.
-    /// Panics: `UnauthorizedSigner`, `RotationNotFound`, `RotationAlreadyExecuted`.
+    /// Errors: `UnauthorizedSigner`, `RotationNotFound`, `RotationAlreadyExecuted`.
     /// Emits: `rotation_approved`; additionally `rotation_executed` when threshold is met.
+    ///
+    /// The weight assigned to `new_signer` on execution is `old_signer`'s weight at
+    /// **proposal** time (`proposal.captured_old_weight`), not whatever weight
+    /// `old_signer` happens to have when the threshold is met. This is deliberate:
+    /// it prevents a `set_signer`/`remove_signer` call landing between proposal and
+    /// execution from silently changing the rotation's outcome.
     pub fn approve_signer_rotation(
         env: Env,
         approver: Address,
         rotation_id: u64,
-    ) -> SignerRotationProposal {
+    ) -> Result<SignerRotationProposal, TreasuryError> {
         require_authorized_signer(&env, &approver);
         let mut proposal: SignerRotationProposal = env
             .storage()
             .persistent()
             .get(&DataKey::SignerRotation(rotation_id))
-            .unwrap_or_else(|| {
-                soroban_sdk::panic_with_error!(env, TreasuryError::RotationNotFound)
-            });
+            .ok_or(TreasuryError::RotationNotFound)?;
         if proposal.status != RotationStatus::Pending {
-            soroban_sdk::panic_with_error!(env, TreasuryError::RotationAlreadyExecuted);
+            return Err(TreasuryError::RotationAlreadyExecuted);
         }
         record_approval(
             &env,
@@ -170,10 +190,14 @@ impl TreasuryContract {
             .get(&DataKey::Threshold)
             .unwrap_or(1);
         if meets_threshold(proposal.approval_weight, threshold) {
-            let old_weight = signer_weight(&env, &proposal.old_signer);
-            env.storage()
-                .instance()
-                .set(&DataKey::Signer(proposal.new_signer.clone()), &old_weight);
+            // Use the weight captured when the rotation was proposed, not
+            // old_signer's weight right now — old_signer may have been
+            // reweighted or removed by an unrelated transaction while this
+            // rotation was pending, and that must not change the outcome.
+            env.storage().instance().set(
+                &DataKey::Signer(proposal.new_signer.clone()),
+                &proposal.captured_old_weight,
+            );
             env.storage()
                 .instance()
                 .set(&DataKey::Signer(proposal.old_signer.clone()), &0u32);
@@ -190,23 +214,26 @@ impl TreasuryContract {
             (Symbol::new(&env, "rotation_approved"), rotation_id),
             proposal.clone(),
         );
-        proposal
+        Ok(proposal)
     }
 
     /// Cancels a pending signer rotation proposal (admin-only).
-    /// Panics: `Unauthorized`, `RotationNotFound`, `RotationAlreadyExecuted`.
+    /// Errors: `RotationNotFound`, `RotationAlreadyExecuted`.
+    /// Panics: `Unauthorized`.
     /// Emits: `rotation_cancelled`.
-    pub fn cancel_rotation(env: Env, admin: Address, rotation_id: u64) -> SignerRotationProposal {
+    pub fn cancel_rotation(
+        env: Env,
+        admin: Address,
+        rotation_id: u64,
+    ) -> Result<SignerRotationProposal, TreasuryError> {
         require_admin(&env, &admin);
         let mut proposal: SignerRotationProposal = env
             .storage()
             .persistent()
             .get(&DataKey::SignerRotation(rotation_id))
-            .unwrap_or_else(|| {
-                soroban_sdk::panic_with_error!(env, TreasuryError::RotationNotFound)
-            });
+            .ok_or(TreasuryError::RotationNotFound)?;
         if proposal.status != RotationStatus::Pending {
-            soroban_sdk::panic_with_error!(env, TreasuryError::RotationAlreadyExecuted);
+            return Err(TreasuryError::RotationAlreadyExecuted);
         }
         proposal.status = RotationStatus::Cancelled;
         env.storage()
@@ -216,6 +243,6 @@ impl TreasuryContract {
             (Symbol::new(&env, "rotation_cancelled"), rotation_id),
             proposal.clone(),
         );
-        proposal
+        Ok(proposal)
     }
 }

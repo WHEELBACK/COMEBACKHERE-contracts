@@ -25,6 +25,8 @@ use soroban_sdk::{
     contract, contracterror, contractimpl, contracttype, Address, Bytes, Env, Symbol, Vec,
 };
 
+pub use compliance_errors::ComplianceError;
+
 #[contracttype]
 #[derive(Clone)]
 /// Storage key enum for the compliance contract.
@@ -74,17 +76,6 @@ pub enum AddressState {
     Blocked,
     /// A time-bound allow or block whose expiry timestamp has passed.
     Expired,
-}
-
-/// Legacy error enum retained for on-chain backwards compatibility.
-///
-/// `ComplianceError` predates `ContractError`. It must not be renumbered.
-/// New error variants belong in [`ContractError`], not here.
-#[contracterror]
-#[derive(Clone, Copy, Debug, PartialEq)]
-#[repr(u32)]
-pub enum ComplianceError {
-    AlreadyInitialized = 1,
 }
 
 /// Rich compliance status for a single address, returned by `address_status`.
@@ -342,6 +333,12 @@ impl ComplianceContract {
             .unwrap_or(0u32)
     }
 
+    /// Block a batch of addresses (admin-only).
+    ///
+    /// Like [`block_address`](Self::block_address), this is **not** gated behind
+    /// [`require_not_paused`](Self::require_not_paused) — it is permitted while
+    /// paused as part of the same emergency-remediation policy, so an admin can
+    /// sanction an entire batch of compromised addresses without unpausing first.
     pub fn bulk_block_addresses(
         env: Env,
         admin: Address,
@@ -486,6 +483,11 @@ impl ComplianceContract {
     /// - `admin`: Current administrator. Must authorize this call.
     /// - `new_admin`: The address being nominated as the next administrator.
     ///
+    /// Not gated behind [`require_not_paused`](Self::require_not_paused): admin-role
+    /// management is orthogonal to the allow/block mutations that pause is meant to
+    /// stop, and must remain available even while paused (e.g. to hand control to a
+    /// recovery admin during an incident).
+    ///
     /// # Errors
     /// - [`ContractError::Unauthorized`] if `admin` is not the stored administrator.
     ///
@@ -508,6 +510,8 @@ impl ComplianceContract {
     /// Complete the admin transfer initiated by [`transfer_admin`](Self::transfer_admin).
     ///
     /// Must be called by the pending admin to activate the new admin role.
+    /// Like `transfer_admin`, this is not gated behind `require_not_paused` and
+    /// works while the contract is paused.
     ///
     /// # Parameters
     /// - `new_admin`: The pending administrator. Must authorize this call.
@@ -647,6 +651,8 @@ impl ComplianceContract {
     }
 
     /// Assign an operator address. Only admin may call this.
+    /// Not gated behind `require_not_paused` — role assignment, like admin
+    /// transfer, is permitted while paused.
     pub fn set_operator(env: Env, admin: Address, operator: Address) -> Result<(), ContractError> {
         Self::require_admin(&env, &admin)?;
         env.storage().instance().set(&DataKey::Operator, &operator);
@@ -673,6 +679,10 @@ impl ComplianceContract {
     /// `Allowed` flag, removes the expiry, and publishes `("address_allow_expired",) → address`.
     ///
     /// Returns the number of addresses swept.
+    ///
+    /// Not gated behind `require_not_paused`: sweeping only clears already-lapsed
+    /// time-bound allows, so it is treated as bookkeeping rather than a new grant
+    /// of access, and admins may run it even while paused.
     pub fn sweep_expired(env: Env, admin: Address) -> Result<u32, ContractError> {
         Self::require_admin(&env, &admin)?;
         let index: Vec<Address> = env
