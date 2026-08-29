@@ -440,6 +440,36 @@ impl TreasuryContract {
         page
     }
 
+    /// Returns aggregate metrics over all pending settlements: `(count, total_value)`.
+    /// Computed in a single call so operational monitoring doesn't need to paginate
+    /// through `get_pending_settlements_page` and sum client-side just to answer
+    /// "how much is currently pending settlement". No running total is currently
+    /// maintained in storage, so this aggregates on read like `get_pending_settlements`.
+    pub fn get_pending_metrics(env: Env) -> (u64, i128) {
+        let count: u64 = env
+            .storage()
+            .instance()
+            .get(&DataKey::SettlementCount)
+            .unwrap_or(0);
+        let mut pending_count: u64 = 0;
+        let mut total_value: i128 = 0;
+        let mut id = 1u64;
+        while id <= count {
+            if let Some(settlement) = env
+                .storage()
+                .persistent()
+                .get::<DataKey, Settlement>(&DataKey::Settlement(id))
+            {
+                if settlement.status == SettlementStatus::Pending {
+                    pending_count += 1;
+                    total_value += settlement.amount;
+                }
+            }
+            id += 1;
+        }
+        (pending_count, total_value)
+    }
+
     /// Returns the settlement with the given `settlement_id`.
     /// Panics: `SettlementNotFound`.
     pub fn get_settlement(env: Env, settlement_id: u64) -> Settlement {

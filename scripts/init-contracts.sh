@@ -4,18 +4,29 @@ set -e
 # COMEBACKHERE Contract Initialization Script
 # Deploys and initializes Compliance, Invoice, Treasury, and Settlement Workflow contracts on a local Soroban network.
 
+# Structured log-line convention shared across scripts/*.sh: every line is
+# `[UTC timestamp] [LEVEL] message`, so output stays greppable/pipeable for
+# CI or monitoring rather than only ever being read live in a terminal.
+log() {
+    local level="$1"
+    shift
+    printf '[%s] [%s] %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$level" "$*"
+}
+log_info() { log "INFO" "$@"; }
+log_error() { log "ERROR" "$@" >&2; }
+
 NETWORK="local"
 RPC_URL="http://localhost:8000/soroban/rpc"
 NETWORK_PASSPHRASE="Standalone Network ; February 2017"
 
-echo "Using network: $NETWORK ($RPC_URL)"
+log_info "Using network: $NETWORK ($RPC_URL)"
 
 # 1. Build contracts
 # Scoped to the packages actually deployed below (not `--workspace` or an
 # unscoped `cargo build`): the workspace also contains comebackhere-tests,
 # whose `default = ["testutils"]` feature enables soroban-sdk/testutils,
 # which soroban-sdk hard-disables on the wasm32 target.
-echo "Building contracts..."
+log_info "Building contracts..."
 cargo build --target wasm32-unknown-unknown --release \
     -p comebackhere-compliance \
     -p comebackhere-invoice \
@@ -23,24 +34,24 @@ cargo build --target wasm32-unknown-unknown --release \
     -p comebackhere-settlement-workflow
 
 # 2. Setup network
-echo "Ensuring network '$NETWORK' is configured..."
+log_info "Ensuring network '$NETWORK' is configured..."
 stellar network add --rpc-url "$RPC_URL" --network-passphrase "$NETWORK_PASSPHRASE" "$NETWORK" 2>/dev/null || true
 
 # 3. Setup Admin Identity
-echo "Ensuring admin identity exists..."
+log_info "Ensuring admin identity exists..."
 stellar keys generate --network "$NETWORK" admin 2>/dev/null || true
 ADMIN_ADDRESS=$(stellar keys address admin)
-echo "Admin Address: $ADMIN_ADDRESS"
+log_info "Admin Address: $ADMIN_ADDRESS"
 
 # 4. Deploy and Initialize Compliance
-echo "Deploying Compliance contract..."
+log_info "Deploying Compliance contract..."
 COMPLIANCE_ID=$(stellar contract deploy \
     --wasm target/wasm32-unknown-unknown/release/compliance.wasm \
     --source admin \
     --network "$NETWORK")
-echo "Compliance ID: $COMPLIANCE_ID"
+log_info "Compliance ID: $COMPLIANCE_ID"
 
-echo "Initializing Compliance contract..."
+log_info "Initializing Compliance contract..."
 stellar contract invoke \
     --id "$COMPLIANCE_ID" \
     --source admin \
@@ -48,14 +59,14 @@ stellar contract invoke \
     -- initialize --admin "$ADMIN_ADDRESS"
 
 # 5. Deploy and Initialize Invoice
-echo "Deploying Invoice contract..."
+log_info "Deploying Invoice contract..."
 INVOICE_ID=$(stellar contract deploy \
     --wasm target/wasm32-unknown-unknown/release/invoice.wasm \
     --source admin \
     --network "$NETWORK")
-echo "Invoice ID: $INVOICE_ID"
+log_info "Invoice ID: $INVOICE_ID"
 
-echo "Initializing Invoice contract..."
+log_info "Initializing Invoice contract..."
 stellar contract invoke \
     --id "$INVOICE_ID" \
     --source admin \
@@ -63,14 +74,14 @@ stellar contract invoke \
     -- initialize --admin "$ADMIN_ADDRESS"
 
 # 6. Deploy and Initialize Treasury
-echo "Deploying Treasury contract..."
+log_info "Deploying Treasury contract..."
 TREASURY_ID=$(stellar contract deploy \
     --wasm target/wasm32-unknown-unknown/release/treasury.wasm \
     --source admin \
     --network "$NETWORK")
-echo "Treasury ID: $TREASURY_ID"
+log_info "Treasury ID: $TREASURY_ID"
 
-echo "Initializing Treasury contract..."
+log_info "Initializing Treasury contract..."
 stellar contract invoke \
     --id "$TREASURY_ID" \
     --source admin \
