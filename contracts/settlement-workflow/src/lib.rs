@@ -1,7 +1,10 @@
 #![no_std]
 
 use compliance_client::ComplianceClient;
-use soroban_sdk::{contract, contractclient, contractimpl, Address, Env, Symbol};
+use multisig::TreasuryError;
+use soroban_sdk::{
+    contract, contractclient, contractimpl, contracttype, Address, Env, Symbol, Vec,
+};
 
 /// Cross-contract call surface this crate needs from the treasury contract.
 /// `#[contractclient]` on a bare trait generates only an invocation client, not
@@ -14,43 +17,15 @@ pub trait TreasuryInterface {
     fn execute_settlement(env: Env, signer: Address, settlement_id: u64, token_contract: Address);
 }
 
-/// Dedicated error type for settlement-workflow, mirroring the pattern used
-/// by every other contract in the repo (#362). Lets callers distinguish
-/// failures originating in this contract's own orchestration logic from
-/// errors that genuinely came from Treasury's `execute_settlement`.
-#[contracterror]
-#[derive(Copy, Clone, Debug, Eq, PartialEq)]
-#[repr(u32)]
-pub enum SettlementWorkflowError {
-    AlreadyInitialized = 1,
-    Unauthorized = 2,
-    ContractPaused = 3,
-    ComplianceCheckFailed = 4,
-}
-
-/// Operational configuration for the SettlementWorkflow contract.
-/// Stored in instance storage at initialization and read back via
-/// `get_config` (#365). Migration tooling and off-chain integrators use
-/// this to discover the wired-up compliance and treasury contract IDs.
+/// Instance-storage keys for the workflow's pinned configuration. The compliance
+/// and treasury instances are set once at initialization (#364) so the contract
+/// enforces which instances it trusts rather than trusting whatever a caller
+/// supplies per-call.
 #[contracttype]
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct Config {
-    pub admin: Address,
-    pub compliance_id: Address,
-    pub treasury_id: Address,
-    pub paused: bool,
-}
-
-/// Instance-storage keys.
-#[contracttype]
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-#[repr(u32)]
+#[derive(Clone)]
 pub enum DataKey {
-    Admin = 1,
-    ComplianceId = 2,
-    TreasuryId = 3,
-    Paused = 4,
-    Initialized = 5,
+    ComplianceId,
+    TreasuryId,
 }
 
 /// Reference on-chain implementation of the `SettlementWorkflow` role described in
@@ -62,26 +37,38 @@ pub struct SettlementWorkflowContract;
 
 #[contractimpl]
 impl SettlementWorkflowContract {
-    /// Stores `admin`, `compliance_id`, and `treasury_id` in instance storage
-    /// so that subsequent calls to `execute_with_compliance` can read them
-    /// without requiring them per-call (#365). Emits no events — the stored
-    /// values are observable via `get_config`.
-    pub fn initialize(
-        env: Env,
-        admin: Address,
-        compliance_id: Address,
-        treasury_id: Address,
-    ) -> Result<(), SettlementWorkflowError> {
-        admin.require_auth();
-        if env.storage().instance().has(&DataKey::Initialized) {
-            return Err(SettlementWorkflowError::AlreadyInitialized);
+    /// Pins the compliance and treasury contract instances this workflow trusts.
+    /// Must be called exactly once before any `execute_with_compliance*` call; a
+    /// second call traps with `AlreadyInitialized` (#364). Callers can no longer
+    /// redirect the gate at an arbitrary compliance/treasury instance per-call.
+    /// Emits: `workflow_initialized`.
+    pub fn initialize(env: Env, compliance_id: Address, treasury_id: Address) {
+        if env.storage().instance().has(&DataKey::ComplianceId) {
+            soroban_sdk::panic_with_error!(env, TreasuryError::AlreadyInitialized);
         }
-        env.storage().instance().set(&DataKey::Admin, &admin);
-        env.storage().instance().set(&DataKey::ComplianceId, &compliance_id);
-        env.storage().instance().set(&DataKey::TreasuryId, &treasury_id);
-        env.storage().instance().set(&DataKey::Paused, &false);
-        env.storage().instance().set(&DataKey::Initialized, &true);
-        Ok(())
+        env.storage()
+            .instance()
+            .set(&DataKey::ComplianceId, &compliance_id);
+        env.storage()
+            .instance()
+            .set(&DataKey::TreasuryId, &treasury_id);
+        env.events().publish(
+            (Symbol::new(&env, "workflow_initialized"),),
+            (compliance_id, treasury_id),
+        );
+    }
+
+    /// Returns the pinned compliance contract instance.
+    fn compliance_id(env: &Env) -> Address {
+        env.storage()
+            .instance()
+            .get(&DataKey::ComplianceId)
+            .unwrap()
+    }
+
+    /// Returns the pinned treasury contract instance.
+    fn treasury_id(env: &Env) -> Address {
+        env.storage().instance().get(&DataKey::TreasuryId).unwrap()
     }
 
     /// Checks `Compliance::is_allowed(merchant)` and, only if it passes, calls
@@ -91,100 +78,62 @@ impl SettlementWorkflowContract {
     /// Returns `Err(SettlementWorkflowError::ComplianceCheckFailed)` without touching Treasury
     /// if the compliance check fails, instead of panicking or reusing a generic
     /// `Unauthorized` (see #74).
+    /// Emits: `settlement_workflow_executed` so indexers can distinguish this gated
+    /// path from a direct `Treasury::execute_settlement` call (#366).
     pub fn execute_with_compliance(
         env: Env,
         settlement_id: u64,
         token_contract: Address,
         merchant: Address,
-    ) -> Result<(), SettlementWorkflowError> {
-        Self::require_not_paused(&env)?;
-        let compliance_id: Address = env
-            .storage()
-            .instance()
-            .get(&DataKey::ComplianceId)
-            .unwrap();
-        let treasury_id: Address = env
-            .storage()
-            .instance()
-            .get(&DataKey::TreasuryId)
-            .unwrap();
-        let compliance = ComplianceClient::new(&env, &compliance_id);
-        compliance.require_allowed(&merchant, SettlementWorkflowError::ComplianceCheckFailed)?;
-        let treasury = TreasuryOnlyClient::new(&env, &treasury_id);
+    ) -> Result<(), TreasuryError> {
+        let compliance = ComplianceClient::new(&env, &Self::compliance_id(&env));
+        compliance.require_allowed_for_treasury(&merchant)?;
+        let treasury = TreasuryOnlyClient::new(&env, &Self::treasury_id(&env));
         treasury.execute_settlement(
             &env.current_contract_address(),
             &settlement_id,
             &token_contract,
         );
+        env.events().publish(
+            (Symbol::new(&env, "settlement_workflow_executed"), settlement_id),
+            (merchant.clone(), token_contract.clone()),
+        );
         Ok(())
     }
 
-    /// Pauses the contract, blocking all state-mutating operations except
-    /// admin functions (admin-only). Emits: `settlement_workflow_paused`.
-    pub fn pause(env: Env, admin: Address) -> Result<(), SettlementWorkflowError> {
-        Self::require_admin(&env, &admin)?;
-        env.storage().instance().set(&DataKey::Paused, &true);
-        env.events()
-            .publish((Symbol::new(&env, "settlement_workflow_paused"),), admin);
-        Ok(())
-    }
-
-    /// Resumes normal operations after a pause (admin-only).
-    /// Emits: `settlement_workflow_unpaused`.
-    pub fn unpause(env: Env, admin: Address) -> Result<(), SettlementWorkflowError> {
-        Self::require_admin(&env, &admin)?;
-        env.storage().instance().set(&DataKey::Paused, &false);
-        env.events()
-            .publish((Symbol::new(&env, "settlement_workflow_unpaused"),), admin);
-        Ok(())
-    }
-
-    /// Returns the full operational configuration stored at initialization.
-    /// Off-chain integrators and other contracts call this rather than guessing
-    /// at storage keys (#365).
-    pub fn get_config(env: Env) -> Config {
-        let admin: Address = env.storage().instance().get(&DataKey::Admin).unwrap();
-        let compliance_id: Address = env
-            .storage()
-            .instance()
-            .get(&DataKey::ComplianceId)
-            .unwrap();
-        let treasury_id: Address = env
-            .storage()
-            .instance()
-            .get(&DataKey::TreasuryId)
-            .unwrap();
-        let paused: bool = env
-            .storage()
-            .instance()
-            .get(&DataKey::Paused)
-            .unwrap_or(false);
-        Config {
-            admin,
-            compliance_id,
-            treasury_id,
-            paused,
+    /// Batch variant of `execute_with_compliance` (#367). Runs the shared compliance
+    /// gate for `merchant` once, then executes each settlement ID through the pinned
+    /// treasury. Settlement IDs that don't exist, are already executed, or otherwise
+    /// fail treasury execution are silently skipped (per treasury's batch precedent,
+    /// #38) rather than aborting the whole batch; only successfully executed IDs are
+    /// returned and emitted. If the shared compliance gate fails, the whole batch is
+    /// rejected with `ComplianceCheckFailed`.
+    /// Emits: `settlement_workflow_executed` for each settlement actually executed.
+    pub fn execute_with_compliance_batch(
+        env: Env,
+        settlement_ids: Vec<u64>,
+        token_contract: Address,
+        merchant: Address,
+    ) -> Vec<u64> {
+        let compliance = ComplianceClient::new(&env, &Self::compliance_id(&env));
+        compliance.require_allowed_for_treasury(&merchant).unwrap();
+        let treasury = TreasuryOnlyClient::new(&env, &Self::treasury_id(&env));
+        let mut executed = Vec::new(&env);
+        for id in settlement_ids.iter() {
+            let result = treasury.try_execute_settlement(
+                &env.current_contract_address(),
+                &id,
+                &token_contract,
+            );
+            if result.is_ok() {
+                executed.push_back(id);
+                env.events().publish(
+                    (Symbol::new(&env, "settlement_workflow_executed"), id),
+                    (merchant.clone(), token_contract.clone()),
+                );
+            }
+            // Invalid / already-executed / threshold-failed IDs are silently skipped.
         }
-    }
-
-    fn require_admin(env: &Env, admin: &Address) -> Result<(), SettlementWorkflowError> {
-        admin.require_auth();
-        let stored: Address = env.storage().instance().get(&DataKey::Admin).unwrap();
-        if stored != *admin {
-            return Err(SettlementWorkflowError::Unauthorized);
-        }
-        Ok(())
-    }
-
-    fn require_not_paused(env: &Env) -> Result<(), SettlementWorkflowError> {
-        let paused: bool = env
-            .storage()
-            .instance()
-            .get(&DataKey::Paused)
-            .unwrap_or(false);
-        if paused {
-            return Err(SettlementWorkflowError::ContractPaused);
-        }
-        Ok(())
+        executed
     }
 }
