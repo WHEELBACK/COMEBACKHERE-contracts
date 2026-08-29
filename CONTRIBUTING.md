@@ -119,6 +119,77 @@ make update-abi-snapshots
 just snapshot
 ```
 
+## Changing `crates/multisig`
+
+`crates/multisig` is a shared dependency: `contracts/treasury` re-exports its
+contract types (`Settlement`, `Dispute`, `SettlementStatus`, `DisputeStatus`,
+`RotationStatus`, `SettlementHoldReason`, `SignerRotationProposal`,
+`TreasuryError`, ...) directly through treasury's own public ABI. Because
+that re-export is a normal Rust `pub use`, a semver-compatible change to one
+of those types (a renamed field, an added or reordered enum variant, a
+changed discriminant) compiles cleanly but can silently change treasury's
+on-chain ABI with no compiler error to catch it — see issue #68.
+
+The enforcement mechanism for this lives entirely in
+[`contracts/treasury/tests/multisig_version_lock_test.rs`](contracts/treasury/tests/multisig_version_lock_test.rs).
+That file exhaustively matches/destructures every ABI-relevant multisig type
+with no wildcard arm and no `..` struct spread, so it fails to *compile* the
+moment one of those shapes changes. If you're touching `crates/multisig` for
+any reason, expect to go through this process:
+
+1. Make your change to `crates/multisig`.
+2. Try to compile `contracts/treasury`'s tests. `multisig_version_lock_test.rs`
+   will fail to compile if your change touched any exhaustively-matched
+   field or variant.
+3. Update every match arm / struct destructure in that file until it compiles
+   again against the new shape. This is a deliberate manual step — it forces
+   a human to look at the ABI impact of the change, not just accept whatever
+   the compiler allows.
+4. Only once it compiles, regenerate the treasury ABI snapshot (see "ABI
+   snapshots" above) and bump both `crates/multisig/Cargo.toml`'s
+   `version` and the test file's `EXPECTED_MULTISIG_VERSION` constant
+   together, in the same commit.
+
+Read the doc comment at the top of `multisig_version_lock_test.rs` for the
+full rationale; this section only summarizes it so the process is
+discoverable before you break the compile gate, not after.
+
+---
+
+## Cross-contract calls — use the thin `#[contractclient]` client
+
+When a contract calls another contract, **do not** add that contract's
+implementation crate (e.g. `comebackhere-treasury`, `comebackhere-compliance`) as a
+`[dependencies]` entry. Depending on the full implementation crate statically links
+its `#[contractimpl]`-generated wasm exports (`pause`, `unpause`, …) into the
+caller's own binary. When two such crates (or the caller itself) each export a symbol
+with the same name, the Soroban wasm linker fails with a **`duplicate symbol: pause`**
+error, which blocks the Contract Size CI check from ever completing.
+
+This exact failure happened between settlement-workflow, treasury, and compliance and
+took real investigation to diagnose and fix in PR #358. The fix was to generate each
+cross-contract client from a bare trait annotated with `#[contractclient]` instead of
+importing the target's generated `Client` type:
+
+```rust
+#[contractclient(name = "TreasuryOnlyClient")]
+pub trait TreasuryInterface {
+    fn execute_settlement(env: Env, signer: Address, settlement_id: u64, token_contract: Address);
+}
+```
+
+This generates only an invocation client — there is no `#[contractimpl]` body, so none
+of the target's wasm exports are pulled in. The caller's own `pause`/`unpause` (and the
+target's) never collide. See `crates/compliance-client` and
+`contracts/settlement-workflow/src/lib.rs` for the established pattern; note that both
+keep the real implementation crates as `dev-dependencies` only, so they can still drive
+contract state and assert ABI parity in tests without linking wasm exports into the
+deployed binary.
+
+If you genuinely need the target contract's full `Client` in production code, treat it
+as a red flag: reach for the thin `#[contractclient]` trait instead, and add the real
+crate to `[dev-dependencies]` (never `[dependencies]`) if a test needs it.
+
 ---
 
 ## Deprecating an entrypoint
@@ -194,6 +265,16 @@ Error-code ranges are documented in the **Error-Code Ranges per Contract** table
 Because each contract has its own `#[contracterror]` enum the numeric ranges are per-contract, not global. Pick a starting range that leaves room for growth and document it in `ARCHITECTURE.md` under **Error-Code Ranges per Contract**. Append new variants only — never renumber existing ones.
 
 `deny.toml` itself needs no change for a new contract; it governs dependency licenses and advisories, not error codes. Verify `cargo deny check` still passes after adding any new dependencies.
+
+### Error handling for new entrypoints
+
+When adding a new entrypoint, choose between these patterns in order of preference:
+
+1. **`Result<T, Error>`-returning functions (preferred).** For new public entrypoints, prefer returning `Result<T, YourContractError>` over panicking. This avoids the wasm size cost of `panic_with_error!` call sites entirely and lets callers handle failure without an aborted transaction. This is the default choice for anything that can fail in an expected way (validation, not-found, unauthorized, etc).
+2. **`panic_with_error!` (exceptional cases only).** Reserve this for truly exceptional conditions or invariant violations that should never occur given correct contract state — not for routine validation failures that a `Result` should carry instead.
+3. **Bare `panic!("string")` (never ship this).** Never use a bare string-message panic in code that ships. It has no discoverable error code for callers, and string panics were themselves the direct cause of treasury's contract silently drifting over Soroban's 64KB size budget — the fix required converting a large number of accumulated `panic!` call sites to `panic_with_error!`, several of which are being converted further to `Result`-returning signatures for the additional size savings that conversion alone couldn't capture. Don't reintroduce this pattern in new code.
+
+Picking `Result` from day one for new entrypoints avoids needing a retroactive size-budget fix later.
 
 ### 4. Update CI workflows
 

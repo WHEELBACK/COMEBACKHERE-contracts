@@ -24,7 +24,7 @@ use treasury::{
 /// Expected version of `crates/multisig` (see its `Cargo.toml`). Bump this only
 /// alongside a review of every exhaustive match below - if they still compile,
 /// the ABI-relevant shape of multisig's types is unchanged.
-const EXPECTED_MULTISIG_VERSION: &str = "0.2.0";
+const EXPECTED_MULTISIG_VERSION: &str = "0.3.0";
 
 const MULTISIG_CARGO_TOML: &str = include_str!("../../../crates/multisig/Cargo.toml");
 
@@ -319,6 +319,7 @@ fn signer_rotation_proposal_struct_shape_is_unchanged() {
         approvals,
         approval_weight,
         status,
+        captured_old_weight,
     } = proposal;
 
     assert_eq!(id, rid);
@@ -327,4 +328,5 @@ fn signer_rotation_proposal_struct_shape_is_unchanged() {
     assert!(approvals.contains(&admin));
     assert!(approval_weight > 0);
     assert_rotation_status_exhaustive(status);
+    assert!(captured_old_weight > 0);
 }

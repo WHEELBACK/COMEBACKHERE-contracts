@@ -10,6 +10,6 @@ publish = false
 name = "protocol_errors"
 
 [dependencies]
-invoice    = { package = "comebackhere-invoice",    path = "../../contracts/invoice" }
-treasury   = { package = "comebackhere-treasury",   path = "../../contracts/treasury" }
-compliance = { package = "comebackhere-compliance", path = "../../contracts/compliance" }
+invoice-errors  = { package = "comebackhere-invoice-errors",  path = "../../crates/invoice-errors" }
+treasury        = { package = "comebackhere-treasury",        path = "../../contracts/treasury" }
+compliance-errors = { package = "comebackhere-compliance-errors", path = "../../crates/compliance-errors" }
