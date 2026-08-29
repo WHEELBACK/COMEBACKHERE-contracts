@@ -31,7 +31,7 @@ fn withdraw_reentrancy_is_blocked_by_insufficient_balance() {
     // Pre-fund internal balance via a normal deposit (no callback).
     token.set_callback_target(&CallbackTarget::None, &treasury_id);
     client.deposit(&user, &token_id, &amount);
-    assert_eq!(client.get_balance(&user), amount);
+    assert_eq!(client.get_balance(&user, &token_id), amount);
 
     // Replace the malicious token's configuration with a `Withdraw`
     // re-entry target. The previous `CallbackTarget::None` setting is
@@ -45,7 +45,7 @@ fn withdraw_reentrancy_is_blocked_by_insufficient_balance() {
     assert!(result.is_err(), "reentrant withdraw must panic");
 
     // State preserved by transaction-level rollback.
-    assert_eq!(client.get_balance(&user), amount);
+    assert_eq!(client.get_balance(&user, &token_id), amount);
 }
 
 #[test]
@@ -76,14 +76,14 @@ fn withdraw_reentrancy_with_sufficient_balance_drains_twice() {
     // both survive the `Balance < amount` check.
     token.set_callback_target(&CallbackTarget::None, &treasury_id);
     client.deposit(&user, &token_id, &(amount * 2));
-    assert_eq!(client.get_balance(&user), amount * 2);
+    assert_eq!(client.get_balance(&user, &token_id), amount * 2);
 
     token.set_callback_target(&CallbackTarget::Withdraw, &treasury_id);
 
     let result = client.try_withdraw(&user, &token_id, &amount);
     assert!(result.is_err(), "reentrant withdraw should abort");
 
-    assert_eq!(client.get_balance(&user), amount * 2);
+    assert_eq!(client.get_balance(&user, &token_id), amount * 2);
     assert_eq!(token.balance(&user), 0);
     assert_eq!(token.balance(&treasury_id), amount * 4);
 }
