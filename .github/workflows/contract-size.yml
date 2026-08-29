@@ -36,18 +36,6 @@ jobs:
           path: target
           key: ${{ runner.os }}-contract-size-${{ hashFiles('Cargo.lock') }}
 
-      - name: Build contracts to WASM
-        run: |
-          set -e
-          echo "=== Building contracts ==="
-          for contract in contracts/*/; do
-            if [ -f "$contract/Cargo.toml" ]; then
-              name=$(basename "$contract")
-              echo "--- Building $name ---"
-              cargo build --package "comebackhere-$name" --target wasm32-unknown-unknown --release 2>&1
-            fi
-          done
-
       - name: Install wasm-opt
         run: sudo apt-get update && sudo apt-get install -y binaryen
 
