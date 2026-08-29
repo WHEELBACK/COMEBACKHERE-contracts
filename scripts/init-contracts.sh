@@ -5,7 +5,7 @@ set -e
 # Deploys and initializes Compliance, Invoice, and Treasury contracts on a local Soroban network.
 
 NETWORK="local"
-RPC_URL="http://localhost:8000"
+RPC_URL="http://localhost:8000/soroban/rpc"
 NETWORK_PASSPHRASE="Standalone Network ; February 2017"
 
 echo "Using network: $NETWORK ($RPC_URL)"

@@ -14,6 +14,7 @@ testutils = ["soroban-sdk/testutils"]
 
 [dependencies]
 soroban-sdk.workspace = true
+invoice-errors = { package = "comebackhere-invoice-errors", path = "../../crates/invoice-errors" }
 
 [dev-dependencies]
 hex = "0.4"

@@ -11,15 +11,44 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Check [Unreleased] section is non-empty
+      - name: Validate CHANGELOG.md for release tag
         run: |
-          # Extract content between [Unreleased] and the next versioned heading
+          # Strip the leading 'v' from the tag to get the version number (e.g. v1.2.3 -> 1.2.3)
+          VERSION="${GITHUB_REF_NAME#v}"
+          echo "Validating CHANGELOG.md for version: $VERSION"
+
+          # ── Check 1: A versioned section matching this tag must exist ──────────
+          # Keep a Changelog format: ## [x.y.z] - YYYY-MM-DD
+          if ! grep -qE "^## \[$VERSION\]" CHANGELOG.md; then
+            echo "::error::CHANGELOG.md has no section for version [$VERSION]." \
+                 "Move the [Unreleased] content into a '## [$VERSION] - YYYY-MM-DD' section before tagging."
+            exit 1
+          fi
+          echo "✓ Version section [$VERSION] found in CHANGELOG.md."
+
+          # ── Check 2: The versioned section must have non-empty content ─────────
+          # Extract lines between ## [VERSION] and the next ## heading
+          version_content=$(awk "/^## \[$VERSION\]/{found=1; next} found && /^## /{exit} found{print}" CHANGELOG.md \
+            | grep -v '^\s*$' || true)
+
+          if [ -z "$version_content" ]; then
+            echo "::error::CHANGELOG.md section [$VERSION] exists but is empty." \
+                 "Add release notes to the versioned section before tagging."
+            exit 1
+          fi
+          echo "✓ Version section [$VERSION] has content."
+
+          # ── Check 3: [Unreleased] must be empty after the rollover ────────────
+          # If [Unreleased] still has content, the developer forgot to move it
           unreleased=$(awk '/^## \[Unreleased\]/{found=1; next} found && /^## \[/{exit} found{print}' CHANGELOG.md \
             | grep -v '^\s*$' || true)
 
-          if [ -z "$unreleased" ]; then
-            echo "::error::CHANGELOG.md [Unreleased] section is empty. Add release notes before tagging."
+          if [ -n "$unreleased" ]; then
+            echo "::error::CHANGELOG.md [Unreleased] section is not empty." \
+                 "Move all unreleased entries into the '## [$VERSION] - YYYY-MM-DD' section before tagging."
             exit 1
           fi
+          echo "✓ [Unreleased] section is empty — rollover complete."
 
-          echo "✓ [Unreleased] section has content — release tag is valid."
+          echo ""
+          echo "All CHANGELOG.md checks passed. Release tag v$VERSION is valid."

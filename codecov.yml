@@ -1,0 +1,71 @@
+# Codecov configuration for COMEBACKHERE-contracts
+#
+# Validates against: https://api.codecov.io/validate
+#
+# Project-level threshold: 95% minimum line coverage, matching the targets
+# established in issues #91 (compliance), #92 (treasury), and #93 (invoice).
+# A PR whose merged coverage falls below 95% will receive a failing Codecov
+# status check, preventing silent erosion of hard-won coverage.
+#
+# Per-contract flags allow Codecov to report and enforce coverage independently
+# for each contract.  The workflow uploads each contract's report under its own
+# flag name (invoice, treasury, compliance) so regressions in a single contract
+# are immediately visible rather than masked by aggregate numbers.
+
+codecov:
+  # Only read this YAML from the main branch so feature branches cannot
+  # accidentally weaken the threshold gate.
+  strict_yaml_branch: main
+
+coverage:
+  precision: 2
+  round: down
+  # Green range: 95 – 100%.  Anything below 95 renders as red.
+  range: "95...100"
+
+  status:
+    # ── Project-wide gate ──────────────────────────────────────────────────
+    # Fails the Codecov status check if total project coverage drops below 95%.
+    # `threshold: 0%` means any drop from the base commit is flagged; there is
+    # no grace margin beyond the absolute 95% floor set by `target`.
+    project:
+      default:
+        target: 95%
+        threshold: 0%
+        base: auto
+
+    # ── Patch gate ────────────────────────────────────────────────────────
+    # New lines introduced in a PR must themselves be ≥ 95% covered.
+    # This stops the pattern of adding untested code while the aggregate stays
+    # above the floor because existing tests carry the overall percentage.
+    patch:
+      default:
+        target: 95%
+        threshold: 0%
+
+# ── Per-contract flags ────────────────────────────────────────────────────────
+# Each flag corresponds to one Codecov upload from the coverage workflow.
+# carryforward: true means Codecov reuses the previous commit's report for a
+# flag when a given PR run doesn't upload a fresh one (e.g. draft PRs), so the
+# aggregate never artificially drops to zero.
+flags:
+  invoice:
+    paths:
+      - contracts/invoice/src/
+    carryforward: true
+
+  treasury:
+    paths:
+      - contracts/treasury/src/
+    carryforward: true
+
+  compliance:
+    paths:
+      - contracts/compliance/src/
+    carryforward: true
+
+# ── PR comment layout ─────────────────────────────────────────────────────────
+comment:
+  layout: "reach,diff,flags,files"
+  behavior: default
+  require_changes: false
