@@ -4,7 +4,10 @@ use crate::{
     TreasuryContractClient, TreasuryError,
 };
 use multisig::{meets_threshold, record_approval, require_authorized_signer};
-use soroban_sdk::{contractimpl, Address, Env, Symbol, Vec};
+use soroban_sdk::{contractimpl, token, Address, Env, Symbol, Vec};
+
+/// Basis-points denominator for `resolve_dispute_split`'s ratio (10_000 = 100.00%).
+pub const BPS_DENOMINATOR: u32 = 10_000;
 
 #[contractimpl]
 impl TreasuryContract {
@@ -57,6 +60,7 @@ impl TreasuryContract {
             resolution_weight: 0,
             resolution_for_claimant: false,
             dispute_expires_at: expires_at,
+            claimant_share_bps: 0,
         };
         env.storage()
             .persistent()
@@ -152,40 +156,57 @@ impl TreasuryContract {
             .set(&DataKey::Dispute(dispute_id), &dispute);
         env.events()
             .publish((Symbol::new(&env, "dispute_resolved"), dispute_id), dispute);
-        if let Some(mut settlement) = env
+        release_settlement_hold_if_no_open_disputes(&env, settlement_id);
+    }
+
+    /// Resolves an open dispute by splitting `dispute.amount` between claimant and
+    /// counterparty according to `claimant_bps` (out of [`BPS_DENOMINATOR`]) instead of the
+    /// binary claimant/counterparty outcome `resolve_dispute` supports (admin-only).
+    ///
+    /// Design note: like `resolve_dispute`, this only ever pays out `dispute.amount` (the
+    /// amount raised with the dispute, not necessarily equal to the associated settlement's
+    /// own `amount`) directly from the treasury's token balance to the two parties; it does
+    /// not itself execute the settlement. Releasing the settlement hold below only means the
+    /// settlement becomes eligible for its own `execute_settlement`/`partially_execute_settlement`
+    /// payout again — callers must ensure the disputed amount and the settlement's payout are
+    /// not double-counted when both eventually execute, exactly as with a binary resolution.
+    /// Panics: `DisputeNotFound`, `DisputeAlreadyResolved`, `ContractPaused`, `InvalidSplitRatio`.
+    /// Emits: `dispute_resolved_split`.
+    pub fn resolve_dispute_split(
+        env: Env,
+        admin: Address,
+        dispute_id: u64,
+        claimant_bps: u32,
+        token_contract: Address,
+    ) {
+        require_admin(&env, &admin);
+        require_not_paused(&env);
+        if claimant_bps > BPS_DENOMINATOR {
+            soroban_sdk::panic_with_error!(env, TreasuryError::InvalidSplitRatio);
+        }
+        let mut dispute: Dispute = env
             .storage()
             .persistent()
-            .get::<DataKey, Settlement>(&DataKey::Settlement(settlement_id))
-        {
-            if settlement.status == SettlementStatus::OnHold {
-                let dispute_count: u64 = env
-                    .storage()
-                    .instance()
-                    .get(&DataKey::DisputeCount)
-                    .unwrap_or(0);
-                let mut has_open = false;
-                let mut i = 1u64;
-                while i <= dispute_count {
-                    if let Some(d) = env
-                        .storage()
-                        .persistent()
-                        .get::<DataKey, Dispute>(&DataKey::Dispute(i))
-                    {
-                        if d.settlement_id == settlement_id && d.status == DisputeStatus::Raised {
-                            has_open = true;
-                            break;
-                        }
-                    }
-                    i += 1;
-                }
-                if !has_open {
-                    settlement.status = SettlementStatus::Pending;
-                    settlement.hold_reason = SettlementHoldReason::None;
-                    env.storage()
-                        .persistent()
-                        .set(&DataKey::Settlement(settlement_id), &settlement);
-                }
-            }
+            .get(&DataKey::Dispute(dispute_id))
+            .unwrap_or_else(|| soroban_sdk::panic_with_error!(env, TreasuryError::DisputeNotFound));
+        if dispute.status != DisputeStatus::Raised {
+            soroban_sdk::panic_with_error!(env, TreasuryError::DisputeAlreadyResolved);
+        }
+        let claimant_amount = dispute
+            .amount
+            .checked_mul(claimant_bps as i128)
+            .unwrap_or_else(|| {
+                soroban_sdk::panic_with_error!(env, TreasuryError::ArithmeticOverflow)
+            })
+            / BPS_DENOMINATOR as i128;
+        let counterparty_amount = dispute.amount - claimant_amount;
+        let treasury = env.current_contract_address();
+        let token_client = token::Client::new(&env, &token_contract);
+        if claimant_amount > 0 {
+            token_client.transfer(&treasury, &dispute.claimant, &claimant_amount);
+        }
+        if counterparty_amount > 0 {
+            token_client.transfer(&treasury, &dispute.counterparty, &counterparty_amount);
         }
         Ok(())
     }
@@ -241,5 +262,45 @@ impl TreasuryContract {
             dispute,
         );
         Ok(())
+    }
+}
+
+/// Shared by `resolve_dispute` and `resolve_dispute_split`: releases `settlement_id` from
+/// `OnHold` back to `Pending` once no `Raised` dispute references it anymore.
+fn release_settlement_hold_if_no_open_disputes(env: &Env, settlement_id: u64) {
+    if let Some(mut settlement) = env
+        .storage()
+        .persistent()
+        .get::<DataKey, Settlement>(&DataKey::Settlement(settlement_id))
+    {
+        if settlement.status == SettlementStatus::OnHold {
+            let dispute_count: u64 = env
+                .storage()
+                .instance()
+                .get(&DataKey::DisputeCount)
+                .unwrap_or(0);
+            let mut has_open = false;
+            let mut i = 1u64;
+            while i <= dispute_count {
+                if let Some(d) = env
+                    .storage()
+                    .persistent()
+                    .get::<DataKey, Dispute>(&DataKey::Dispute(i))
+                {
+                    if d.settlement_id == settlement_id && d.status == DisputeStatus::Raised {
+                        has_open = true;
+                        break;
+                    }
+                }
+                i += 1;
+            }
+            if !has_open {
+                settlement.status = SettlementStatus::Pending;
+                settlement.hold_reason = SettlementHoldReason::None;
+                env.storage()
+                    .persistent()
+                    .set(&DataKey::Settlement(settlement_id), &settlement);
+            }
+        }
     }
 }

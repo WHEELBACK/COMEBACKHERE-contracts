@@ -78,6 +78,9 @@ pub enum DisputeStatus {
     ResolvedClaimant,
     ResolvedCounterparty,
     Expired,
+    /// The disputed amount was split between claimant and counterparty; see
+    /// `Dispute::claimant_share_bps` for the ratio and `resolve_dispute_split` (#456).
+    ResolvedSplit,
 }
 
 #[contracttype]
@@ -106,6 +109,9 @@ pub struct Dispute {
     pub resolution_weight: u32,
     pub resolution_for_claimant: bool,
     pub dispute_expires_at: u64,
+    /// Claimant's share of `amount` in basis points (0..=10_000), set when `status` is
+    /// `ResolvedSplit`; meaningless (always 0) for every other status. See #456.
+    pub claimant_share_bps: u32,
 }
 
 #[contracttype]
@@ -161,6 +167,14 @@ pub enum DataKey {
     WithdrawalAllowlist,
     LastRotationProposal(Address),
     PartialApprovedTotal(u64),
+    /// Admin-configured max amount withdrawable per rolling window; `0` means uncapped (#455).
+    WithdrawalLimitPerWindow,
+    /// Window length (seconds) paired with `WithdrawalLimitPerWindow`.
+    WithdrawalWindowSecs,
+    /// Start timestamp of the current withdrawal window for a given tracked address.
+    WithdrawalWindowStart(Address),
+    /// Amount withdrawn so far within the current window for a given tracked address.
+    WithdrawnInWindow(Address),
 }
 
 /// Returns the approval weight assigned to `signer`, or `0` if not registered.

@@ -114,6 +114,7 @@ impl TreasuryContract {
         let token_client = token::Client::new(&env, &token_contract);
         let balance = token_client.balance(&treasury);
         if balance > 0 {
+            enforce_withdrawal_limit(&env, &recipient, balance);
             token_client.transfer(&treasury, &recipient, &balance);
         }
         env.events()

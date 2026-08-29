@@ -24,9 +24,13 @@ The Treasury contract manages funds and settlements using a multi-signature appr
 | `unpause` | `admin` | `admin: Address` | `()` | `Unauthorized` |
 | `raise_dispute` | `claimant` | `claimant: Address, settlement_id: u64, counterparty: Address, amount: i128` | `u64` | `ContractPaused`, `Unauthorized`, `InvalidAmount` |
 | `resolve_dispute` | `admin` | `admin: Address, dispute_id: u64, in_favor_of_claimant: bool` | `()` | `Unauthorized`, `ContractPaused`, `DisputeNotFound`, `DisputeAlreadyResolved` |
+| `resolve_dispute_split` | `admin` | `admin: Address, dispute_id: u64, claimant_bps: u32, token_contract: Address` | `()` | `Unauthorized`, `ContractPaused`, `DisputeNotFound`, `DisputeAlreadyResolved`, `InvalidSplitRatio` |
 | `vote_dispute_resolution` | `signer` | `signer: Address, dispute_id: u64, in_favor_of_claimant: bool` | `()` | `ContractPaused`, `UnauthorizedSigner`, `DisputeNotFound`, `DisputeAlreadyResolved`, `ResolutionDirectionMismatch` |
 | `deposit` | `from` | `from: Address, token_contract: Address, amount: i128` | `()` | `ContractPaused`, `Unauthorized`, `InvalidAmount` |
-| `withdraw` | `to` | `to: Address, token_contract: Address, amount: i128` | `()` | `ContractPaused`, `Unauthorized`, `InvalidAmount`, `InsufficientBalance` |
+| `withdraw` | `to` | `to: Address, token_contract: Address, amount: i128` | `()` | `ContractPaused`, `Unauthorized`, `InvalidAmount`, `InsufficientBalance`, `DestinationNotAllowed`, `WithdrawalLimitExceeded` |
+| `withdraw_all` | `admin` | `admin: Address, token_contract: Address, recipient: Address` | `()` | `Unauthorized`, `NotPaused`, `WithdrawalLimitExceeded` |
+| `set_withdrawal_limit` | `admin` | `admin: Address, limit: i128, window_secs: u64` | `()` | `Unauthorized` |
+| `get_withdrawal_limit` | None | None | `(i128, u64)` | None |
 | `add_allowed_token` | `admin` | `admin: Address, token: Address` | `()` | `Unauthorized` |
 | `remove_allowed_token` | `admin` | `admin: Address, token: Address` | `()` | `Unauthorized` |
 | `get_balance` | None | `address: Address, token_contract: Address` | `i128` | None |
