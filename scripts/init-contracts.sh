@@ -2,7 +2,7 @@
 set -e
 
 # COMEBACKHERE Contract Initialization Script
-# Deploys and initializes Compliance, Invoice, and Treasury contracts on a local Soroban network.
+# Deploys and initializes Compliance, Invoice, Treasury, and Settlement Workflow contracts on a local Soroban network.
 
 NETWORK="local"
 RPC_URL="http://localhost:8000/soroban/rpc"
@@ -19,7 +19,8 @@ echo "Building contracts..."
 cargo build --target wasm32-unknown-unknown --release \
     -p comebackhere-compliance \
     -p comebackhere-invoice \
-    -p comebackhere-treasury
+    -p comebackhere-treasury \
+    -p comebackhere-settlement-workflow
 
 # 2. Setup network
 echo "Ensuring network '$NETWORK' is configured..."
@@ -76,12 +77,28 @@ stellar contract invoke \
     --network "$NETWORK" \
     -- initialize --admin "$ADMIN_ADDRESS" --threshold 1
 
+# 7. Deploy and Initialize Settlement Workflow
+echo "Deploying Settlement Workflow contract..."
+SETTLEMENT_WORKFLOW_ID=$(stellar contract deploy \
+    --wasm target/wasm32-unknown-unknown/release/settlement_workflow.wasm \
+    --source admin \
+    --network "$NETWORK")
+echo "Settlement Workflow ID: $SETTLEMENT_WORKFLOW_ID"
+
+echo "Initializing Settlement Workflow contract..."
+stellar contract invoke \
+    --id "$SETTLEMENT_WORKFLOW_ID" \
+    --source admin \
+    --network "$NETWORK" \
+    -- initialize --compliance_id "$COMPLIANCE_ID" --treasury_id "$TREASURY_ID"
+
 echo ""
 echo "============================================================"
 echo "Deployment Successful!"
 echo "============================================================"
-echo "Compliance ID: $COMPLIANCE_ID"
-echo "Invoice ID:    $INVOICE_ID"
-echo "Treasury ID:   $TREASURY_ID"
-echo "Admin Address: $ADMIN_ADDRESS"
+echo "Compliance ID:          $COMPLIANCE_ID"
+echo "Invoice ID:             $INVOICE_ID"
+echo "Treasury ID:            $TREASURY_ID"
+echo "Settlement Workflow ID: $SETTLEMENT_WORKFLOW_ID"
+echo "Admin Address:          $ADMIN_ADDRESS"
 echo "============================================================"
