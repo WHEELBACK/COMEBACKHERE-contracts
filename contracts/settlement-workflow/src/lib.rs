@@ -95,7 +95,10 @@ impl SettlementWorkflowContract {
             &token_contract,
         );
         env.events().publish(
-            (Symbol::new(&env, "settlement_workflow_executed"), settlement_id),
+            (
+                Symbol::new(&env, "settlement_workflow_executed"),
+                settlement_id,
+            ),
             (merchant.clone(), token_contract.clone()),
         );
         Ok(())
@@ -114,9 +117,9 @@ impl SettlementWorkflowContract {
         settlement_ids: Vec<u64>,
         token_contract: Address,
         merchant: Address,
-    ) -> Vec<u64> {
+    ) -> Result<Vec<u64>, TreasuryError> {
         let compliance = ComplianceClient::new(&env, &Self::compliance_id(&env));
-        compliance.require_allowed_for_treasury(&merchant).unwrap();
+        compliance.require_allowed_for_treasury(&merchant)?;
         let treasury = TreasuryOnlyClient::new(&env, &Self::treasury_id(&env));
         let mut executed = Vec::new(&env);
         for id in settlement_ids.iter() {
@@ -134,6 +137,6 @@ impl SettlementWorkflowContract {
             }
             // Invalid / already-executed / threshold-failed IDs are silently skipped.
         }
-        executed
+        Ok(executed)
     }
 }

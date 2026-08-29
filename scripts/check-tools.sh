@@ -4,8 +4,14 @@ set -e
 # Tooling Version Check Script
 # Verifies that the environment matches the required versions for COMEBACKHERE contracts.
 
-REQUIRED_RUST="1.95.0"
-REQUIRED_STELLAR_CLI="22.8.2"
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# shellcheck disable=SC1090
+set -a
+source "$ROOT_DIR/.github/versions.env"
+set +a
+
+REQUIRED_RUST="${RUST_VERSION}"
+REQUIRED_STELLAR_CLI="${STELLAR_CLI_VERSION}"
 TARGET="wasm32-unknown-unknown"
 
 echo "Checking development environment..."

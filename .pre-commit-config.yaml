@@ -16,3 +16,15 @@ repos:
         entry: scripts/check-enum-ordering.sh
         language: script
         pass_filenames: false
+      - id: check-workflow-version-pins
+        name: Check centralized workflow version pins
+        entry: scripts/check-workflow-version-pins.sh
+        language: system
+        pass_filenames: false
+      - id: slow-local-ci
+        name: slow local CI equivalent
+        entry: >
+          bash -c 'set -euo pipefail; if [ "${SKIP_SLOW_CHECKS:-0}" = "1" ]; then echo "Skipping slow pre-push checks because SKIP_SLOW_CHECKS=1"; exit 0; fi; echo "Running slow pre-push checks (cargo test --all + wasm size gate)..."; cargo test --all; cargo build --target wasm32-unknown-unknown --release; MAX_CONTRACT_SIZE=${MAX_CONTRACT_SIZE:-65536}; shopt -s nullglob; for wasm in target/wasm32-unknown-unknown/release/*.wasm; do size=$(stat --format=%s "$wasm"); if [ "$size" -gt "$MAX_CONTRACT_SIZE" ]; then echo "Contract WASM exceeds ${MAX_CONTRACT_SIZE} bytes: ${wasm##*/} (${size} bytes)"; exit 1; fi; done; echo "Slow pre-push checks passed."'
+        language: system
+        pass_filenames: false
+        stages: [pre-push]
