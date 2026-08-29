@@ -8,9 +8,9 @@ use soroban_sdk::{
     testutils::{Address as _, Events},
     Address, Env, FromVal, Symbol,
 };
-use treasury::{SettlementStatus, TreasuryContract, TreasuryContractClient};
+use treasury::{TreasuryContract, TreasuryContractClient};
 
-fn setup(env: &Env, threshold: u32) -> (TreasuryContractClient, Address, Address) {
+fn setup(env: &Env, threshold: u32) -> (TreasuryContractClient<'_>, Address, Address) {
     env.mock_all_auths();
     let admin = Address::generate(env);
     let id = env.register_contract(None, TreasuryContract);

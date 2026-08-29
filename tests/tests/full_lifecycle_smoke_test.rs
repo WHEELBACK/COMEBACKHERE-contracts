@@ -64,7 +64,6 @@ impl ComplianceGatedSettlement {
     }
 }
 
-use compliance_gated_settlement::{ComplianceGatedSettlement, ComplianceGatedSettlementClient};
 
 struct TestContext {
     _env: Env,

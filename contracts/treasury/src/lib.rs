@@ -12,6 +12,7 @@ use settlement::{require_authorized_signer, signer_weight};
 use soroban_sdk::{contract, contractimpl, token, Address, Env, Symbol, Vec};
 
 impl TreasuryError {
+    #[allow(dead_code)]
     fn panic(&self) -> ! {
         match self {
             TreasuryError::AlreadyInitialized => panic!("AlreadyInitialized"),

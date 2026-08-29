@@ -1,7 +1,7 @@
 use soroban_sdk::{testutils::Address as _, Address, Env};
 use treasury::{TreasuryContract, TreasuryContractClient};
 
-fn setup_treasury(env: &Env, threshold: u32) -> (TreasuryContractClient, Address, Address) {
+fn setup_treasury(env: &Env, threshold: u32) -> (TreasuryContractClient<'_>, Address, Address) {
     env.mock_all_auths();
     let admin = Address::generate(env);
     let contract_id = env.register_contract(None, TreasuryContract);
@@ -62,7 +62,7 @@ fn unauthorized_signer_cannot_approve_partial_settlement() {
 #[should_panic(expected = "UnauthorizedSigner")]
 fn unauthorized_signer_cannot_execute_settlement() {
     let env = Env::default();
-    let (client, admin, contract_id) = setup_treasury(&env, 1);
+    let (client, admin, _contract_id) = setup_treasury(&env, 1);
     
     // Create and approve a settlement
     let merchant = Address::generate(&env);

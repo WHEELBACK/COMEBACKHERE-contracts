@@ -1,7 +1,7 @@
 use soroban_sdk::{testutils::Address as _, Address, Env};
 use treasury::{TreasuryContract, TreasuryContractClient};
 
-fn setup_with_settlements(env: &Env, n: u64) -> (TreasuryContractClient, Address) {
+fn setup_with_settlements(env: &Env, n: u64) -> (TreasuryContractClient<'_>, Address) {
     let admin = Address::generate(env);
     let contract_id = env.register_contract(None, TreasuryContract);
     let client = TreasuryContractClient::new(env, &contract_id);

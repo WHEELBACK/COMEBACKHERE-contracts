@@ -128,7 +128,7 @@ impl ComplianceContract {
         reason: Option<Bytes>,
     ) -> Result<(), ContractError> {
         Self::require_admin(&env, &admin)?;
-        let was_blocked: bool = env
+        let _was_blocked: bool = env
             .storage()
             .persistent()
             .get(&DataKey::Blocked(address.clone()))
@@ -494,6 +494,7 @@ impl ComplianceContract {
     }
 
     /// Compute the current [`AddressState`] for a single address without auth.
+    #[allow(dead_code)]
     fn address_state(env: &Env, addr: &Address) -> AddressState {
         let blocked: bool = env
             .storage()

@@ -448,6 +448,20 @@ fn test_release_escrow_transitions_paid_to_released() {
     let (env, admin, client) = setup();
     let merchant = Address::generate(&env);
     let payer = Address::generate(&env);
+    let id = client.create_invoice(
+        &merchant,
+        &10_000_000,
+        &10_250_000,
+        &3600,
+        &MaybeBytes::None,
+        &MaybeBytes::None,
+        &0,
+    );
+    client.mark_paid(&admin, &id, &payer);
+    client.release_escrow(&admin, &id);
+    assert_eq!(client.get_invoice(&id).status, InvoiceStatus::Released);
+}
+
 #[test]
 fn test_cancel_invoice_transitions_to_cancelled() {
     let (env, _admin, client) = setup();
@@ -459,6 +473,7 @@ fn test_cancel_invoice_transitions_to_cancelled() {
         &3600,
         &MaybeBytes::None,
         &MaybeBytes::None,
+        &0,
     );
 
     client.cancel_invoice(&merchant, &invoice_id);
@@ -483,6 +498,7 @@ fn test_cancelled_invoice_cannot_be_marked_paid() {
         &3600,
         &MaybeBytes::None,
         &MaybeBytes::None,
+        &0,
     );
 
     client.cancel_invoice(&merchant, &invoice_id);
@@ -498,9 +514,10 @@ fn test_cancelled_invoice_cannot_be_marked_paid() {
 
 #[test]
 fn test_cancel_invoice_unauthorized_rejected() {
-    let (env, _admin, client) = setup();
+    let (env, admin, client) = setup();
     let merchant = Address::generate(&env);
     let unauthorized = Address::generate(&env);
+    let payer = Address::generate(&env);
     let id = client.create_invoice(
         &merchant,
         &10_000_000,
@@ -513,6 +530,15 @@ fn test_cancel_invoice_unauthorized_rejected() {
     client.mark_paid(&admin, &id, &payer);
     client.release_escrow(&admin, &id);
     assert_eq!(client.get_invoice(&id).status, InvoiceStatus::Released);
+
+    let err = client
+        .try_cancel_invoice(&unauthorized, &id)
+        .unwrap_err()
+        .unwrap();
+    assert_eq!(err, InvoiceError::Unauthorized);
+
+    let invoice = client.get_invoice(&id);
+    assert_eq!(invoice.status, InvoiceStatus::Released);
 }
 
 #[test]
@@ -549,19 +575,6 @@ fn test_release_escrow_requires_admin() {
     );
     client.mark_paid(&admin, &id, &payer);
     assert!(client.try_release_escrow(&rogue, &id).is_err());
-}
-
-// ABI snapshot comparison
-    );
-
-    let err = client
-        .try_cancel_invoice(&unauthorized, &id)
-        .unwrap_err()
-        .unwrap();
-    assert_eq!(err, InvoiceError::Unauthorized);
-
-    let invoice = client.get_invoice(&id);
-    assert_eq!(invoice.status, InvoiceStatus::Pending);
 }
 
 // ABI snapshot comparison: asserts abis/invoice.json stays in sync with the

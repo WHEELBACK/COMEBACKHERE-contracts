@@ -213,7 +213,7 @@ fn settlement_rejected_when_merchant_blocked() {
 
     // Then explicitly block — block_address is permitted while paused or unpaused
     // and overrides any existing allow status.
-    compliance.block_address(&admin, &merchant);
+    compliance.block_address(&admin, &merchant, &None);
 
     let settlement_id = treasury.propose_settlement(&admin, &merchant, &10_000_000);
 
@@ -263,7 +263,7 @@ fn blocked_merchant_rejected_even_when_already_settled() {
         .is_ok());
 
     // Now block the merchant and create a *new* settlement.
-    compliance.block_address(&admin, &merchant);
+    compliance.block_address(&admin, &merchant, &None);
 
     let settlement_id_2 = treasury.propose_settlement(&admin, &merchant, &5_000_000);
     // Mint additional tokens
@@ -297,7 +297,7 @@ fn execute_settlement_fails_when_merchant_blocked_mid_flight() {
     token.mint(&treasury_id, &10_000_000);
 
     // Block the merchant after the settlement is already proposed (mid-flight).
-    compliance.block_address(&admin, &merchant);
+    compliance.block_address(&admin, &merchant, &None);
 
     let workflow_id = env.register_contract(None, SettlementWorkflow);
     let workflow = SettlementWorkflowClient::new(&env, &workflow_id);

@@ -1,4 +1,4 @@
-use invoice::{InvoiceContract, InvoiceContractClient};
+use invoice::{InvoiceContract, InvoiceContractClient, MaybeBytes};
 use soroban_sdk::{testutils::Address as _, Address, Env};
 
 fn setup() -> (Env, Address, InvoiceContractClient<'static>) {
@@ -15,7 +15,17 @@ fn setup() -> (Env, Address, InvoiceContractClient<'static>) {
 fn test_zero_amount_rejected() {
     let (env, _, client) = setup();
     let merchant = Address::generate(&env);
-    assert!(client.try_create_invoice(&merchant, &0, &0, &3600).is_err());
+    assert!(client
+        .try_create_invoice(
+            &merchant,
+            &0,
+            &0,
+            &3600,
+            &MaybeBytes::None,
+            &MaybeBytes::None,
+            &0,
+        )
+        .is_err());
 }
 
 #[test]
@@ -23,7 +33,15 @@ fn test_negative_amount_rejected() {
     let (env, _, client) = setup();
     let merchant = Address::generate(&env);
     assert!(client
-        .try_create_invoice(&merchant, &-1, &-1, &3600)
+        .try_create_invoice(
+            &merchant,
+            &-1,
+            &-1,
+            &3600,
+            &MaybeBytes::None,
+            &MaybeBytes::None,
+            &0,
+        )
         .is_err());
 }
 
@@ -32,7 +50,15 @@ fn test_large_negative_amount_rejected() {
     let (env, _, client) = setup();
     let merchant = Address::generate(&env);
     assert!(client
-        .try_create_invoice(&merchant, &i128::MIN, &i128::MIN, &3600)
+        .try_create_invoice(
+            &merchant,
+            &i128::MIN,
+            &i128::MIN,
+            &3600,
+            &MaybeBytes::None,
+            &MaybeBytes::None,
+            &0,
+        )
         .is_err());
 }
 
@@ -42,7 +68,15 @@ fn test_gross_less_than_amount_rejected() {
     let (env, _, client) = setup();
     let merchant = Address::generate(&env);
     assert!(client
-        .try_create_invoice(&merchant, &10_000_000, &9_999_999, &3600)
+        .try_create_invoice(
+            &merchant,
+            &10_000_000,
+            &9_999_999,
+            &3600,
+            &MaybeBytes::None,
+            &MaybeBytes::None,
+            &0,
+        )
         .is_err());
 }
 
@@ -51,7 +85,15 @@ fn test_zero_gross_with_positive_amount_rejected() {
     let (env, _, client) = setup();
     let merchant = Address::generate(&env);
     assert!(client
-        .try_create_invoice(&merchant, &10_000_000, &0, &3600)
+        .try_create_invoice(
+            &merchant,
+            &10_000_000,
+            &0,
+            &3600,
+            &MaybeBytes::None,
+            &MaybeBytes::None,
+            &0,
+        )
         .is_err());
 }
 
@@ -60,7 +102,15 @@ fn test_negative_gross_rejected() {
     let (env, _, client) = setup();
     let merchant = Address::generate(&env);
     assert!(client
-        .try_create_invoice(&merchant, &10_000_000, &-1, &3600)
+        .try_create_invoice(
+            &merchant,
+            &10_000_000,
+            &-1,
+            &3600,
+            &MaybeBytes::None,
+            &MaybeBytes::None,
+            &0,
+        )
         .is_err());
 }
 
@@ -68,7 +118,17 @@ fn test_negative_gross_rejected() {
 fn test_amount_one_gross_zero_rejected() {
     let (env, _, client) = setup();
     let merchant = Address::generate(&env);
-    assert!(client.try_create_invoice(&merchant, &1, &0, &3600).is_err());
+    assert!(client
+        .try_create_invoice(
+            &merchant,
+            &1,
+            &0,
+            &3600,
+            &MaybeBytes::None,
+            &MaybeBytes::None,
+            &0,
+        )
+        .is_err());
 }
 
 #[test]
@@ -100,7 +160,15 @@ fn test_amount_matrix() {
         let client = InvoiceContractClient::new(&env, &contract_id);
         client.initialize(&admin);
         let merchant = Address::generate(&env);
-        let result = client.try_create_invoice(&merchant, &amount, &gross, &3600);
+        let result = client.try_create_invoice(
+            &merchant,
+            &amount,
+            &gross,
+            &3600,
+            &MaybeBytes::None,
+            &MaybeBytes::None,
+            &0,
+        );
         if expect_valid {
             assert!(
                 result.is_ok(),
@@ -120,6 +188,14 @@ fn test_overflow_amount_i128_max_accepted() {
     // i128::MAX is a valid positive amount when gross == amount
     let (env, _, client) = setup();
     let merchant = Address::generate(&env);
-    let result = client.try_create_invoice(&merchant, &i128::MAX, &i128::MAX, &3600);
+    let result = client.try_create_invoice(
+        &merchant,
+        &i128::MAX,
+        &i128::MAX,
+        &3600,
+        &MaybeBytes::None,
+        &MaybeBytes::None,
+        &0,
+    );
     assert!(result.is_ok());
 }

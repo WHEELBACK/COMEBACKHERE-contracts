@@ -11,7 +11,7 @@ name = "compliance_client"
 
 [dependencies]
 soroban-sdk.workspace = true
+compliance = { package = "comebackhere-compliance", path = "../../contracts/compliance" }
 
 [dev-dependencies]
 soroban-sdk = { workspace = true, features = ["testutils"] }
-compliance = { package = "comebackhere-compliance", path = "../../contracts/compliance" }
