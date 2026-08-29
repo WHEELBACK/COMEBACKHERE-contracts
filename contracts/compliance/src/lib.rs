@@ -59,8 +59,14 @@ pub enum DataKey {
     AllowCount,
     /// Running count of addresses that have ever been blocked.
     BlockCount,
-    /// Reserved for a future tiered-compliance model; not yet used by any entrypoint.
+    /// Compliance tier recorded via `allow_address_with_tier`; `0` (basic KYC) if unset.
+    /// See `get_address_tier`.
     Tier(Address),
+    /// Optional jurisdiction code (e.g. ISO 3166 alpha-2, such as `US` or `EU`) under
+    /// which an address's allow/block determination applies. Set via `set_jurisdiction`;
+    /// unset (`None`) for addresses tracked before this field existed. Purely metadata —
+    /// does not affect `is_allowed`.
+    Jurisdiction(Address),
 }
 
 /// Coarse classification of an address's compliance state.
@@ -340,6 +346,42 @@ impl ComplianceContract {
             .persistent()
             .get(&DataKey::Tier(address))
             .unwrap_or(0u32)
+    }
+
+    /// Sets (or overwrites) the jurisdiction code under which `address`'s compliance
+    /// determination applies, e.g. an ISO 3166 alpha-2 code such as `US` or `EU`.
+    /// Purely metadata — does not affect `is_allowed`. Independent of `Tier`.
+    ///
+    /// # Errors
+    /// - [`ContractError::Unauthorized`] if `admin` is not the stored administrator.
+    /// - [`ContractError::ContractPaused`] if the contract is paused.
+    ///
+    /// # Events
+    /// Publishes `("jurisdiction_set",) → (address, jurisdiction_code)`.
+    pub fn set_jurisdiction(
+        env: Env,
+        admin: Address,
+        address: Address,
+        jurisdiction_code: Symbol,
+    ) -> Result<(), ContractError> {
+        Self::require_admin(&env, &admin)?;
+        Self::require_not_paused(&env)?;
+        env.storage()
+            .persistent()
+            .set(&DataKey::Jurisdiction(address.clone()), &jurisdiction_code);
+        env.events().publish(
+            (Symbol::new(&env, "jurisdiction_set"),),
+            (address, jurisdiction_code),
+        );
+        Ok(())
+    }
+
+    /// Returns the stored jurisdiction code for `address`, or `None` if none has been
+    /// set — including for addresses tracked before this field existed.
+    pub fn get_jurisdiction(env: Env, address: Address) -> Option<Symbol> {
+        env.storage()
+            .persistent()
+            .get(&DataKey::Jurisdiction(address))
     }
 
     pub fn bulk_block_addresses(

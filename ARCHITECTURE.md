@@ -1,5 +1,11 @@
 > **Glossary:** For definitions of terms used throughout this document and the contract READMEs, see [`docs/GLOSSARY.md`](docs/GLOSSARY.md).
 
+> **Economic parameters:** `Treasury::execute_settlement` pays out the full, exact
+> proposed amount — there is no protocol fee or comparable deduction. This is a
+> deliberate design choice, not an unaddressed gap; see
+> [`docs/economic-parameters.md`](docs/economic-parameters.md) for the rationale and
+> the conditions under which it should be revisited.
+
 ## Contract Size Budget
 
 The CI size gate (`contract-size.yml`) rejects any compiled WASM that exceeds **65 536 bytes (64 KiB)**.
@@ -109,6 +115,8 @@ sequenceDiagram
 | `Allowed(Address)` | Persistent | `bool` | Whether an address is on the allow-list |
 | `Blocked(Address)` | Persistent | `bool` | Whether an address is blocked (overrides allow) |
 | `AllowedUntil(Address)` | Persistent | `u64` | Optional expiry timestamp for a temporary allow |
+| `Tier(Address)` | Persistent | `u32` | Compliance tier set via `allow_address_with_tier`; `0` (basic KYC) if unset. Metadata only — not consulted by `is_allowed` |
+| `Jurisdiction(Address)` | Persistent | `Symbol` | Optional jurisdiction code (e.g. ISO 3166 alpha-2) set via `set_jurisdiction`. Metadata only — not consulted by `is_allowed` |
 
 ## Error-Code Ranges per Contract
 
