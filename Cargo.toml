@@ -24,6 +24,14 @@ stellar-xdr = "0.0.18"
 
 [profile.release]
 opt-level = "z"
+# Deliberate, confirmed tradeoff: keep overflow checking enabled in release
+# builds even though this is a real, measured size cost (disabling it saved
+# ~768 bytes on treasury's compiled wasm alone during the treasury wasm-size
+# investigation, and even then didn't fully close the size gap on its own).
+# These are financial contracts handling real settlement amounts, where an
+# undetected integer overflow could have serious consequences, so safety is
+# prioritized over the size savings here. Do not disable this as part of a
+# future size-optimization pass without re-confirming that tradeoff.
 overflow-checks = true
 debug = 0
 strip = "symbols"
