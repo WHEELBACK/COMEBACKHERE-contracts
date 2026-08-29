@@ -15,6 +15,7 @@ The Treasury contract manages funds and settlements using a multi-signature appr
 | `execute_settlement` | `signer` | `signer: Address, settlement_id: u64, token_contract: Address` | `()` | `ContractPaused`, `UnauthorizedSigner`, `SettlementNotFound`, `SettlementOnHold`, `AlreadyExecuted`, `ThresholdNotConfigured`, `ThresholdNotMet`, `InvalidTokenContract`, `TokenNotAllowed` |
 | `partially_execute_settlement` | `signer` | `signer: Address, settlement_id: u64, partial_amount: i128, token_contract: Address` | `()` | `ContractPaused`, `UnauthorizedSigner`, `SettlementNotFound`, `AlreadyExecuted`, `ThresholdNotConfigured`, `ThresholdNotMet`, `InvalidTokenContract`, `InvalidAmount` |
 | `cancel_settlement` | `signer` | `signer: Address, settlement_id: u64` | `()` | `ContractPaused`, `UnauthorizedSigner`, `SettlementNotFound`, `SettlementNotCancellable` |
+| `force_cancel_settlement` | `admin` | `admin: Address, settlement_id: u64` | `()` | `Unauthorized`, `SettlementNotFound`, `ForceCancelNotAllowed` |
 | `get_pending_settlements` | None | None | `Vec<Settlement>` | None |
 | `get_pending_settlements_page` | None | `start: u64, limit: u64` | `Vec<Settlement>` | None |
 | `get_settlement` | None | `settlement_id: u64` | `Settlement` | `SettlementNotFound` |
@@ -32,7 +33,7 @@ The Treasury contract manages funds and settlements using a multi-signature appr
 | `get_withdrawal_limit` | None | None | `(i128, u64)` | None |
 | `add_allowed_token` | `admin` | `admin: Address, token: Address` | `()` | `Unauthorized` |
 | `remove_allowed_token` | `admin` | `admin: Address, token: Address` | `()` | `Unauthorized` |
-| `get_balance` | None | `address: Address` | `i128` | None |
+| `get_balance` | None | `address: Address, token_contract: Address` | `i128` | None |
 | `get_allowed_tokens` | None | None | `Vec<Address>` | None |
 | `propose_signer_rotation` | `proposer` | `proposer: Address, old_signer: Address, new_signer: Address` | `u64` | `UnauthorizedSigner` |
 | `approve_signer_rotation` | `approver` | `approver: Address, rotation_id: u64` | `SignerRotationProposal` | `UnauthorizedSigner`, `RotationNotFound`, `RotationAlreadyExecuted` |
@@ -99,6 +100,19 @@ stellar contract invoke \
 
 ---
 
+## Multi-token deposit accounting (#448)
+
+Deposit balances are stored under `DataKey::Balance(holder, token_contract)` in
+`crates/multisig/src/lib.rs` — every entry is keyed by *both* the depositor/withdrawer address
+and the token contract, so balances for concurrently-allowlisted tokens are segregated and never
+mix. `deposit`, `batch_deposit`, `withdraw`, and `get_balance` all read/write this per-(holder,
+token) bucket. Note `execute_settlement`/`partially_execute_settlement` don't consult
+`DataKey::Balance` at all — they pay merchants directly out of the treasury's on-chain token
+balance via `token::Client::transfer`, so the deposit ledger and the settlement flow are
+independent accounting paths by design.
+
+---
+
 ## Settlement Hold Reasons
 
 `SettlementHoldReason` (defined in `crates/multisig/src/lib.rs`) is attached to a settlement via `hold_settlement` and cleared via `release_hold`. It records why a settlement was paused so operators and auditors can see which off-chain process is responsible for lifting the hold.
@@ -110,3 +124,9 @@ stellar contract invoke \
 | `FraudCheck` | Suspicious activity is detected on the settlement or associated merchant. | Fraud detection / risk system |
 | `KycPending` | The merchant or counterparty has not completed KYC verification. | KYC/identity verification process |
 | `AdminHold` | An operator manually pauses a settlement for a reason not covered above. | Manual admin action |
+
+---
+
+## Emergency force-cancel
+
+`force_cancel_settlement` (see #457) is an emergency-only admin override for a settlement that is permanently stuck in `Pending` or `OnHold` and unreachable through the normal `cancel_settlement`/dispute-resolution paths — for example when the signer weight required to reach quorum has become unavailable. Unlike `cancel_settlement`, it requires only `admin` auth rather than signer quorum, which is exactly why it must be used sparingly and only as a last resort: confirm normal recovery paths are genuinely unavailable before calling it. It force-cancels one specifically identified settlement by ID only — it never touches signer weights, thresholds, or other settlements. Every call emits a distinct `settlement_force_cancelled` event (separate from `settlement_cancelled`) carrying the invoking admin's address for audit purposes. If an admin-action timelock lands in this repo, this entrypoint should be gated behind it.

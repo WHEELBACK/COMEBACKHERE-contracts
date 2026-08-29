@@ -327,6 +327,7 @@ fn signer_rotation_proposal_struct_shape_is_unchanged() {
         approvals,
         approval_weight,
         status,
+        captured_old_weight,
     } = proposal;
 
     assert_eq!(id, rid);
@@ -335,4 +336,5 @@ fn signer_rotation_proposal_struct_shape_is_unchanged() {
     assert!(approvals.contains(&admin));
     assert!(approval_weight > 0);
     assert_rotation_status_exhaustive(status);
+    assert!(captured_old_weight > 0);
 }

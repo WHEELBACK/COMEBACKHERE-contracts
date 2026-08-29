@@ -1,0 +1,82 @@
+name: Check Contract Cross-Dependencies
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+jobs:
+  check-cross-deps:
+    name: No cross-contract path dependencies
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Fail if any contract depends on another contract via path
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          found_violation=0
+
+          for cargo_toml in contracts/*/Cargo.toml; do
+            crate_dir=$(dirname "$cargo_toml")
+            crate_name=$(basename "$crate_dir")
+
+            # Extract only the [dependencies] section (stop at the next section header).
+            # We use Python for reliable TOML-section parsing.
+            python3 - "$cargo_toml" "$crate_name" <<'PYEOF'
+          import sys, re
+
+          cargo_toml_path = sys.argv[1]
+          crate_name = sys.argv[2]
+
+          with open(cargo_toml_path) as f:
+              content = f.read()
+
+          # Split into sections by [section-header] boundaries.
+          # We want lines belonging to [dependencies] but NOT [dev-dependencies].
+          section_pattern = re.compile(r'^\[([^\]]+)\]', re.MULTILINE)
+          sections = list(section_pattern.finditer(content))
+
+          deps_lines = []
+          for i, match in enumerate(sections):
+              section_title = match.group(1).strip()
+              # Only capture plain [dependencies], not [dev-dependencies] or [build-dependencies]
+              if section_title == 'dependencies':
+                  start = match.end()
+                  end = sections[i + 1].start() if i + 1 < len(sections) else len(content)
+                  deps_lines.append(content[start:end])
+
+          violations = []
+          for block in deps_lines:
+              for line in block.splitlines():
+                  # Look for path = "..." pointing into contracts/
+                  path_match = re.search(r'path\s*=\s*"([^"]*)"', line)
+                  if path_match:
+                      path_val = path_match.group(1)
+                      # Normalise: strip leading ../
+                      # A path pointing to another contract starts with ../../contracts/
+                      # or ../contracts/ depending on nesting depth, or just contracts/
+                      # We flag any path component that contains "contracts/"
+                      # but is NOT the crate itself.
+                      if re.search(r'(^|/)contracts/', path_val):
+                          # Extract the dependency alias/name from the line
+                          dep_name = line.strip().split('=')[0].strip()
+                          violations.append((dep_name, path_val))
+
+          if violations:
+              print(f"ERROR: Contract '{crate_name}' has cross-contract path dependencies")
+              print(f"  File: {cargo_toml_path}")
+              for dep_name, path_val in violations:
+                  print(f"  Dependency '{dep_name}' -> path = \"{path_val}\"")
+              print()
+              print("Cross-contract path dependencies in [dependencies] are forbidden.")
+              print("Extract shared types into a crate under crates/ instead.")
+              sys.exit(1)
+          PYEOF
+
+          done
+
+          echo "All contracts/*/Cargo.toml passed the cross-dependency check."
