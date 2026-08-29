@@ -119,6 +119,41 @@ make update-abi-snapshots
 just snapshot
 ```
 
+## Changing `crates/multisig`
+
+`crates/multisig` is a shared dependency: `contracts/treasury` re-exports its
+contract types (`Settlement`, `Dispute`, `SettlementStatus`, `DisputeStatus`,
+`RotationStatus`, `SettlementHoldReason`, `SignerRotationProposal`,
+`TreasuryError`, ...) directly through treasury's own public ABI. Because
+that re-export is a normal Rust `pub use`, a semver-compatible change to one
+of those types (a renamed field, an added or reordered enum variant, a
+changed discriminant) compiles cleanly but can silently change treasury's
+on-chain ABI with no compiler error to catch it — see issue #68.
+
+The enforcement mechanism for this lives entirely in
+[`contracts/treasury/tests/multisig_version_lock_test.rs`](contracts/treasury/tests/multisig_version_lock_test.rs).
+That file exhaustively matches/destructures every ABI-relevant multisig type
+with no wildcard arm and no `..` struct spread, so it fails to *compile* the
+moment one of those shapes changes. If you're touching `crates/multisig` for
+any reason, expect to go through this process:
+
+1. Make your change to `crates/multisig`.
+2. Try to compile `contracts/treasury`'s tests. `multisig_version_lock_test.rs`
+   will fail to compile if your change touched any exhaustively-matched
+   field or variant.
+3. Update every match arm / struct destructure in that file until it compiles
+   again against the new shape. This is a deliberate manual step — it forces
+   a human to look at the ABI impact of the change, not just accept whatever
+   the compiler allows.
+4. Only once it compiles, regenerate the treasury ABI snapshot (see "ABI
+   snapshots" above) and bump both `crates/multisig/Cargo.toml`'s
+   `version` and the test file's `EXPECTED_MULTISIG_VERSION` constant
+   together, in the same commit.
+
+Read the doc comment at the top of `multisig_version_lock_test.rs` for the
+full rationale; this section only summarizes it so the process is
+discoverable before you break the compile gate, not after.
+
 ---
 
 ## Cross-contract calls — use the thin `#[contractclient]` client

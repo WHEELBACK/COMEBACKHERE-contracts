@@ -1,3 +1,6 @@
+#[path = "reentrancy_suite/malicious_compliance.rs"]
+mod malicious_compliance;
+
 use compliance::{ComplianceContract, ComplianceContractClient};
 use settlement_workflow::{
     SettlementWorkflowContract, SettlementWorkflowContractClient, SettlementWorkflowError,
