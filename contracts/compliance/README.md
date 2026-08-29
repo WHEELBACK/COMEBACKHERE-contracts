@@ -83,37 +83,87 @@ Unlike `is_allowed`, it does not consult `BlockedUntil` — a block that has aut
 by timestamp still reads as `true` here until `clear_address` (or an equivalent state
 change) clears the `Blocked` key.
 
-## Compliance tiers
+---
 
-`allow_address_with_tier` allows an address (identically to `allow_address`) and
-additionally records a `u32` tier under `DataKey::Tier(address)`. Tier is a bare
-numeric convention with no on-chain enforcement:
+## `AddressState` transition diagram
 
-- `0` — basic KYC (also the default returned by `get_address_tier` for any address
-  that has never had a tier set, including addresses allowed via the plain
-  `allow_address` entrypoint).
-- Higher values are reserved for the caller's own scheme (e.g. `1` = enhanced KYC,
-  `2` = institutional). This contract does not interpret tier values beyond storing
-  and returning them.
+`AddressState` (`Allowed` / `Blocked` / `Expired`) is the coarse, computed
+classification returned by `address_status` and `export_snapshot*` (see
+`address_state` internally). It is derived from the raw `Allowed(Address)`,
+`Blocked(Address)`, and `AllowedUntil(Address)` storage flags — there is no
+separate stored "state" field, so every transition below is really a
+transition in those underlying flags. This complements `ARCHITECTURE.md`'s
+sequence diagram (which shows *inter*-contract call flow) with the
+*intra*-contract state machine for a single tracked address, per #56.
 
-The tier is stored independently of the allow/block state and is **not** consulted
-by `is_allowed` — it exists purely as metadata for downstream callers (e.g. the
-treasury contract, or an off-chain policy engine) to read via `get_address_tier` and
-apply their own tier-based rules (such as differing transaction limits per tier).
-Clearing or re-allowing an address via `allow_address`, `clear_address`, etc. does
-not reset its stored tier.
+```mermaid
+stateDiagram-v2
+    [*] --> Untracked
 
-## Jurisdiction metadata
+    Untracked --> Allowed: allow_address / allow_address_with_tier\n(permanent)
+    Untracked --> Allowed: allow_address_until\n(temporary, AllowedUntil=T)
+    Untracked --> Blocked: block_address\n(permanent, reason optional)
+    Untracked --> Blocked: block_address_until\n(auto-expiring, BlockedUntil=T)
 
-`set_jurisdiction` records an optional jurisdiction code (e.g. an ISO 3166 alpha-2
-code such as `US` or `EU`) under `DataKey::Jurisdiction(address)`, describing which
-regulatory context an address's allow/block determination was made under and is
-meant to apply to. Like tiers, this is pure metadata:
+    Allowed --> Allowed: allow_address_until\n(renews / shortens expiry)
+    Allowed --> Allowed: allow_address\n(clears expiry, becomes permanent)
+    Allowed --> Blocked: block_address / block_address_until
+    Allowed --> Untracked: revoke_allow\n(soft de-list, no block)
 
-- It does not affect `is_allowed`, `is_blocked`, or any other compliance-gate logic
-  in this contract — a jurisdiction-aware policy must be enforced by the caller.
-- `get_jurisdiction` returns `None` for any address that has never had a jurisdiction
-  set, including every address tracked before this field existed — there is no
-  default jurisdiction and no migration is required for existing data.
-- Setting a new jurisdiction code overwrites any previously stored value for that
-  address; there is no history of prior jurisdiction assignments.
+    Allowed --> Expired: [is_allowed() reads] ledger.timestamp >= AllowedUntil
+    Expired --> Untracked: sweep_expired\n(clears Allowed + AllowedUntil)
+    Expired --> Allowed: allow_address / allow_address_until\n(re-allow before or after sweep)
+    Expired --> Blocked: block_address / block_address_until
+
+    Blocked --> Allowed: clear_address\n(clears Blocked+BlockedUntil, sets Allowed=true)
+    Blocked --> Blocked: block_address_until\n(adds/updates auto-expiry)
+
+    note right of Expired
+        Expired is not a stored flag. It only exists as
+        is_allowed()'s computed result once AllowedUntil
+        has passed. The raw Allowed flag stays true, and
+        address_status()/export_snapshot() report Expired,
+        until an explicit allow_address*, sweep_expired, or
+        block_address* call changes the underlying flags.
+    end note
+
+    note right of Blocked
+        An auto-expiring block (block_address_until) has NO
+        sweep equivalent: once BlockedUntil passes, is_allowed()
+        treats the address as unblocked (falls through to the
+        Allowed check per the precedence rules above), but the
+        raw Blocked flag and is_blocked() still read true until
+        clear_address is called explicitly. This is the
+        asymmetry with Expired/sweep_expired above.
+    end note
+```
+
+**Reading `Untracked` above:** it is not a real `AddressState` value — the
+enum only has `Allowed` / `Blocked` / `Expired`. It stands in here for "no
+`Allowed` flag and no `Blocked` flag set," which is how a never-seen address,
+or one that was `revoke_allow`'d, reads today. Note that `address_status`
+and `export_snapshot*` classify this case as `AddressState::Blocked` (their
+`!allowed` fallthrough), even though `is_blocked()` on the same address
+returns `false`. Callers relying on `AddressState` alone cannot distinguish
+"actually on the blocklist" from "was simply never allowed" — use
+`is_blocked` directly when that distinction matters.
+
+### Which entrypoints work while the contract is paused
+
+Per the "Emergency policy" comment in `lib.rs`, `block_address`,
+`block_address_until`, `bulk_block_addresses`, and `clear_address` do **not**
+call `require_not_paused` — an admin can block or remediate addresses while
+the contract is paused, without unpausing first. Every entrypoint that grants
+or extends access (`allow_address`, `allow_address_with_tier`,
+`allow_address_until`, `bulk_allow_addresses`, `revoke_allow`) does check
+`require_not_paused` and is rejected with `ContractPaused` while paused.
+`is_allowed` and `is_blocked` themselves are reads and are never gated by
+`Paused` at all — see `ARCHITECTURE.md`'s note that a compliance pause only
+blocks list *mutations*, not `is_allowed` reads.
+
+| Entrypoint | Permitted while paused? |
+|---|---|
+| `allow_address`, `allow_address_with_tier`, `allow_address_until`, `bulk_allow_addresses`, `revoke_allow` | No — `ContractPaused` |
+| `block_address`, `block_address_until`, `bulk_block_addresses`, `clear_address` | Yes (emergency remediation policy) |
+| `is_allowed`, `is_blocked`, `address_status`, `export_snapshot*` | Yes — reads are never gated by `Paused` |
+| `sweep_expired` | Yes — no `require_not_paused` call in its implementation |

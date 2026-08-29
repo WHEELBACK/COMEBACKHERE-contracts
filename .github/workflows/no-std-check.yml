@@ -1,0 +1,33 @@
+name: no_std Check
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  no-std-check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.95.0"
+          targets: wasm32-unknown-unknown
+
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: no-std-check
+
+      - name: Check comebackhere-multisig (wasm32)
+        run: cargo check --target wasm32-unknown-unknown -p comebackhere-multisig
+
+      - name: Check comebackhere-protocol-errors (wasm32)
+        run: cargo check --target wasm32-unknown-unknown -p comebackhere-protocol-errors

@@ -212,6 +212,10 @@ A settlement lifecycle: proposed by a signer → approved by additional signers 
 
 The maximum lifetime of a `Pending` settlement: **7 days** (`7 * 24 * 60 * 60` seconds), defined as `SETTLEMENT_TTL` in `contracts/treasury/src/settlements.rs`. After this period elapses, an admin may call `expire_settlement` to transition the settlement to `Expired`. The check is time-based: `ledger.timestamp() > proposed_at + SETTLEMENT_TTL`.
 
+### SettlementWorkflow (orchestration layer)
+
+The `SettlementWorkflow` contract (`contracts/settlement-workflow`), the on-chain enforcement point for the [compliance gate](#compliance-gate). It pins a compliance and a treasury contract instance once at `initialize` and, on `execute_with_compliance` / `execute_with_compliance_batch`, performs the two-hop call chain: first `Compliance::is_allowed(merchant)`, then — only if that passes — `Treasury::execute_settlement(...)`, authorizing itself as the calling treasury signer. If the compliance check fails, the call returns `TreasuryError::ComplianceCheckFailed` without touching the treasury contract at all, rather than panicking or reusing a generic `Unauthorized` error. See also: [Compliance gate](#compliance-gate).
+
 ### Signer
 
 An `Address` registered in the treasury contract with a non-zero weight via `set_signer(admin, signer, weight)`. Signers are tracked in `DataKey::SignerList` (instance, `Vec<Address>`) and looked up by `DataKey::Signer(Address)` (instance, `u32` weight). A signer with weight `0` is effectively deactivated. Signers participate in settlement approvals, dispute resolution votes, and signer rotation proposals.
@@ -245,6 +249,10 @@ An admin-managed `Vec<Address>` stored under `DataKey::TokenAllowlist` (instance
 A time-bound compliance allowance set via `Compliance::allow_address_until(admin, address, expires_at)`. Stored under `DataKey::AllowedUntil(Address)` (persistent) as a UNIX timestamp. While `ledger.timestamp() < expires_at`, `is_allowed` returns `true` for the address (assuming it is not blocked). After `expires_at` is reached, `is_allowed` returns `false` automatically — no admin action is required to expire the allowance.
 
 ---
+
+### TreasuryError (extended variants)
+
+`TreasuryError` (defined in `crates/multisig/src/lib.rs`) is the treasury contract's shared `#[contracterror]` enum. Variants are appended, never renumbered, to keep discriminants stable for existing on-chain state (see `scripts/check-enum-ordering.sh`, #74). Beyond the original settlement/dispute/signer errors, later additions cover: `ArithmeticOverflow` (checked-math failure in settlement/approval accounting), `DisputeNotFound`, `DisputeAlreadyResolved`, `ResolutionDirectionMismatch` (a dispute resolution vote direction conflicts with a prior vote), `BatchTooLarge` (a batch entrypoint's input exceeds its `MAX_BATCH_SIZE`), `WeightOverflow` (signer weight arithmetic would overflow), `SettlementNotCancellable`, `TtlNotElapsed` (see [Settlement TTL](#settlement-ttl)), `AllowlistFull` (see [Token allowlist](#token-allowlist)), `NotOnHold`, `DestinationNotAllowed`, `InsufficientBalance`, `NotPaused`, and `RotationProposalCooldown` (see [Signer rotation](#signer-rotation)).
 
 ## W
 

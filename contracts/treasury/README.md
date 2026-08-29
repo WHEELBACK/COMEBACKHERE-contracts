@@ -15,6 +15,7 @@ The Treasury contract manages funds and settlements using a multi-signature appr
 | `execute_settlement` | `signer` | `signer: Address, settlement_id: u64, token_contract: Address` | `()` | `ContractPaused`, `UnauthorizedSigner`, `SettlementNotFound`, `SettlementOnHold`, `AlreadyExecuted`, `ThresholdNotConfigured`, `ThresholdNotMet`, `InvalidTokenContract`, `TokenNotAllowed` |
 | `partially_execute_settlement` | `signer` | `signer: Address, settlement_id: u64, partial_amount: i128, token_contract: Address` | `()` | `ContractPaused`, `UnauthorizedSigner`, `SettlementNotFound`, `AlreadyExecuted`, `ThresholdNotConfigured`, `ThresholdNotMet`, `InvalidTokenContract`, `InvalidAmount` |
 | `cancel_settlement` | `signer` | `signer: Address, settlement_id: u64` | `()` | `ContractPaused`, `UnauthorizedSigner`, `SettlementNotFound`, `SettlementNotCancellable` |
+| `force_cancel_settlement` | `admin` | `admin: Address, settlement_id: u64` | `()` | `Unauthorized`, `SettlementNotFound`, `ForceCancelNotAllowed` |
 | `get_pending_settlements` | None | None | `Vec<Settlement>` | None |
 | `get_pending_settlements_page` | None | `start: u64, limit: u64` | `Vec<Settlement>` | None |
 | `get_settlement` | None | `settlement_id: u64` | `Settlement` | `SettlementNotFound` |
@@ -106,3 +107,9 @@ stellar contract invoke \
 | `FraudCheck` | Suspicious activity is detected on the settlement or associated merchant. | Fraud detection / risk system |
 | `KycPending` | The merchant or counterparty has not completed KYC verification. | KYC/identity verification process |
 | `AdminHold` | An operator manually pauses a settlement for a reason not covered above. | Manual admin action |
+
+---
+
+## Emergency force-cancel
+
+`force_cancel_settlement` (see #457) is an emergency-only admin override for a settlement that is permanently stuck in `Pending` or `OnHold` and unreachable through the normal `cancel_settlement`/dispute-resolution paths — for example when the signer weight required to reach quorum has become unavailable. Unlike `cancel_settlement`, it requires only `admin` auth rather than signer quorum, which is exactly why it must be used sparingly and only as a last resort: confirm normal recovery paths are genuinely unavailable before calling it. It force-cancels one specifically identified settlement by ID only — it never touches signer weights, thresholds, or other settlements. Every call emits a distinct `settlement_force_cancelled` event (separate from `settlement_cancelled`) carrying the invoking admin's address for audit purposes. If an admin-action timelock lands in this repo, this entrypoint should be gated behind it.
