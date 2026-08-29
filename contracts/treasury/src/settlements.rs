@@ -211,6 +211,13 @@ impl TreasuryContract {
     /// Errors: `SettlementNotFound`, `SettlementOnHold`, `AlreadyExecuted`, `ThresholdNotConfigured`,
     ///         `ThresholdNotMet`, `InvalidTokenContract`, `TokenNotAllowed`.
     /// Emits: `settlement_executed`.
+    /// Note: this function performs **no** compliance check — Treasury does not
+    /// consult Compliance. Callers wanting a compliance-gated execution path should
+    /// use `SettlementWorkflowContract::execute_with_compliance` (see
+    /// `contracts/settlement-workflow`) instead, which gates this exact call behind
+    /// `Compliance::is_allowed` and is the recommended, compliance-checked entry point
+    /// for executing a settlement (per ARCHITECTURE.md's description of
+    /// SettlementWorkflow's role).
     pub fn execute_settlement(
         env: Env,
         signer: Address,
