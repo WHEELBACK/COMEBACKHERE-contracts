@@ -156,6 +156,42 @@ discoverable before you break the compile gate, not after.
 
 ---
 
+## Cross-contract calls — use the thin `#[contractclient]` client
+
+When a contract calls another contract, **do not** add that contract's
+implementation crate (e.g. `comebackhere-treasury`, `comebackhere-compliance`) as a
+`[dependencies]` entry. Depending on the full implementation crate statically links
+its `#[contractimpl]`-generated wasm exports (`pause`, `unpause`, …) into the
+caller's own binary. When two such crates (or the caller itself) each export a symbol
+with the same name, the Soroban wasm linker fails with a **`duplicate symbol: pause`**
+error, which blocks the Contract Size CI check from ever completing.
+
+This exact failure happened between settlement-workflow, treasury, and compliance and
+took real investigation to diagnose and fix in PR #358. The fix was to generate each
+cross-contract client from a bare trait annotated with `#[contractclient]` instead of
+importing the target's generated `Client` type:
+
+```rust
+#[contractclient(name = "TreasuryOnlyClient")]
+pub trait TreasuryInterface {
+    fn execute_settlement(env: Env, signer: Address, settlement_id: u64, token_contract: Address);
+}
+```
+
+This generates only an invocation client — there is no `#[contractimpl]` body, so none
+of the target's wasm exports are pulled in. The caller's own `pause`/`unpause` (and the
+target's) never collide. See `crates/compliance-client` and
+`contracts/settlement-workflow/src/lib.rs` for the established pattern; note that both
+keep the real implementation crates as `dev-dependencies` only, so they can still drive
+contract state and assert ABI parity in tests without linking wasm exports into the
+deployed binary.
+
+If you genuinely need the target contract's full `Client` in production code, treat it
+as a red flag: reach for the thin `#[contractclient]` trait instead, and add the real
+crate to `[dev-dependencies]` (never `[dependencies]`) if a test needs it.
+
+---
+
 ## Adding a new contract to the workspace
 
 Follow these steps in order. Each step references the file(s) to edit.
