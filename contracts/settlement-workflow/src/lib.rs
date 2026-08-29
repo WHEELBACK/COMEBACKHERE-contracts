@@ -75,7 +75,7 @@ impl SettlementWorkflowContract {
     /// `Treasury::execute_settlement(..., settlement_id, token_contract)` using this
     /// contract's own address as the authorizing signer (it must be registered as a
     /// Treasury signer via `Treasury::set_signer` beforehand).
-    /// Returns `Err(TreasuryError::ComplianceCheckFailed)` without touching Treasury
+    /// Returns `Err(SettlementWorkflowError::ComplianceCheckFailed)` without touching Treasury
     /// if the compliance check fails, instead of panicking or reusing a generic
     /// `Unauthorized` (see #74).
     /// Emits: `settlement_workflow_executed` so indexers can distinguish this gated

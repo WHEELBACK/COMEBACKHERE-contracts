@@ -1,7 +1,9 @@
 use compliance::{ComplianceContract, ComplianceContractClient};
-use settlement_workflow::{SettlementWorkflowContract, SettlementWorkflowContractClient};
+use settlement_workflow::{
+    SettlementWorkflowContract, SettlementWorkflowContractClient, SettlementWorkflowError,
+};
 use soroban_sdk::{testutils::Address as _, token, Address, Env};
-use treasury::{TreasuryContract, TreasuryContractClient, TreasuryError};
+use treasury::{TreasuryContract, TreasuryContractClient};
 
 /// Generous CPU-instruction ceiling for the two-hop cross-contract call chain
 /// (Compliance::is_allowed → Treasury::execute_settlement). Native/test-host
@@ -71,7 +73,6 @@ fn execution_blocked_when_compliance_returns_false() {
         token_id,
     ) = setup();
 
-    // Merchant is never allowed, so compliance.is_allowed returns false.
     let settlement_id = treasury.propose_settlement(&admin, &merchant, &10_000_000);
     token::StellarAssetClient::new(&env, &token_id).mint(&treasury_id, &10_000_000);
 
@@ -79,7 +80,7 @@ fn execution_blocked_when_compliance_returns_false() {
         .try_execute_with_compliance(&settlement_id, &token_id, &merchant)
         .unwrap_err()
         .unwrap();
-    assert_eq!(err, TreasuryError::ComplianceCheckFailed);
+    assert_eq!(err, SettlementWorkflowError::ComplianceCheckFailed);
     assert_eq!(token::Client::new(&env, &token_id).balance(&merchant), 0);
 }
 
@@ -100,6 +101,41 @@ fn successful_path_executes_treasury_settlement() {
     compliance.allow_address(&admin, &merchant);
     let settlement_id = treasury.propose_settlement(&admin, &merchant, &10_000_000);
     token::StellarAssetClient::new(&env, &token_id).mint(&treasury_id, &10_000_000);
+
+    workflow.pause(&admin);
+
+    let err = workflow
+        .try_execute_with_compliance(
+            &settlement_id,
+            &token_id,
+            &merchant,
+        )
+        .unwrap_err()
+        .unwrap();
+    assert_eq!(err, SettlementWorkflowError::ContractPaused);
+    assert_eq!(token::Client::new(&env, &token_id).balance(&merchant), 0);
+}
+
+#[test]
+fn unpause_restores_execution() {
+    let (
+        env,
+        admin,
+        merchant,
+        compliance,
+        _compliance_id,
+        treasury,
+        treasury_id,
+        workflow,
+        token_id,
+    ) = setup();
+
+    compliance.allow_address(&admin, &merchant);
+    let settlement_id = treasury.propose_settlement(&admin, &merchant, &10_000_000);
+    token::StellarAssetClient::new(&env, &token_id).mint(&treasury_id, &10_000_000);
+
+    workflow.pause(&admin);
+    workflow.unpause(&admin);
 
     workflow
         .try_execute_with_compliance(&settlement_id, &token_id, &merchant)
