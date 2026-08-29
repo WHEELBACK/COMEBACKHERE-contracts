@@ -22,6 +22,23 @@ fn setup() -> (
     SettlementWorkflowContractClient<'static>,
     Address,
 ) {
+    setup_with_signer(true)
+}
+
+/// `register_workflow_signer` controls whether the workflow contract is registered
+/// as a Treasury signer. Pass `false` to exercise the #370 precondition path where
+/// the workflow's own address has not been registered via `Treasury::set_signer`.
+fn setup_with_signer(register_workflow_signer: bool) -> (
+    Env,
+    Address,
+    Address,
+    ComplianceContractClient<'static>,
+    Address,
+    TreasuryContractClient<'static>,
+    Address,
+    SettlementWorkflowContractClient<'static>,
+    Address,
+) {
     let env = Env::default();
     env.mock_all_auths();
 
@@ -42,7 +59,9 @@ fn setup() -> (
     workflow.initialize(&compliance_id, &treasury_id);
     // The workflow contract executes settlements as itself, so it must be an
     // authorized Treasury signer.
-    treasury.set_signer(&admin, &workflow_id, &1);
+    if register_workflow_signer {
+        treasury.set_signer(&admin, &workflow_id, &1);
+    }
 
     let token_id = env.register_stellar_asset_contract(admin.clone());
 
