@@ -61,8 +61,14 @@ pub enum DataKey {
     AllowCount,
     /// Running count of addresses that have ever been blocked.
     BlockCount,
-    /// Reserved for a future tiered-compliance model; not yet used by any entrypoint.
+    /// Compliance tier recorded via `allow_address_with_tier`; `0` (basic KYC) if unset.
+    /// See `get_address_tier`.
     Tier(Address),
+    /// Optional jurisdiction code (e.g. ISO 3166 alpha-2, such as `US` or `EU`) under
+    /// which an address's allow/block determination applies. Set via `set_jurisdiction`;
+    /// unset (`None`) for addresses tracked before this field existed. Purely metadata —
+    /// does not affect `is_allowed`.
+    Jurisdiction(Address),
 }
 
 /// Coarse classification of an address's compliance state.
