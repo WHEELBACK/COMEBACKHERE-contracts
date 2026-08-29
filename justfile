@@ -40,6 +40,15 @@ check: fmt lint test deny
 check-all: fmt lint test audit
     @echo "✓ All quality gates passed"
 
+# Literal mirror of the Pre-commit CI job's command sequence (see .github/workflows/pre-commit.yml
+# and .pre-commit-config.yaml) — run this before pushing for an authoritative local answer to
+# "will Pre-commit pass".
+precommit:
+    cargo fmt --all -- --check
+    cargo clippy -- -D warnings
+    scripts/check-enum-ordering.sh
+    @echo "✓ Pre-commit checks passed"
+
 # Deploy all three contracts to testnet.
 #
 # Required env vars:

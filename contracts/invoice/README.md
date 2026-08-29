@@ -19,6 +19,7 @@ The Invoice contract manages the lifecycle of merchant invoices, from creation t
 | `cancel_invoice`     | `caller`      | `caller: Address, id: u64`                                                                                                                                       | `Result<(), InvoiceError>`            | `Unauthorized`, `ContractPaused`, `NotFound`, `NotPending`                                                |
 | `batch_expire`       | `admin`       | `admin: Address, ids: Vec<u64>`                                                                                                                                  | `Result<u32, InvoiceError>`           | `Unauthorized`                                                                                            |
 | `request_refund`     | `payer`       | `payer: Address, id: u64`                                                                                                                                        | `Result<(), InvoiceError>`            | `Unauthorized`, `ContractPaused`, `NotFound`, `NotPaid`                                                   |
+| `reject_refund`      | `admin`       | `admin: Address, id: u64`                                                                                                                                        | `Result<(), InvoiceError>`            | `Unauthorized`, `ContractPaused`, `NotFound`, `NotRefundRequested`                                        |
 | `pause`              | `admin`       | `admin: Address`                                                                                                                                                 | `Result<(), InvoiceError>`            | `Unauthorized`                                                                                            |
 | `unpause`            | `admin`       | `admin: Address`                                                                                                                                                 | `Result<(), InvoiceError>`            | `Unauthorized`                                                                                            |
 
@@ -44,6 +45,7 @@ event topic as the stream key:
 | `invoice_cancelled` | `Cancelled` | Full `Invoice` |
 | `invoice_refund_requested` | `RefundRequested` | Full `Invoice` |
 | `refund_approved` | `Refunded` | Full `Invoice` |
+| `refund_rejected` | `Paid` (reverted from `RefundRequested`) | Full `Invoice` |
 | `escrow_released` | `Released` | `EscrowReleasedEvent { id, merchant, amount_usdc, released_at }` |
 
 Indexers should checkpoint the last processed ledger/event position, replay from

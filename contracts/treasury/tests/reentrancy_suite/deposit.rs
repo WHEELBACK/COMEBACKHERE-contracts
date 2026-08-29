@@ -31,7 +31,7 @@ fn deposit_baseline_no_reentry_credits_internal_balance_once() {
 
     client.deposit(&depositor, &token_id, &5_000_000);
 
-    assert_eq!(client.get_balance(&depositor), 5_000_000);
+    assert_eq!(client.get_balance(&depositor, &token_id), 5_000_000);
     assert_eq!(token.balance(&depositor), 0);
     assert_eq!(token.balance(&treasury_id), 5_000_000);
 }
@@ -66,7 +66,7 @@ fn deposit_reentrancy_demonstrates_cei_violation_double_credit() {
     let result = client.try_deposit(&depositor, &token_id, &10_000_000);
     assert!(result.is_err(), "reentrant deposit should abort");
 
-    assert_eq!(client.get_balance(&depositor), 0);
+    assert_eq!(client.get_balance(&depositor, &token_id), 0);
     assert_eq!(token.balance(&depositor), 10_000_000);
     assert_eq!(token.balance(&treasury_id), 0);
 }
@@ -97,7 +97,7 @@ fn deposit_reentrancy_withdraw_callback_panics_aborts_deposit() {
     assert!(result.is_err(), "deposit must roll back via withdraw panic");
 
     // Internal bookkeeping rolled back: deposit never credited the user.
-    assert_eq!(client.get_balance(&depositor), 0);
+    assert_eq!(client.get_balance(&depositor, &token_id), 0);
     // Token-side ledger also did NOT move — the malicious token's
     // `transfer` panicked BEFORE its bookkeeping line, so neither the
     // outer nor the recursive transfer wrote any balance.

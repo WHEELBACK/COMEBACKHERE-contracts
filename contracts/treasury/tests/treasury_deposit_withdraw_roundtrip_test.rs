@@ -168,23 +168,23 @@ fn get_balance_reflects_deposits_and_withdrawals() {
     let test_token_client = TestTokenClient::new(&env, &token_id);
 
     // Verify initial balance is 0 for never-deposited address
-    assert_eq!(treasury_client.get_balance(&depositor), 0);
+    assert_eq!(treasury_client.get_balance(&depositor, &token_id), 0);
 
     // Mint tokens to depositor and deposit
     test_token_client.mint(&depositor, &amount);
     treasury_client.deposit(&depositor, &token_id, &amount);
 
     // Verify balance after deposit
-    assert_eq!(treasury_client.get_balance(&depositor), amount);
+    assert_eq!(treasury_client.get_balance(&depositor, &token_id), amount);
 
     // Withdraw partial amount
     let partial = 2_000_000i128;
     treasury_client.withdraw(&depositor, &token_id, &partial);
 
     // Verify balance after withdrawal
-    assert_eq!(treasury_client.get_balance(&depositor), amount - partial);
+    assert_eq!(treasury_client.get_balance(&depositor, &token_id), amount - partial);
 
     // Verify unrelated address still has 0 balance
     let stranger = Address::generate(&env);
-    assert_eq!(treasury_client.get_balance(&stranger), 0);
+    assert_eq!(treasury_client.get_balance(&stranger, &token_id), 0);
 }

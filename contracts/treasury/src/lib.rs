@@ -110,6 +110,43 @@ impl TreasuryContract {
         env.events()
             .publish((Symbol::new(&env, "treasury_unpaused"),), admin);
     }
+
+    /// Configures the maximum amount withdrawable per rolling time window (admin-only).
+    /// Applies to both `withdraw` (tracked per recipient `to`) and `withdraw_all` (tracked
+    /// per `recipient`) — see `deposits.rs`. Passing `limit <= 0` disables the cap
+    /// (the default at initialization is uncapped), trading off protection against a
+    /// compromised-but-authorized withdrawer for the ability to move arbitrarily large
+    /// legitimate withdrawals in a single call; admins needing large one-off withdrawals
+    /// should raise the limit first rather than relying on an uncapped default long-term.
+    /// Emits: `withdrawal_limit_set`.
+    pub fn set_withdrawal_limit(env: Env, admin: Address, limit: i128, window_secs: u64) {
+        require_admin(&env, &admin);
+        env.storage()
+            .instance()
+            .set(&DataKey::WithdrawalLimitPerWindow, &limit);
+        env.storage()
+            .instance()
+            .set(&DataKey::WithdrawalWindowSecs, &window_secs);
+        env.events().publish(
+            (Symbol::new(&env, "withdrawal_limit_set"),),
+            (limit, window_secs),
+        );
+    }
+
+    /// Returns the currently configured `(limit, window_secs)`. `limit <= 0` means uncapped.
+    pub fn get_withdrawal_limit(env: Env) -> (i128, u64) {
+        let limit: i128 = env
+            .storage()
+            .instance()
+            .get(&DataKey::WithdrawalLimitPerWindow)
+            .unwrap_or(0);
+        let window_secs: u64 = env
+            .storage()
+            .instance()
+            .get(&DataKey::WithdrawalWindowSecs)
+            .unwrap_or(0);
+        (limit, window_secs)
+    }
 }
 
 /// Maximum number of tokens allowed in the allowlist to prevent unbounded storage growth.
