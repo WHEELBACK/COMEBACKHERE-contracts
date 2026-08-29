@@ -41,32 +41,36 @@ impl TreasuryContract {
     }
 
     /// Returns the hold reason for a settlement without requiring authentication.
-    /// Panics: `SettlementNotFound`.
-    pub fn get_hold_reason(env: Env, settlement_id: u64) -> SettlementHoldReason {
+    /// Errors: `SettlementNotFound`.
+    pub fn get_hold_reason(
+        env: Env,
+        settlement_id: u64,
+    ) -> Result<SettlementHoldReason, TreasuryError> {
         let settlement: Settlement = env
             .storage()
             .persistent()
             .get(&DataKey::Settlement(settlement_id))
-            .unwrap_or_else(|| {
-                soroban_sdk::panic_with_error!(env, TreasuryError::SettlementNotFound)
-            });
-        settlement.hold_reason
+            .ok_or(TreasuryError::SettlementNotFound)?;
+        Ok(settlement.hold_reason)
     }
 
     /// Releases a held settlement back to `Pending` status (admin-only).
-    /// Panics: `Unauthorized`, `SettlementNotFound`, `NotOnHold`.
+    /// Errors: `SettlementNotFound`, `NotOnHold`.
+    /// Panics: `Unauthorized`.
     /// Emits: `settlement_released`.
-    pub fn release_hold(env: Env, admin: Address, settlement_id: u64) {
+    pub fn release_hold(
+        env: Env,
+        admin: Address,
+        settlement_id: u64,
+    ) -> Result<(), TreasuryError> {
         require_admin(&env, &admin);
         let mut settlement: Settlement = env
             .storage()
             .persistent()
             .get(&DataKey::Settlement(settlement_id))
-            .unwrap_or_else(|| {
-                soroban_sdk::panic_with_error!(env, TreasuryError::SettlementNotFound)
-            });
+            .ok_or(TreasuryError::SettlementNotFound)?;
         if settlement.status != SettlementStatus::OnHold {
-            soroban_sdk::panic_with_error!(env, TreasuryError::NotOnHold);
+            return Err(TreasuryError::NotOnHold);
         }
         settlement.status = SettlementStatus::Pending;
         settlement.hold_reason = SettlementHoldReason::None;
@@ -77,5 +81,6 @@ impl TreasuryContract {
             (Symbol::new(&env, "settlement_released"), settlement_id),
             settlement,
         );
+        Ok(())
     }
 }

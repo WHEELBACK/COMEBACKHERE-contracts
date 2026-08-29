@@ -40,6 +40,12 @@ pub enum TreasuryError {
     InsufficientBalance = 31,
     NotPaused = 32,
     RotationProposalCooldown = 33,
+    // Settlement-workflow precondition: the workflow contract must be registered
+    // as a treasury signer (see settlement-workflow #370). Without this the nested
+    // `execute_settlement` would fail with the generic `UnauthorizedSigner`, which
+    // gives a first-time deployer no hint that the fix is a `set_signer` call for
+    // the workflow's own address.
+    WorkflowNotRegisteredSigner = 34,
 }
 
 // Issue #48: reason codes attached to a held settlement; None means not on hold
