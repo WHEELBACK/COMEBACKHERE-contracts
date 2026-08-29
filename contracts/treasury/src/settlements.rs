@@ -374,6 +374,52 @@ impl TreasuryContract {
         }
     }
 
+    /// **Emergency admin escape hatch (see #457).** Force-cancels a single, specifically
+    /// identified settlement that is stuck in `Pending` or `OnHold` and cannot be resolved
+    /// through the normal `cancel_settlement`/dispute-resolution paths — for example because
+    /// the signer weight required to reach either the settlement threshold or the dispute
+    /// resolution threshold has become permanently unreachable. This is deliberately narrow:
+    /// it force-cancels one settlement by ID, it does not touch signer weights, thresholds, or
+    /// any other settlement, and it is not a general-purpose bypass of the multisig process.
+    ///
+    /// This entrypoint bypasses the normal signer-quorum requirement by design, since the
+    /// quorum being unavailable is exactly the failure mode it exists to recover from. It
+    /// should only ever be invoked as a last resort once normal recovery paths are confirmed
+    /// unavailable, and every call is independently auditable via the `settlement_force_cancelled`
+    /// event (distinct from `settlement_cancelled`), which records the admin who invoked it.
+    /// If/when a timelock mechanism lands for admin actions, this entrypoint should be gated
+    /// behind it.
+    ///
+    /// Panics: `SettlementNotFound`, `ForceCancelNotAllowed` (settlement is already
+    /// `Executed`, `PartiallyExecuted`, `PartiallySettled`, `Cancelled`, or `Expired`).
+    /// Emits: `settlement_force_cancelled`.
+    pub fn force_cancel_settlement(env: Env, admin: Address, settlement_id: u64) {
+        require_admin(&env, &admin);
+        let mut settlement: Settlement = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Settlement(settlement_id))
+            .unwrap_or_else(|| {
+                soroban_sdk::panic_with_error!(env, TreasuryError::SettlementNotFound)
+            });
+        if settlement.status != SettlementStatus::Pending
+            && settlement.status != SettlementStatus::OnHold
+        {
+            soroban_sdk::panic_with_error!(env, TreasuryError::ForceCancelNotAllowed);
+        }
+        settlement.status = SettlementStatus::Cancelled;
+        env.storage()
+            .persistent()
+            .set(&DataKey::Settlement(settlement_id), &settlement);
+        env.events().publish(
+            (
+                Symbol::new(&env, "settlement_force_cancelled"),
+                settlement_id,
+            ),
+            (admin, settlement),
+        );
+    }
+
     pub fn get_pending_settlements(env: Env) -> Vec<Settlement> {
         let count: u64 = env
             .storage()

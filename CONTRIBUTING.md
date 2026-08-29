@@ -121,6 +121,27 @@ just snapshot
 
 ---
 
+## Deprecating an entrypoint
+
+(#459) Removing or replacing a public entrypoint outright — rather than just extending it — can silently break off-chain integrators or other contracts that already call it in production. This project already has direct experience with what happens when an interface drifts without anyone noticing (the invoice contract's function/event set fell out of sync with `abis/invoice.json` before `abi-drift-check.yml` existed to catch it). Follow this process instead of removing an entrypoint directly.
+
+### Policy
+
+1. **Mark it deprecated, don't remove it.** Add a `#[deprecated(note = "...")]` (or an equivalent doc comment if the attribute can't be used on a `#[contractimpl]` fn in a given case) pointing callers at the replacement, and add a one-line note to the contract's README entrypoints table. The entrypoint keeps working exactly as before — no panic, no behavior change — for the full notice period.
+2. **Emit a deprecation-signal event on every call**, e.g. `("<fn>_deprecated",)`, so off-chain indexers can detect live usage and reach out to or identify remaining callers instead of discovering the removal only when it happens. Document the event in `docs/event-schema.md` (see below) like any other event.
+3. **Minimum notice period: one minor version.** An entrypoint marked deprecated in version `X.Y.0` may only be removed at version `X.(Y+1).0` or later — never a patch release, and never in the same release that introduces the deprecation. This gives integrators at least one full release cycle of advance notice, matching a Conventional Commits-style versioning scheme where removal of a public interface is itself a `feat`/breaking-change entry.
+4. **Removal happens at that version boundary, not before**, and is itself a normal PR following this same CONTRIBUTING.md process (new branch, `feat`/breaking-change commit calling out the removal explicitly, CHANGELOG entry).
+
+### Interaction with ABI drift checks
+
+`abi-drift-check.yml` diffs the function and event set extracted from source against `abis/*.json` and fails the build on any mismatch — a removed function is exactly the kind of change it's designed to catch. That means:
+
+- Marking an entrypoint deprecated (step 1 above) does not touch the function set, so it does not trip the drift check — the function is still present.
+- Actually removing the entrypoint at the version boundary (step 4) *is* a real ABI change and must be paired with `make update-abi-snapshots` / `just snapshot` in the same PR (see **ABI snapshots** above) — a PR that removes a function without a matching snapshot update will correctly fail CI.
+- `abi-drift-check.yml` today only watches `contracts/invoice/src/**` and `abis/invoice.json`; as ABI snapshots expand to cover other contracts, this deprecation policy applies to their entrypoints identically, and the workflow's `paths` filter should be extended alongside the new snapshot.
+
+---
+
 ## Adding a new contract to the workspace
 
 Follow these steps in order. Each step references the file(s) to edit.

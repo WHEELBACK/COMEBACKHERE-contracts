@@ -40,6 +40,10 @@ pub enum TreasuryError {
     InsufficientBalance = 31,
     NotPaused = 32,
     RotationProposalCooldown = 33,
+    // #457: force_cancel_settlement is an emergency admin override, intentionally
+    // restricted to settlements that are actually stuck (Pending/OnHold) rather than
+    // a general-purpose bypass usable on already-terminal settlements.
+    ForceCancelNotAllowed = 34,
 }
 
 // Issue #48: reason codes attached to a held settlement; None means not on hold
