@@ -69,6 +69,12 @@ pub enum DataKey {
     /// unset (`None`) for addresses tracked before this field existed. Purely metadata —
     /// does not affect `is_allowed`.
     Jurisdiction(Address),
+    /// Timestamp of the caller's last `bulk_allow_addresses` call, keyed per admin.
+    /// See [`BULK_OP_COOLDOWN_SECS`] and `check_bulk_op_cooldown` (#454).
+    LastBulkAllow(Address),
+    /// Timestamp of the caller's last `bulk_block_addresses` call, keyed per admin.
+    /// See [`BULK_OP_COOLDOWN_SECS`] and `check_bulk_op_cooldown` (#454).
+    LastBulkBlock(Address),
 }
 
 /// Coarse classification of an address's compliance state.
