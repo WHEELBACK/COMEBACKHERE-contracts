@@ -1,5 +1,17 @@
 # COMEBACKHERE Contracts
 
+[![WASM Build Check](https://github.com/WHEELBACK/COMEBACKHERE-contracts/actions/workflows/build.yml/badge.svg)](https://github.com/WHEELBACK/COMEBACKHERE-contracts/actions/workflows/build.yml)
+[![Test](https://github.com/WHEELBACK/COMEBACKHERE-contracts/actions/workflows/test.yml/badge.svg)](https://github.com/WHEELBACK/COMEBACKHERE-contracts/actions/workflows/test.yml)
+[![Lint](https://github.com/WHEELBACK/COMEBACKHERE-contracts/actions/workflows/lint.yml/badge.svg)](https://github.com/WHEELBACK/COMEBACKHERE-contracts/actions/workflows/lint.yml)
+[![Format](https://github.com/WHEELBACK/COMEBACKHERE-contracts/actions/workflows/fmt.yml/badge.svg)](https://github.com/WHEELBACK/COMEBACKHERE-contracts/actions/workflows/fmt.yml)
+[![Pre-commit](https://github.com/WHEELBACK/COMEBACKHERE-contracts/actions/workflows/pre-commit.yml/badge.svg)](https://github.com/WHEELBACK/COMEBACKHERE-contracts/actions/workflows/pre-commit.yml)
+[![Coverage](https://github.com/WHEELBACK/COMEBACKHERE-contracts/actions/workflows/coverage.yml/badge.svg)](https://github.com/WHEELBACK/COMEBACKHERE-contracts/actions/workflows/coverage.yml)
+[![Contract Size](https://github.com/WHEELBACK/COMEBACKHERE-contracts/actions/workflows/contract-size.yml/badge.svg)](https://github.com/WHEELBACK/COMEBACKHERE-contracts/actions/workflows/contract-size.yml)
+[![ABI Snapshot Drift Check](https://github.com/WHEELBACK/COMEBACKHERE-contracts/actions/workflows/abi-drift-check.yml/badge.svg)](https://github.com/WHEELBACK/COMEBACKHERE-contracts/actions/workflows/abi-drift-check.yml)
+[![Deny](https://github.com/WHEELBACK/COMEBACKHERE-contracts/actions/workflows/deny.yml/badge.svg)](https://github.com/WHEELBACK/COMEBACKHERE-contracts/actions/workflows/deny.yml)
+[![Init Contracts Smoke Test](https://github.com/WHEELBACK/COMEBACKHERE-contracts/actions/workflows/init-smoke-test.yml/badge.svg)](https://github.com/WHEELBACK/COMEBACKHERE-contracts/actions/workflows/init-smoke-test.yml)
+[![Changelog Release Check](https://github.com/WHEELBACK/COMEBACKHERE-contracts/actions/workflows/release-check.yml/badge.svg)](https://github.com/WHEELBACK/COMEBACKHERE-contracts/actions/workflows/release-check.yml)
+
 > **Rust & Soroban smart contracts powering the COMEBACKHERE Protocol.**
 
 This repository contains the core on-chain components that power the **COMEBACKHERE Protocol** on the Stellar network. It manages invoice escrow, payment verification, treasury settlement, and compliance controls while providing a secure and auditable foundation for protocol operations.
@@ -93,6 +105,36 @@ Execute formatting, linting, and tests in a single command:
 ```bash
 just check
 ```
+
+---
+
+## Mirror the Pre-commit CI Job Locally
+
+Run the exact same command sequence, in the same order, as the [Pre-commit](.github/workflows/pre-commit.yml) CI job (`cargo fmt --all -- --check`, `cargo clippy -- -D warnings`, `scripts/check-enum-ordering.sh`):
+
+Using Just:
+
+```bash
+just precommit
+```
+
+Or with Make:
+
+```bash
+make precommit
+```
+
+---
+
+## Run a Local Stellar Network
+
+Start a local Stellar quickstart network matching the exact image, environment variables, and port used by the [Init Contracts Smoke Test](.github/workflows/init-smoke-test.yml) CI workflow, so `scripts/init-contracts.sh` behaves the same locally as it does in CI:
+
+```bash
+docker compose up
+```
+
+This starts `stellar/quickstart:latest` on `localhost:8000` with Soroban RPC enabled. Once healthy, run `scripts/init-contracts.sh` against it as usual.
 
 ---
 
