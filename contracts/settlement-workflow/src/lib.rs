@@ -15,6 +15,15 @@ use soroban_sdk::{
 #[contractclient(name = "TreasuryOnlyClient")]
 pub trait TreasuryInterface {
     fn execute_settlement(env: Env, signer: Address, settlement_id: u64, token_contract: Address);
+    fn get_signer_weight(env: Env, signer: Address) -> u32;
+}
+
+/// Storage key for the ordered list of settlement IDs executed through this
+/// workflow contract (as opposed to executed directly against treasury, bypassing
+/// the compliance gate). See `get_executed_settlement_ids_page` (#373).
+#[contracttype]
+pub enum DataKey {
+    ExecutedSettlements,
 }
 
 /// Instance-storage keys for the workflow's pinned configuration. The compliance
@@ -75,7 +84,7 @@ impl SettlementWorkflowContract {
     /// `Treasury::execute_settlement(..., settlement_id, token_contract)` using this
     /// contract's own address as the authorizing signer (it must be registered as a
     /// Treasury signer via `Treasury::set_signer` beforehand).
-    /// Returns `Err(TreasuryError::ComplianceCheckFailed)` without touching Treasury
+    /// Returns `Err(SettlementWorkflowError::ComplianceCheckFailed)` without touching Treasury
     /// if the compliance check fails, instead of panicking or reusing a generic
     /// `Unauthorized` (see #74).
     /// Emits: `settlement_workflow_executed` so indexers can distinguish this gated
