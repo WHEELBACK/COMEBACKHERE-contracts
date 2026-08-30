@@ -100,6 +100,8 @@ fn treasury_error_shape_is_unchanged() {
     assert_eq!(TreasuryError::RotationProposalCooldown as u32, 33);
     assert_eq!(TreasuryError::WithdrawalLimitExceeded as u32, 34);
     assert_eq!(TreasuryError::InvalidSplitRatio as u32, 35);
+    assert_eq!(TreasuryError::ForceCancelNotAllowed as u32, 36);
+    assert_eq!(TreasuryError::WorkflowNotRegisteredSigner as u32, 37);
 
     // No wildcard arm: adding, removing, or renaming a variant fails this compile.
     fn assert_exhaustive(err: TreasuryError) {
@@ -138,7 +140,9 @@ fn treasury_error_shape_is_unchanged() {
             | TreasuryError::NotPaused
             | TreasuryError::RotationProposalCooldown
             | TreasuryError::WithdrawalLimitExceeded
-            | TreasuryError::InvalidSplitRatio => {}
+            | TreasuryError::InvalidSplitRatio
+            | TreasuryError::ForceCancelNotAllowed
+            | TreasuryError::WorkflowNotRegisteredSigner => {}
         }
     }
     assert_exhaustive(TreasuryError::AlreadyOnHold);

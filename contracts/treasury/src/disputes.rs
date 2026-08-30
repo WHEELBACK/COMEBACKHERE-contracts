@@ -157,6 +157,7 @@ impl TreasuryContract {
         env.events()
             .publish((Symbol::new(&env, "dispute_resolved"), dispute_id), dispute);
         release_settlement_hold_if_no_open_disputes(&env, settlement_id);
+        Ok(())
     }
 
     /// Resolves an open dispute by splitting `dispute.amount` between claimant and
@@ -208,7 +209,17 @@ impl TreasuryContract {
         if counterparty_amount > 0 {
             token_client.transfer(&treasury, &dispute.counterparty, &counterparty_amount);
         }
-        Ok(())
+        dispute.claimant_share_bps = claimant_bps;
+        dispute.status = DisputeStatus::ResolvedSplit;
+        env.storage()
+            .persistent()
+            .set(&DataKey::Dispute(dispute_id), &dispute);
+        let settlement_id = dispute.settlement_id;
+        env.events().publish(
+            (Symbol::new(&env, "dispute_resolved_split"), dispute_id),
+            dispute,
+        );
+        release_settlement_hold_if_no_open_disputes(&env, settlement_id);
     }
 
     /// Casts a weighted signer vote on a dispute; auto-resolves when cumulative weight meets threshold.

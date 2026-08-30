@@ -140,8 +140,57 @@ fn deposit_one(env: &Env, from: &Address, token_contract: &Address, amount: i128
         .ok_or(TreasuryError::ArithmeticOverflow)?;
     env.storage()
         .persistent()
-        .set(&DataKey::Balance(from.clone()), &balance);
+        .set(&DataKey::Balance(from.clone(), token_contract.clone()), &balance);
     env.events()
         .publish((Symbol::new(env, "deposit"), from.clone()), amount);
     Ok(())
+}
+
+/// Checks and records a withdrawal against the per-window limit configured by
+/// `set_withdrawal_limit`. If `limit <= 0`, the check is skipped (uncapped).
+/// Panics with `TreasuryError::InsufficientBalance` if the rolling window total
+/// plus `amount` would exceed the configured limit.
+fn enforce_withdrawal_limit(env: &Env, recipient: &Address, amount: i128) {
+    let limit: i128 = env
+        .storage()
+        .instance()
+        .get(&DataKey::WithdrawalLimitPerWindow)
+        .unwrap_or(0);
+    if limit <= 0 {
+        // Uncapped — no enforcement needed.
+        return;
+    }
+    let window_secs: u64 = env
+        .storage()
+        .instance()
+        .get(&DataKey::WithdrawalWindowSecs)
+        .unwrap_or(0);
+    let now = env.ledger().timestamp();
+    let window_start: u64 = env
+        .storage()
+        .instance()
+        .get(&DataKey::WithdrawalWindowStart(recipient.clone()))
+        .unwrap_or(0);
+    let withdrawn_in_window: i128 = if window_secs > 0 && now < window_start.saturating_add(window_secs) {
+        // Still within the current window.
+        env.storage()
+            .instance()
+            .get(&DataKey::WithdrawnInWindow(recipient.clone()))
+            .unwrap_or(0)
+    } else {
+        // Window has elapsed — reset.
+        env.storage()
+            .instance()
+            .set(&DataKey::WithdrawalWindowStart(recipient.clone()), &now);
+        0i128
+    };
+    let new_total = withdrawn_in_window
+        .checked_add(amount)
+        .unwrap_or_else(|| soroban_sdk::panic_with_error!(env, TreasuryError::ArithmeticOverflow));
+    if new_total > limit {
+        soroban_sdk::panic_with_error!(env, TreasuryError::WithdrawalLimitExceeded);
+    }
+    env.storage()
+        .instance()
+        .set(&DataKey::WithdrawnInWindow(recipient.clone()), &new_total);
 }
