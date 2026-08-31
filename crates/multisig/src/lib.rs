@@ -40,6 +40,15 @@ pub enum TreasuryError {
     InsufficientBalance = 31,
     NotPaused = 32,
     RotationProposalCooldown = 33,
+    // Per-window withdrawal limit was exceeded; see `set_withdrawal_limit` and
+    // `enforce_withdrawal_limit` in `deposits.rs` (#455).
+    WithdrawalLimitExceeded = 34,
+    // Appended for `resolve_dispute_split` (#456): the provided claimant basis-points
+    // ratio exceeds BPS_DENOMINATOR (10_000), making a valid split impossible.
+    InvalidSplitRatio = 35,
+    // Appended for `force_cancel_settlement`: the target settlement is already in a
+    // terminal state (Executed, Cancelled, Expired) and cannot be force-cancelled.
+    ForceCancelNotAllowed = 36,
     // Settlement-workflow precondition: the workflow contract must be registered
     // as a treasury signer (see settlement-workflow #370). Without this the nested
     // `execute_settlement` would fail with the generic `UnauthorizedSigner`, which

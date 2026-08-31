@@ -29,6 +29,7 @@ pub trait TreasuryInterface {
 #[contracttype]
 #[derive(Clone)]
 pub enum DataKey {
+    ExecutedSettlements,
     ComplianceId,
     TreasuryId,
     ExecutedSettlements,

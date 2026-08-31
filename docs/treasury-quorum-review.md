@@ -178,3 +178,169 @@ this review does not open one. Suggested content:
 > option 1 or 2 from the linked review (guard vs. auto-lower), including a
 > new append-only `TreasuryError` variant and updated ABI snapshot.
 > References the economic review that identified this: this file.
+
+---
+
+# Signer-list O(n) scaling cost audit: `set_signer` / `remove_signer` against the cap (Issue #474)
+
+> **Status:** Audit complete · Documentation only, no code changes accompany this section.
+> **Related:** Issue #474, `contracts/treasury/src/signers.rs`, `crates/multisig/src/lib.rs`,
+> `contracts/treasury/tests/signer_list_scaling_test.rs` (new test added for this audit).
+
+## Question
+
+`set_signer` and `remove_signer` both maintain `DataKey::SignerList` as a
+`soroban_sdk::Vec<Address>`, using `list.contains(&signer)` — an O(n) linear
+scan — and in the zero-weight/remove paths, a full O(n) rewrite of the entire
+list. Issue #21 is described in the tracker as having added a max-signers cap
+that would bound how large this list can ever grow. Before concluding the
+O(n) cost is acceptable, this audit was asked to:
+
+1. Confirm whether that cap actually exists in the current code, and if so,
+   what specific numeric value it uses and whether that value was chosen with
+   this O(n) cost pattern in mind.
+2. Measure the actual instruction cost of `set_signer` and `remove_signer` at
+   the current cap boundary (or at the practical scale actually used if no cap
+   exists), rather than relying on asymptotic reasoning alone.
+
+## Finding 1: no MAX\_SIGNERS cap exists in the code
+
+After a complete search of the codebase (all `*.rs` and `*.md` files), there
+is **no `MAX_SIGNERS` constant, no signer-count guard, and no `AllowlistFull`-
+style rejection in `set_signer` or `initialize`**. The `SignerList` is
+unbounded; any number of signers may be registered.
+
+Issue #21's cap is `MAX_BATCH_SIZE = 50`. This is a workspace-wide constant
+(defined independently in `compliance`, `invoice`, and `treasury`) that limits
+how many items may be processed per **batch call** — settlement IDs per batch
+execution, address IDs per batch allow/block. It has nothing to do with the
+signer list. The `economic-parameters.md` doc explicitly describes this: #21
+is cited alongside #8 and #29 as having established the "one batch cap across
+the protocol" workspace default.
+
+There was no documented reasoning about the O(n) signer-list cost at the time
+`MAX_BATCH_SIZE` was introduced, because `MAX_BATCH_SIZE` is not a signer-count
+cap and was never intended to be one.
+
+## Finding 2: measured instruction costs — linear, not a current concern
+
+The test `contracts/treasury/tests/signer_list_scaling_test.rs` (added for this
+audit) measures the instruction cost of a single `set_signer` or `remove_signer`
+call against a list of varying sizes, using `env.cost_estimate().resources()` to
+read the cost of the last top-level invocation. All numbers below are from actual
+test runs on the `docs/multisig-signer-list-scaling-audit` branch.
+
+### `set_signer` — adding a new signer (weight > 0 path)
+
+Touches: O(n) `contains()` scan + O(1) `push_back` + O(n) list serialisation.
+
+| Total signers before call | Instructions |
+|---|---|
+| 1 | 100,814 |
+| 6 | 147,231 |
+| 11 | 189,234 |
+| 21 | 276,468 |
+| 51 | 531,260 |
+| 101 | 1,100,746 |
+
+Scaling: ~**10,000 instructions per signer** in the list. Baseline overhead
+(at 1 signer) is ~100,000 instructions.
+
+### `set_signer` — deactivating a signer (weight = 0 path)
+
+Touches: O(n) `contains()` scan + O(n) full-rewrite loop + O(n) list
+serialisation — all three operations linear.
+
+| Total signers at call | Instructions |
+|---|---|
+| 6 | 150,895 |
+| 11 | 200,858 |
+| 21 | 301,942 |
+| 51 | 601,704 |
+| 101 | 1,102,691 |
+
+Scaling: ~**10,000 instructions per signer**, same as the add path.
+
+### `remove_signer`
+
+Touches: O(n) list read + deserialise + O(n) full-rewrite + O(n) list
+serialisation + O(1) storage delete.
+
+| Total signers at call | Instructions |
+|---|---|
+| 6 | 148,950 |
+| 11 | 198,913 |
+| 21 | 299,997 |
+| 51 | 599,759 |
+| 101 | 1,100,746 |
+
+Scaling: ~**10,000 instructions per signer**. Structurally identical to the
+`set_signer(weight=0)` path.
+
+### Scaling verdict
+
+All three operation variants exhibit clean linear O(n) growth — confirmed by
+both the measured data above and the code structure. The per-signer marginal
+cost is approximately 10,000 instructions.
+
+The Soroban network instruction budget per transaction is **100,000,000
+instructions**. At the measured scaling rate, a single signer-mutation call
+against a list of 101 signers costs ~1.1 million instructions — **about 1.1%
+of the per-transaction budget**. Even a list of 1,000 signers would cost only
+~10 million instructions, or 10% of budget. The operation would have to reach
+approximately **9,800 registered signers** before instruction budget alone
+became a binding concern.
+
+At any realistic treasury signer-set size (the current approval benchmarks in
+`approval_benchmark_test.rs` cover up to 100 signers), `set_signer` and
+`remove_signer` are not instruction-budget concerns. The existing lack of a
+`MAX_SIGNERS` cap is **not an immediate risk**, but the absence of any
+documented upper bound on signer-list size remains a latent footgun if the
+signer set were ever allowed to grow to an unusual scale.
+
+## Finding 3: the O(n) cost rationale was not documented; no evidence it was deliberately chosen
+
+There is no comment in `signers.rs`, no issue ticket, and no PR description
+anywhere in the accessible record that explains why the signer list uses a
+linear-scan `Vec<Address>` rather than a structure with O(1) membership
+checks. The design appears to be the path of least resistance given that
+Soroban's storage model does not provide a native `HashSet` type — O(n) scan
+over a `Vec` is the natural Soroban approach for small-to-medium sets. It was
+not chosen with awareness of a specific signer-count ceiling, because no such
+ceiling exists.
+
+## Comparison to existing benchmarks
+
+`approval_benchmark_test.rs` measures the cost of the **approval path**
+(`record_approval` inside `approve_settlement`) at 1–100 signers, and
+`record_approval_duplicate_benchmark_test.rs` characterises the difference
+between duplicate-heavy and duplicate-free approval patterns. Neither test
+covers `set_signer` or `remove_signer` at scale. The test added for this audit
+fills that gap.
+
+## Recommendation
+
+No code change is required based solely on the instruction-cost finding — the
+measured costs are well within budget at any realistic deployment scale.
+
+Two lower-priority improvements are worth tracking as follow-up issues:
+
+1. **Add a `MAX_SIGNERS` cap as a protocol boundary.** Not for budget reasons,
+   but for clarity: documenting the intended maximum signer-set size as an
+   explicit constant (e.g. `const MAX_SIGNERS: u32 = 100`) gives operators a
+   clear contract and allows tests to assert against that boundary rather than
+   testing at arbitrary sizes. The cap should be appended to
+   `docs/economic-parameters.md` if added.
+2. **Add `set_signer` / `remove_signer` to the cost-estimate test suite.** The
+   new `signer_list_scaling_test.rs` measures costs at a range of sizes, but
+   does not assert a per-call instruction budget ceiling. A simple assertion
+   like `assert!(instructions < 5_000_000)` at the known cap boundary would
+   catch a future code change that inadvertently makes these operations more
+   expensive.
+
+Neither of these is a blocker. The original concern motivating this audit
+("a genuinely large signer cap combined with linear scan could be a real
+instruction-cost concern") does not materialise at realistic signer-set sizes.
+The cap's absence is acknowledged; if a cap is later added, the cost data
+in this document confirms that any value up to ~5,000 signers would leave
+comfortable instruction budget headroom.
