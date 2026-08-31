@@ -135,3 +135,40 @@ jobs:
 
       - name: Check formatting
         run: cargo fmt --all -- --check
+
+  # Non-blocking matrix job: runs the test suite against a small set of
+  # pinned soroban-sdk 22.x patch versions to catch any subtle behavior changes
+  # or regressions introduced in patch-level updates that might otherwise slip
+  # through as safe by virtue of being patch versions. This job is not a required
+  # check — the pinned `test` job above is what gates merges.
+  test-soroban-sdk-22x-matrix:
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    strategy:
+      matrix:
+        soroban-version: ["22.0.0", "22.0.5", "22.0.11"]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.95.0"
+          targets: wasm32-unknown-unknown
+
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: test-soroban-sdk-matrix-${{ matrix.soroban-version }}
+
+      - name: Update soroban-sdk to ${{ matrix.soroban-version }}
+        run: cargo update -p soroban-sdk --precise ${{ matrix.soroban-version }}
+
+      - name: Run tests
+        run: cargo test --all
+
+      - name: Run clippy
+        run: cargo clippy -- -D warnings
+
+      - name: Check formatting
+        run: cargo fmt --all -- --check
