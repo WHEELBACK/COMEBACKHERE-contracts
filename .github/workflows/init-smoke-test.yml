@@ -5,16 +5,17 @@ on:
     paths:
       - "contracts/**"
       - "scripts/init-contracts.sh"
+      - "scripts/check-tools.sh"
       - ".github/workflows/init-smoke-test.yml"
   push:
     branches: [main]
     paths:
       - "contracts/**"
       - "scripts/init-contracts.sh"
+      - "scripts/check-tools.sh"
 
 env:
   CARGO_TERM_COLOR: always
-  STELLAR_CLI_VERSION: "22.8.2"
 
 jobs:
   init-smoke-test:
@@ -37,10 +38,19 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Load version pins
+        shell: bash
+        run: |
+          set -a
+          source .github/versions.env
+          set +a
+          echo "RUST_VERSION=$RUST_VERSION" >> "$GITHUB_ENV"
+          echo "STELLAR_CLI_VERSION=$STELLAR_CLI_VERSION" >> "$GITHUB_ENV"
+
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@master
         with:
-          toolchain: "1.95.0"
+          toolchain: ${{ env.RUST_VERSION }}
           targets: wasm32-unknown-unknown
 
       - name: Install stellar-cli build dependencies
@@ -48,6 +58,9 @@ jobs:
 
       - name: Install Stellar CLI (pinned)
         run: cargo install --locked stellar-cli --version "$STELLAR_CLI_VERSION"
+
+      - name: Verify toolchain and environment with check-tools.sh
+        run: bash scripts/check-tools.sh
 
       - name: Cache Cargo dependencies
         uses: actions/cache@v4

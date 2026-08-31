@@ -18,18 +18,21 @@ pub trait TreasuryInterface {
     fn get_signer_weight(env: Env, signer: Address) -> u32;
 }
 
-/// Storage keys for the workflow contract: the ordered list of settlement IDs executed
-/// through this workflow contract (as opposed to executed directly against treasury,
-/// bypassing the compliance gate — see `get_executed_settlement_ids_page`, #373), and
-/// the pinned compliance/treasury instances set once at initialization (#364) so the
-/// contract enforces which instances it trusts rather than trusting whatever a caller
-/// supplies per-call.
+/// Storage keys for the workflow contract.
+///
+/// `ComplianceId` / `TreasuryId` pin the compliance and treasury instances this
+/// workflow trusts; they are set once at initialization (#364) so the contract
+/// enforces which instances it uses rather than trusting whatever a caller
+/// supplies per-call. `ExecutedSettlements` is the ordered list of settlement
+/// IDs executed through this (compliance-gated) workflow, as opposed to executed
+/// directly against treasury — see `get_executed_settlement_ids_page` (#373).
 #[contracttype]
 #[derive(Clone)]
 pub enum DataKey {
     ExecutedSettlements,
     ComplianceId,
     TreasuryId,
+    ExecutedSettlements,
 }
 
 /// Reference on-chain implementation of the `SettlementWorkflow` role described in
@@ -121,9 +124,9 @@ impl SettlementWorkflowContract {
         settlement_ids: Vec<u64>,
         token_contract: Address,
         merchant: Address,
-    ) -> Vec<u64> {
+    ) -> Result<Vec<u64>, TreasuryError> {
         let compliance = ComplianceClient::new(&env, &Self::compliance_id(&env));
-        compliance.require_allowed_for_treasury(&merchant).unwrap();
+        compliance.require_allowed_for_treasury(&merchant)?;
         let treasury = TreasuryOnlyClient::new(&env, &Self::treasury_id(&env));
         let mut executed = Vec::new(&env);
         for id in settlement_ids.iter() {
@@ -141,6 +144,6 @@ impl SettlementWorkflowContract {
             }
             // Invalid / already-executed / threshold-failed IDs are silently skipped.
         }
-        executed
+        Ok(executed)
     }
 }

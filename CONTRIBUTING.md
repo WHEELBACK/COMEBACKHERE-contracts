@@ -97,12 +97,37 @@ pip install pre-commit
 pre-commit install
 ```
 
-Hooks run on each commit and enforce:
+The default hooks run on each commit and enforce:
 
 - `cargo fmt --all -- --check`
 - `cargo clippy -- -D warnings`
+- the enum-ordering check in `scripts/check-enum-ordering.sh`
 
-Run all hooks manually:
+There is also a separate, intentionally slower pre-push hook that mirrors the full local CI-equivalent pass before you push:
+
+```sh
+pre-commit install --hook-type pre-push
+```
+
+This pre-push hook runs:
+
+- `cargo test --all`
+- `cargo build --target wasm32-unknown-unknown --release`
+- a local WASM size gate for every compiled contract (`64 KiB` limit)
+
+This is intentionally not the default commit hook because `cargo test --all` takes longer than the fast commit checks and is meant to be a one-time, deliberate full verification step before pushing. If you need to bypass it for a temporary local push, set:
+
+```sh
+SKIP_SLOW_CHECKS=1 git push
+```
+
+You can also run the slow hook manually without a push:
+
+```sh
+SKIP_SLOW_CHECKS=1 pre-commit run --hook-stage pre-push
+```
+
+Run all commit hooks manually:
 
 ```sh
 pre-commit run --all-files

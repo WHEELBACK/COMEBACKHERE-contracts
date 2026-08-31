@@ -1,7 +1,7 @@
 use soroban_sdk::{testutils::Address as _, Address, Env};
 use treasury::{SettlementStatus, TreasuryContract, TreasuryContractClient};
 
-fn setup(env: &Env, total: i128) -> (TreasuryContractClient, Address, Address, u64) {
+fn setup(env: &Env, total: i128) -> (TreasuryContractClient<'_>, Address, Address, u64) {
     let admin = Address::generate(env);
     let merchant = Address::generate(env);
     let contract_id = env.register_contract(None, TreasuryContract);

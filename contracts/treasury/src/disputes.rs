@@ -209,12 +209,12 @@ impl TreasuryContract {
         if counterparty_amount > 0 {
             token_client.transfer(&treasury, &dispute.counterparty, &counterparty_amount);
         }
-        dispute.claimant_share_bps = claimant_bps;
         dispute.status = DisputeStatus::ResolvedSplit;
+        dispute.claimant_share_bps = claimant_bps;
+        let settlement_id = dispute.settlement_id;
         env.storage()
             .persistent()
             .set(&DataKey::Dispute(dispute_id), &dispute);
-        let settlement_id = dispute.settlement_id;
         env.events().publish(
             (Symbol::new(&env, "dispute_resolved_split"), dispute_id),
             dispute,

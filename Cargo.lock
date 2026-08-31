@@ -296,6 +296,21 @@ dependencies = [
  "comebackhere-invoice-errors",
  "hex",
  "proptest",
+ "serde_json",
+ "soroban-sdk",
+]
+
+[[package]]
+name = "comebackhere-invoice-errors"
+version = "0.1.0"
+dependencies = [
+ "soroban-sdk",
+]
+
+[[package]]
+name = "comebackhere-invoice-errors"
+version = "0.1.0"
+dependencies = [
  "soroban-sdk",
 ]
 
@@ -328,7 +343,6 @@ version = "1.0.0"
 dependencies = [
  "comebackhere-compliance",
  "comebackhere-compliance-client",
- "comebackhere-multisig",
  "comebackhere-treasury",
  "soroban-sdk",
 ]
