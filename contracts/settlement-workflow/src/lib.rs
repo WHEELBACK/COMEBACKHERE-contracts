@@ -18,23 +18,20 @@ pub trait TreasuryInterface {
     fn get_signer_weight(env: Env, signer: Address) -> u32;
 }
 
-/// Storage key for the ordered list of settlement IDs executed through this
-/// workflow contract (as opposed to executed directly against treasury, bypassing
-/// the compliance gate). See `get_executed_settlement_ids_page` (#373).
-#[contracttype]
-pub enum DataKey {
-    ExecutedSettlements,
-}
-
-/// Instance-storage keys for the workflow's pinned configuration. The compliance
-/// and treasury instances are set once at initialization (#364) so the contract
-/// enforces which instances it trusts rather than trusting whatever a caller
-/// supplies per-call.
+/// Storage keys for the workflow contract.
+///
+/// `ComplianceId` / `TreasuryId` pin the compliance and treasury instances this
+/// workflow trusts; they are set once at initialization (#364) so the contract
+/// enforces which instances it uses rather than trusting whatever a caller
+/// supplies per-call. `ExecutedSettlements` is the ordered list of settlement
+/// IDs executed through this (compliance-gated) workflow, as opposed to executed
+/// directly against treasury — see `get_executed_settlement_ids_page` (#373).
 #[contracttype]
 #[derive(Clone)]
 pub enum DataKey {
     ComplianceId,
     TreasuryId,
+    ExecutedSettlements,
 }
 
 /// Reference on-chain implementation of the `SettlementWorkflow` role described in
