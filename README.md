@@ -48,6 +48,21 @@ contracts/
 
 ---
 
+## Contributing via open issues
+
+This repository maintains two cohesive rounds of issues — an initial foundational set and a follow-up round building on those foundations. Many issues are independent; some explicitly depend on others landing first.
+
+**New contributor orientation:**
+
+1. Check the `Issues` tab and filter by labels (e.g., `Stellar Wave`, `easy`, `hard`) to find work that fits your scope.
+2. **You must request assignment before starting.** Comment on the issue asking for assignment; an issue must be assigned to you before you begin work.
+3. Some issues in the current wave depend on others in the same wave. Read the full issue description to check for dependency notes.
+4. If you discover an issue is already resolved by a recent change, or is a duplicate of another unnoticed issue, comment to flag it for triage rather than opening conflicting work.
+
+For detailed branch naming, commit message, and pull request conventions, see [CONTRIBUTING.md](CONTRIBUTING.md).
+
+---
+
 # Development
 
 ## Format the Code

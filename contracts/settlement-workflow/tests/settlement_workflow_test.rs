@@ -5,8 +5,8 @@ use compliance::{ComplianceContract, ComplianceContractClient};
 use settlement_workflow::{
     SettlementWorkflowContract, SettlementWorkflowContractClient, SettlementWorkflowError,
 };
-use soroban_sdk::{testutils::Address as _, token, Address, Env};
-use treasury::{TreasuryContract, TreasuryContractClient};
+use soroban_sdk::{testutils::Address as _, token, Address, Env, Symbol};
+use treasury::{TreasuryContract, TreasuryContractClient, TreasuryError};
 
 /// Generous CPU-instruction ceiling for the two-hop cross-contract call chain
 /// (Compliance::is_allowed → Treasury::execute_settlement). Native/test-host
@@ -311,5 +311,46 @@ fn execute_with_compliance_stays_under_instruction_budget() {
         instructions <= MAX_EXECUTE_INSTRUCTIONS,
         "execute_with_compliance used {instructions} instructions, \
          expected <= {MAX_EXECUTE_INSTRUCTIONS}"
+    );
+}
+
+#[test]
+fn execute_with_compliance_is_idempotent_against_retried_call() {
+    let (
+        env,
+        admin,
+        merchant,
+        compliance,
+        _compliance_id,
+        treasury,
+        treasury_id,
+        workflow,
+        token_id,
+    ) = setup();
+
+    compliance.allow_address(&admin, &merchant);
+    let settlement_id = treasury.propose_settlement(&admin, &merchant, &10_000_000);
+    token::StellarAssetClient::new(&env, &token_id).mint(&treasury_id, &10_000_000);
+
+    // First execute call succeeds.
+    workflow.execute_with_compliance(&settlement_id, &token_id, &merchant);
+    assert_eq!(
+        token::Client::new(&env, &token_id).balance(&merchant),
+        10_000_000
+    );
+
+    // Retried execute call with identical parameters fails cleanly via Treasury's
+    // AlreadyExecuted guard (settlement status is no longer Pending after the first
+    // successful call), not by double-paying the merchant.
+    let err = workflow
+        .try_execute_with_compliance(&settlement_id, &token_id, &merchant)
+        .unwrap_err()
+        .unwrap();
+    assert_eq!(err, TreasuryError::AlreadyExecuted.into());
+
+    // Verify balance did not change: only one payment occurred despite two calls.
+    assert_eq!(
+        token::Client::new(&env, &token_id).balance(&merchant),
+        10_000_000
     );
 }
