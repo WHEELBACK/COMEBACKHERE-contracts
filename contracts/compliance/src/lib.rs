@@ -69,9 +69,11 @@ pub enum DataKey {
     /// unset (`None`) for addresses tracked before this field existed. Purely metadata —
     /// does not affect `is_allowed`.
     Jurisdiction(Address),
-    /// Timestamp of the last bulk_allow_addresses call by an admin; used to enforce cooldown.
+    /// Timestamp of the caller's last `bulk_allow_addresses` call, keyed per admin.
+    /// See [`BULK_OP_COOLDOWN_SECS`] and `check_bulk_op_cooldown` (#454).
     LastBulkAllow(Address),
-    /// Timestamp of the last bulk_block_addresses call by an admin; used to enforce cooldown.
+    /// Timestamp of the caller's last `bulk_block_addresses` call, keyed per admin.
+    /// See [`BULK_OP_COOLDOWN_SECS`] and `check_bulk_op_cooldown` (#454).
     LastBulkBlock(Address),
 }
 
@@ -903,6 +905,7 @@ impl ComplianceContract {
     }
 
     /// Compute the current [`AddressState`] for a single address without auth.
+    #[allow(dead_code)]
     fn address_state(env: &Env, addr: &Address) -> AddressState {
         let blocked: bool = env
             .storage()

@@ -700,9 +700,10 @@ fn test_cancelled_invoice_cannot_be_marked_paid() {
 
 #[test]
 fn test_cancel_invoice_unauthorized_rejected() {
-    let (env, _admin, client) = setup();
+    let (env, admin, client) = setup();
     let merchant = Address::generate(&env);
     let unauthorized = Address::generate(&env);
+    let payer = Address::generate(&env);
     let id = client.create_invoice(
         &merchant,
         &10_000_000,

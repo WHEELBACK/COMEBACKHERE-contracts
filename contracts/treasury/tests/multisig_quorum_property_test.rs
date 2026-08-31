@@ -267,7 +267,9 @@ proptest! {
         prop_assert_eq!(
             meets_threshold(accumulated, threshold),
             accumulated >= threshold,
-            "meets_threshold must agree with >= for accumulated={accumulated}, threshold={threshold}"
+            "meets_threshold must agree with >= for accumulated={}, threshold={}",
+            accumulated,
+            threshold
         );
     }
 }

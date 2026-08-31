@@ -46,6 +46,16 @@ pub enum TreasuryError {
     // gives a first-time deployer no hint that the fix is a `set_signer` call for
     // the workflow's own address.
     WorkflowNotRegisteredSigner = 34,
+    // Appended (not renumbered) to keep discriminants stable; see
+    // scripts/check-enum-ordering.sh (#74).
+    // A withdrawal (`withdraw` / `withdraw_all`) would exceed the admin-configured
+    // per-rolling-window withdrawal limit (#455).
+    WithdrawalLimitExceeded = 35,
+    // `resolve_dispute_split` was called with `claimant_bps` outside 0..=10_000 (#456).
+    InvalidSplitRatio = 36,
+    // `force_cancel_settlement` was called on a settlement that is neither
+    // `Pending` nor `OnHold` and therefore cannot be force-cancelled (#457).
+    ForceCancelNotAllowed = 37,
 }
 
 // Issue #48: reason codes attached to a held settlement; None means not on hold

@@ -1,7 +1,7 @@
 use invoice::{
-    InvoiceContract, InvoiceContractClient, InvoiceError, InvoiceStatus, MaybeAddress, MaybeBytes,
+    InvoiceContract, InvoiceContractClient, InvoiceStatus, MaybeAddress, MaybeBytes,
 };
-use soroban_sdk::{contract, contractimpl, testutils::Address as _, Address, Env};
+use soroban_sdk::{testutils::Address as _, Address, Env};
 use treasury::{TreasuryContract, TreasuryContractClient};
 
 mod test_token {
@@ -79,7 +79,7 @@ fn setup() -> (
 
 #[test]
 fn invoice_created_paid_released() {
-    let (env, admin, merchant, payer, invoice, _treasury_id, _treasury, _token_id) = setup();
+    let (_env, admin, merchant, payer, invoice, _treasury_id, _treasury, _token_id) = setup();
 
     let id = invoice.create_invoice(
         &merchant,
