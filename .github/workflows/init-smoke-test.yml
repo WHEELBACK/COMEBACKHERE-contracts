@@ -5,12 +5,14 @@ on:
     paths:
       - "contracts/**"
       - "scripts/init-contracts.sh"
+      - "scripts/check-tools.sh"
       - ".github/workflows/init-smoke-test.yml"
   push:
     branches: [main]
     paths:
       - "contracts/**"
       - "scripts/init-contracts.sh"
+      - "scripts/check-tools.sh"
 
 env:
   CARGO_TERM_COLOR: always
@@ -56,6 +58,9 @@ jobs:
 
       - name: Install Stellar CLI (pinned)
         run: cargo install --locked stellar-cli --version "$STELLAR_CLI_VERSION"
+
+      - name: Verify toolchain and environment with check-tools.sh
+        run: bash scripts/check-tools.sh
 
       - name: Cache Cargo dependencies
         uses: actions/cache@v4
