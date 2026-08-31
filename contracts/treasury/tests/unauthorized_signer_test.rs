@@ -1,7 +1,7 @@
 use soroban_sdk::{testutils::Address as _, Address, Env};
 use treasury::{TreasuryContract, TreasuryContractClient};
 
-fn setup_treasury(env: &Env, threshold: u32) -> (TreasuryContractClient, Address, Address) {
+fn setup_treasury(env: &Env, threshold: u32) -> (TreasuryContractClient<'_>, Address, Address) {
     env.mock_all_auths();
     let admin = Address::generate(env);
     let contract_id = env.register_contract(None, TreasuryContract);

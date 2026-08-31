@@ -6,7 +6,7 @@ use treasury::{SettlementStatus, TreasuryContract, TreasuryContractClient};
 // is a read-only scan, so this is a generous ceiling, not a tight one.
 const PAGE_INSTRUCTION_BUDGET: u64 = 100_000_000;
 
-fn setup_with_settlements(env: &Env, n: u64) -> (TreasuryContractClient, Address) {
+fn setup_with_settlements(env: &Env, n: u64) -> (TreasuryContractClient<'_>, Address) {
     let admin = Address::generate(env);
     let contract_id = env.register_contract(None, TreasuryContract);
     let client = TreasuryContractClient::new(env, &contract_id);

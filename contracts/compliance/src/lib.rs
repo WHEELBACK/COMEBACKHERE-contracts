@@ -905,6 +905,7 @@ impl ComplianceContract {
     }
 
     /// Compute the current [`AddressState`] for a single address without auth.
+    #[allow(dead_code)]
     fn address_state(env: &Env, addr: &Address) -> AddressState {
         let blocked: bool = env
             .storage()
