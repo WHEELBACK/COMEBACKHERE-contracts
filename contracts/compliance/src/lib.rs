@@ -27,13 +27,14 @@ use soroban_sdk::{
 
 pub use compliance_errors::ComplianceError;
 
-#[contracttype]
-#[derive(Clone)]
-/// Storage key enum for the compliance contract.
+/// Storage keys for the compliance contract.
 ///
 /// These variants were intended to move to a dedicated `allowlist.rs` submodule
-/// (see issue #43). Until that refactor lands they remain here. Add new variants
-/// at the end only — reordering breaks any stored data keyed by ordinal position.
+/// (see issue #43). Until that refactor lands they remain here. New variants must
+/// be appended at the end only — reordering breaks stored data keyed by ordinal
+/// position.
+#[contracttype]
+#[derive(Clone)]
 pub enum DataKey {
     /// The active administrator address (instance storage).
     Admin,

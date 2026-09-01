@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+#### Tooling
+- `scripts/check-enum-doc-comments.sh` (#446): lint script that verifies every `#[contracterror]` and `#[contracttype]` enum has an enum-level `///` doc comment (not just per-variant comments). Integrated into `.pre-commit-config.yaml`, `justfile`, and `Makefile` alongside the existing `check-enum-ordering.sh` step.
+- All `#[contracterror]`/`#[contracttype]` enums across `contracts/` and `crates/` now carry enum-level `///` doc comments to satisfy the new lint.
+
 #### Invoice Contract
 - Core invoice lifecycle management (Pending, Paid, Released, Cancelled, Expired, RefundRequested).
 - Merchant-supplied nonces for idempotency and duplicate prevention.

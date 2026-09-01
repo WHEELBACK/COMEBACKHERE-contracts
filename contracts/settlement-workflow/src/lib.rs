@@ -32,7 +32,6 @@ pub enum DataKey {
     ExecutedSettlements,
     ComplianceId,
     TreasuryId,
-    ExecutedSettlements,
 }
 
 /// Reference on-chain implementation of the `SettlementWorkflow` role described in

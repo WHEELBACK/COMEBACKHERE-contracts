@@ -1,6 +1,9 @@
 #![no_std]
 use soroban_sdk::{contracterror, contracttype, Address, Env, Vec};
 
+/// Error codes for all treasury contract operations. Variants are append-only
+/// and must never be renumbered, as discriminants are stored on-chain and
+/// matched by off-chain systems; see `scripts/check-enum-ordering.sh`.
 #[contracterror]
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 #[repr(u32)]
@@ -68,6 +71,12 @@ pub enum TreasuryError {
 }
 
 // Issue #48: reason codes attached to a held settlement; None means not on hold
+/// Reason codes attached to a settlement that is currently on hold.
+///
+/// Attached to a `Settlement` when `hold_settlement` is called. `None` is the
+/// default and means the settlement is not on hold. Other variants express the
+/// semantic reason so downstream systems (compliance dashboards, support tooling)
+/// can route the case appropriately.
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum SettlementHoldReason {
@@ -78,6 +87,13 @@ pub enum SettlementHoldReason {
     AdminHold,
 }
 
+/// Lifecycle state of a treasury settlement proposal.
+///
+/// Transitions: `Pending` → `Executed` (threshold met), `Pending` →
+/// `PartiallySettled` / `PartiallyExecuted` (partial flow), `Pending` →
+/// `OnHold` (held by admin), `Pending` → `Cancelled` (admin cancel or force-
+/// cancel), `Pending` → `Expired` (TTL elapsed without execution).
+/// Terminal states are `Executed`, `Cancelled`, and `Expired`.
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum SettlementStatus {
@@ -90,6 +106,12 @@ pub enum SettlementStatus {
     Expired,
 }
 
+/// Lifecycle state of a raised dispute on a treasury settlement.
+///
+/// A dispute starts in `Raised` and transitions to one of the three resolved
+/// states (`ResolvedClaimant`, `ResolvedCounterparty`, `ResolvedSplit`) once
+/// enough resolution approvals accumulate, or to `Expired` if
+/// `dispute_expires_at` passes without resolution.
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum DisputeStatus {
@@ -133,6 +155,11 @@ pub struct Dispute {
     pub claimant_share_bps: u32,
 }
 
+/// Lifecycle state of a signer-rotation proposal.
+///
+/// A rotation starts `Pending` when proposed, transitions to `Executed` when
+/// cumulative approval weight meets the threshold, or to `Cancelled` when an
+/// admin explicitly cancels it. Both `Executed` and `Cancelled` are terminal.
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum RotationStatus {
@@ -164,6 +191,12 @@ pub struct SignerRotationProposal {
     pub captured_old_weight: u32,
 }
 
+/// Storage keys for all treasury contract state.
+///
+/// Used as keys for Soroban instance and persistent storage. Variants must not
+/// be reordered or removed once deployed; new variants should be appended at
+/// the end so that existing on-chain data (keyed by XDR-encoded discriminants)
+/// continues to decode correctly.
 #[contracttype]
 #[derive(Clone)]
 pub enum DataKey {
