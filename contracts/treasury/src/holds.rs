@@ -58,11 +58,7 @@ impl TreasuryContract {
     /// Errors: `SettlementNotFound`, `NotOnHold`.
     /// Panics: `Unauthorized`.
     /// Emits: `settlement_released`.
-    pub fn release_hold(
-        env: Env,
-        admin: Address,
-        settlement_id: u64,
-    ) -> Result<(), TreasuryError> {
+    pub fn release_hold(env: Env, admin: Address, settlement_id: u64) -> Result<(), TreasuryError> {
         require_admin(&env, &admin);
         let mut settlement: Settlement = env
             .storage()

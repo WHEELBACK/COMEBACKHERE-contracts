@@ -157,7 +157,10 @@ fn invoice_created_event_data_matches_storage_at_emission() {
         &MaybeAddress::None,
     );
 
-    assert_eq!(last_event_symbol(&env), Symbol::new(&env, "invoice_created"));
+    assert_eq!(
+        last_event_symbol(&env),
+        Symbol::new(&env, "invoice_created")
+    );
     let event_invoice = Invoice::try_from_val(&env, &last_event_data(&env)).unwrap();
 
     let env2 = env.clone();
@@ -186,7 +189,10 @@ fn address_blocked_event_data_matches_storage_at_emission() {
 
     client.block_address(&admin, &subject, &None);
 
-    assert_eq!(last_event_symbol(&env), Symbol::new(&env, "address_blocked"));
+    assert_eq!(
+        last_event_symbol(&env),
+        Symbol::new(&env, "address_blocked")
+    );
     let event_address = Address::try_from_val(&env, &last_event_data(&env)).unwrap();
 
     let env2 = env.clone();

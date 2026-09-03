@@ -126,11 +126,11 @@ fn unblock_at_at_u64_max_does_not_panic() {
 fn unblock_at_adversarial_delta_sweep() {
     let now: u64 = 1_000_000;
     let deltas: [i128; 7] = [
-        -1_000_000, // far past (would underflow a naive u64 subtraction)
-        -1,         // just past
-        0,          // exact boundary
-        1,          // just future
-        1_000_000,  // moderate future
+        -1_000_000,                         // far past (would underflow a naive u64 subtraction)
+        -1,                                 // just past
+        0,                                  // exact boundary
+        1,                                  // just future
+        1_000_000,                          // moderate future
         (u64::MAX as i128) - (now as i128), // pushes unblock_at to exactly u64::MAX
         (u64::MAX as i128) - (now as i128) - 1,
     ];

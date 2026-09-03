@@ -49,11 +49,7 @@ impl TreasuryContract {
     /// Existing settlement approval snapshots are not changed, so removing a
     /// signer does not retroactively invalidate in-flight approvals.
     /// Emits: `signer_removed`.
-    pub fn remove_signer(
-        env: Env,
-        admin: Address,
-        signer: Address,
-    ) -> Result<(), TreasuryError> {
+    pub fn remove_signer(env: Env, admin: Address, signer: Address) -> Result<(), TreasuryError> {
         require_admin(&env, &admin);
         env.storage()
             .instance()
