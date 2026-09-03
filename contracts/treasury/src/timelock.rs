@@ -37,7 +37,7 @@
 
 use crate::{
     require_admin, DataKey, SignerChangeKind, SignerChangeProposal, SignerChangeStatus,
-    TreasuryContract, TreasuryError,
+    TreasuryContract, TreasuryContractArgs, TreasuryContractClient, TreasuryError,
 };
 use soroban_sdk::{contractimpl, Address, Env, Symbol, Vec};
 
@@ -96,10 +96,8 @@ impl TreasuryContract {
             .instance()
             .set(&DataKey::SignerChangeCount, &id);
 
-        env.events().publish(
-            (Symbol::new(&env, "signer_change_proposed"), id),
-            proposal,
-        );
+        env.events()
+            .publish((Symbol::new(&env, "signer_change_proposed"), id), proposal);
 
         Ok(id)
     }
