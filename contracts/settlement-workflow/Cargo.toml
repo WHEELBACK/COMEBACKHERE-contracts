@@ -14,7 +14,6 @@ testutils = ["soroban-sdk/testutils"]
 
 [dependencies]
 soroban-sdk.workspace = true
-multisig = { package = "comebackhere-multisig", path = "../../crates/multisig" }
 compliance-client = { package = "comebackhere-compliance-client", path = "../../crates/compliance-client" }
 # `multisig` holds no `#[contractimpl]` (only the shared `TreasuryError` enum and
 # contract types), so depending on it directly does not statically link any
