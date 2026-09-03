@@ -13,6 +13,21 @@ and this crate adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.h
 
 ---
 
+## [0.4.0] — Timelocked signer/threshold changes (issue #447)
+
+### Added
+
+- Three new `TreasuryError` variants appended at discriminants 38–40:
+  - `SignerChangeTooEarly = 38` — returned when `execute_signer_change` is called before the 24 h delay has elapsed.
+  - `SignerChangeNotFound = 39` — returned when a `change_id` does not exist.
+  - `SignerChangeAlreadyFinalised = 40` — returned when a proposal has already been executed or cancelled.
+- Duplicate discriminant entries (34/35/36 appeared twice in the previous source as a merge artifact) are removed; `WorkflowNotRegisteredSigner` is now the sole holder of 34.
+- New `contracttype` enums: `SignerChangeKind`, `SignerChangeStatus`.
+- New `contracttype` struct: `SignerChangeProposal`.
+- New `DataKey` variants: `SignerChangeCount`, `SignerChange(u64)`.
+
+---
+
 ## [0.2.0] — Treasury WASM-size fix
 
 ### Context

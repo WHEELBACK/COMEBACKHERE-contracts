@@ -43,31 +43,29 @@ pub enum TreasuryError {
     InsufficientBalance = 31,
     NotPaused = 32,
     RotationProposalCooldown = 33,
-    // Per-window withdrawal limit was exceeded; see `set_withdrawal_limit` and
-    // `enforce_withdrawal_limit` in `deposits.rs` (#455).
-    WithdrawalLimitExceeded = 34,
-    // Appended for `resolve_dispute_split` (#456): the provided claimant basis-points
-    // ratio exceeds BPS_DENOMINATOR (10_000), making a valid split impossible.
-    InvalidSplitRatio = 35,
-    // Appended for `force_cancel_settlement`: the target settlement is already in a
-    // terminal state (Executed, Cancelled, Expired) and cannot be force-cancelled.
-    ForceCancelNotAllowed = 36,
     // Settlement-workflow precondition: the workflow contract must be registered
     // as a treasury signer (see settlement-workflow #370). Without this the nested
     // `execute_settlement` would fail with the generic `UnauthorizedSigner`, which
     // gives a first-time deployer no hint that the fix is a `set_signer` call for
     // the workflow's own address.
     WorkflowNotRegisteredSigner = 34,
-    // Appended (not renumbered) to keep discriminants stable; see
-    // scripts/check-enum-ordering.sh (#74).
-    // A withdrawal (`withdraw` / `withdraw_all`) would exceed the admin-configured
-    // per-rolling-window withdrawal limit (#455).
+    // Per-window withdrawal limit was exceeded; see `set_withdrawal_limit` and
+    // `enforce_withdrawal_limit` in `deposits.rs` (#455).
     WithdrawalLimitExceeded = 35,
-    // `resolve_dispute_split` was called with `claimant_bps` outside 0..=10_000 (#456).
+    // Appended for `resolve_dispute_split` (#456): the provided claimant basis-points
+    // ratio exceeds BPS_DENOMINATOR (10_000), making a valid split impossible.
     InvalidSplitRatio = 36,
-    // `force_cancel_settlement` was called on a settlement that is neither
-    // `Pending` nor `OnHold` and therefore cannot be force-cancelled (#457).
+    // Appended for `force_cancel_settlement`: the target settlement is already in a
+    // terminal state (Executed, Cancelled, Expired) and cannot be force-cancelled.
     ForceCancelNotAllowed = 37,
+    // Appended for #447: a timelocked signer/threshold change cannot be executed
+    // before its minimum delay has elapsed.
+    SignerChangeTooEarly = 38,
+    // Appended for #447: no pending signer/threshold change exists with the given id.
+    SignerChangeNotFound = 39,
+    // Appended for #447: the referenced signer/threshold change has already been
+    // executed or cancelled and cannot be acted on again.
+    SignerChangeAlreadyFinalised = 40,
 }
 
 // Issue #48: reason codes attached to a held settlement; None means not on hold
@@ -75,8 +73,8 @@ pub enum TreasuryError {
 ///
 /// Attached to a `Settlement` when `hold_settlement` is called. `None` is the
 /// default and means the settlement is not on hold. Other variants express the
-/// semantic reason so downstream systems (compliance dashboards, support tooling)
-/// can route the case appropriately.
+/// semantic reason for the hold so downstream systems (compliance dashboards,
+/// support tooling) can route the case appropriately.
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum SettlementHoldReason {
@@ -110,8 +108,8 @@ pub enum SettlementStatus {
 ///
 /// A dispute starts in `Raised` and transitions to one of the three resolved
 /// states (`ResolvedClaimant`, `ResolvedCounterparty`, `ResolvedSplit`) once
-/// enough resolution approvals accumulate, or to `Expired` if
-/// `dispute_expires_at` passes without resolution.
+/// enough resolution approvals have accumulated, or to `Expired` if the
+/// `dispute_expires_at` timestamp has passed without a resolution.
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum DisputeStatus {
@@ -191,6 +189,52 @@ pub struct SignerRotationProposal {
     pub captured_old_weight: u32,
 }
 
+/// The kind of admin signer/threshold change captured in a `SignerChangeProposal`.
+/// Each variant carries the parameters required to execute that specific change once
+/// the timelock delay has elapsed.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum SignerChangeKind {
+    /// Set (or update) a signer's approval weight.  Weight `0` deactivates the signer.
+    SetSigner(Address, u32),
+    /// Remove a signer from the active registry.
+    RemoveSigner(Address),
+    /// Change the multisig approval threshold.
+    UpdateThreshold(u32),
+}
+
+/// Lifecycle state of a `SignerChangeProposal`.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum SignerChangeStatus {
+    /// Queued but the delay has not yet elapsed; cannot be executed yet.
+    Pending,
+    /// The change has been applied; no further state transitions are possible.
+    Executed,
+    /// An admin cancelled the change before it was executed; permanently terminal.
+    Cancelled,
+}
+
+/// A timelocked admin signer/threshold-configuration change.
+///
+/// Proposed via `propose_signer_change` and executed via `execute_signer_change`
+/// only after `SIGNER_CHANGE_TIMELOCK_SECS` has elapsed since `proposed_at`.
+/// Any admin may cancel it via `cancel_signer_change` while it is still `Pending`.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SignerChangeProposal {
+    /// Monotonically-increasing unique identifier.
+    pub id: u64,
+    /// What signer-configuration change will be applied on execution.
+    pub kind: SignerChangeKind,
+    /// Ledger timestamp at which the proposal was created.
+    pub proposed_at: u64,
+    /// Earliest ledger timestamp at which `execute_signer_change` may succeed.
+    pub executable_at: u64,
+    /// Current lifecycle state.
+    pub status: SignerChangeStatus,
+}
+
 /// Storage keys for all treasury contract state.
 ///
 /// Used as keys for Soroban instance and persistent storage. Variants must not
@@ -227,6 +271,10 @@ pub enum DataKey {
     WithdrawalWindowStart(Address),
     /// Amount withdrawn so far within the current window for a given tracked address.
     WithdrawnInWindow(Address),
+    /// Monotonically-increasing counter for `SignerChangeProposal` identifiers (#447).
+    SignerChangeCount,
+    /// Persistent storage for a timelocked signer/threshold-change proposal (#447).
+    SignerChange(u64),
 }
 
 /// Returns the approval weight assigned to `signer`, or `0` if not registered.
