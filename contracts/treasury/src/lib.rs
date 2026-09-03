@@ -2,7 +2,8 @@
 
 pub use multisig::{
     DataKey, Dispute, DisputeStatus, RotationStatus, Settlement, SettlementHoldReason,
-    SettlementStatus, SignerRotationProposal, TreasuryError,
+    SettlementStatus, SignerChangeKind, SignerChangeProposal, SignerChangeStatus,
+    SignerRotationProposal, TreasuryError,
 };
 
 use soroban_sdk::{contract, contractimpl, Address, Env, Symbol, Vec};
@@ -12,6 +13,7 @@ mod disputes;
 mod holds;
 mod settlements;
 mod signers;
+mod timelock;
 
 #[contract]
 pub struct TreasuryContract;

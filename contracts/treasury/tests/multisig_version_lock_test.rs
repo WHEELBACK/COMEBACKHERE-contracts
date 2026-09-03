@@ -18,13 +18,14 @@
 use soroban_sdk::{testutils::Address as _, Address, Env, Vec};
 use treasury::{
     Dispute, DisputeStatus, RotationStatus, Settlement, SettlementHoldReason, SettlementStatus,
-    SignerRotationProposal, TreasuryContract, TreasuryContractClient, TreasuryError,
+    SignerChangeKind, SignerChangeProposal, SignerChangeStatus, SignerRotationProposal,
+    TreasuryContract, TreasuryContractClient, TreasuryError,
 };
 
 /// Expected version of `crates/multisig` (see its `Cargo.toml`). Bump this only
 /// alongside a review of every exhaustive match below - if they still compile,
 /// the ABI-relevant shape of multisig's types is unchanged.
-const EXPECTED_MULTISIG_VERSION: &str = "0.3.0";
+const EXPECTED_MULTISIG_VERSION: &str = "0.4.0";
 
 const MULTISIG_CARGO_TOML: &str = include_str!("../../../crates/multisig/Cargo.toml");
 
@@ -102,6 +103,10 @@ fn treasury_error_shape_is_unchanged() {
     assert_eq!(TreasuryError::WithdrawalLimitExceeded as u32, 35);
     assert_eq!(TreasuryError::InvalidSplitRatio as u32, 36);
     assert_eq!(TreasuryError::ForceCancelNotAllowed as u32, 37);
+    // Appended for #447: timelocked signer/threshold-change errors.
+    assert_eq!(TreasuryError::SignerChangeTooEarly as u32, 38);
+    assert_eq!(TreasuryError::SignerChangeNotFound as u32, 39);
+    assert_eq!(TreasuryError::SignerChangeAlreadyFinalised as u32, 40);
 
     // No wildcard arm: adding, removing, or renaming a variant fails this compile.
     fn assert_exhaustive(err: TreasuryError) {
@@ -142,7 +147,10 @@ fn treasury_error_shape_is_unchanged() {
             | TreasuryError::WorkflowNotRegisteredSigner
             | TreasuryError::WithdrawalLimitExceeded
             | TreasuryError::InvalidSplitRatio
-            | TreasuryError::ForceCancelNotAllowed => {}
+            | TreasuryError::ForceCancelNotAllowed
+            | TreasuryError::SignerChangeTooEarly
+            | TreasuryError::SignerChangeNotFound
+            | TreasuryError::SignerChangeAlreadyFinalised => {}
         }
     }
     assert_exhaustive(TreasuryError::AlreadyOnHold);
@@ -341,4 +349,47 @@ fn signer_rotation_proposal_struct_shape_is_unchanged() {
     assert!(approval_weight > 0);
     assert_rotation_status_exhaustive(status);
     assert!(captured_old_weight > 0);
+}
+
+fn assert_signer_change_status_exhaustive(status: SignerChangeStatus) {
+    match status {
+        SignerChangeStatus::Pending => {}
+        SignerChangeStatus::Executed => {}
+        SignerChangeStatus::Cancelled => {}
+    }
+}
+
+fn assert_signer_change_kind_exhaustive(kind: SignerChangeKind) {
+    match kind {
+        SignerChangeKind::SetSigner(_, _) => {}
+        SignerChangeKind::RemoveSigner(_) => {}
+        SignerChangeKind::UpdateThreshold(_) => {}
+    }
+}
+
+/// Builds a real `SignerChangeProposal` through the deployed contract and
+/// destructures it with no `..` — any field or variant change in multisig's
+/// timelock types causes a compile failure here, forcing deliberate review.
+#[test]
+fn signer_change_proposal_struct_shape_is_unchanged() {
+    let env = Env::default();
+    let (client, admin) = setup(&env);
+    let target = Address::generate(&env);
+
+    let cid = client.propose_signer_change(&admin, &SignerChangeKind::SetSigner(target, 2));
+    let proposal: SignerChangeProposal =
+        client.get_signer_change(&cid).expect("proposal must exist");
+
+    let SignerChangeProposal {
+        id,
+        kind,
+        proposed_at,
+        executable_at,
+        status,
+    } = proposal;
+
+    assert_eq!(id, cid);
+    assert_signer_change_kind_exhaustive(kind);
+    assert!(executable_at > proposed_at);
+    assert_signer_change_status_exhaustive(status);
 }
