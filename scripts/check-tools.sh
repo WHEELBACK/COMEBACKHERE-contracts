@@ -15,8 +15,18 @@ log() {
 log_info() { log "INFO" "$@"; }
 log_error() { log "ERROR" "$@" >&2; }
 
-REQUIRED_RUST="1.95.0"
-REQUIRED_STELLAR_CLI="22.8.2"
+# Version pins are centralized in .github/versions.env so the workflows and the
+# local tooling checks can never drift apart. Fall back to literals only if the
+# file is somehow absent.
+VERSIONS_FILE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/.github/versions.env"
+if [ -f "$VERSIONS_FILE" ]; then
+    # shellcheck disable=SC1090
+    set -a
+    source "$VERSIONS_FILE"
+    set +a
+fi
+REQUIRED_RUST="${RUST_VERSION:-1.95.0}"
+REQUIRED_STELLAR_CLI="${STELLAR_CLI_VERSION:-22.8.2}"
 TARGET="wasm32-unknown-unknown"
 
 log_info "Checking development environment..."
@@ -52,8 +62,9 @@ if ! command -v stellar &> /dev/null; then
     exit 1
 fi
 
-# stellar --version output format: "stellar 22.8.2 (build-date)"
-STELLAR_VERSION=$(stellar --version | awk '{print $2}')
+# stellar --version prints several lines (stellar-cli, then its embedded
+# soroban-env / xdr versions); only the first line carries the CLI version.
+STELLAR_VERSION=$(stellar --version | head -1 | awk '{print $2}' | tr -d '[:space:]')
 if [ "$STELLAR_VERSION" != "$REQUIRED_STELLAR_CLI" ]; then
     log_error "stellar-cli version $REQUIRED_STELLAR_CLI is required (found $STELLAR_VERSION)."
     log_error "Update via: cargo install --locked stellar-cli --version $REQUIRED_STELLAR_CLI"
