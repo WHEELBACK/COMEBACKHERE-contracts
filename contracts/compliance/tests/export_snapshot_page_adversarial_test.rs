@@ -2,21 +2,23 @@
 // paginated the read side of that same index via export_snapshot_page. This
 // suite exists to confirm, rather than assume, that the pagination logic
 // behaves correctly once the index is genuinely as large as the cap allows
-// (50_000 -- see MAX_TRACKED_ADDRESSES in contracts/compliance/src/lib.rs,
-// which is not exported publicly, so the value is duplicated here as `CAP`)
-// and that adversarial start/limit combinations against that maximally-full
-// index return cleanly rather than panicking, reading out of bounds, or
-// burning instructions disproportionate to the requested page size.
+// (compliance::MAX_TRACKED_ADDRESSES) and that adversarial start/limit
+// combinations against that maximally-full index return cleanly rather than
+// panicking, reading out of bounds, or burning instructions disproportionate
+// to the requested page size.
 
 use compliance::{
-    AddressState, ComplianceContract, ComplianceContractClient, ContractError, MAX_BATCH_SIZE,
+    AddressState, ComplianceContract, ComplianceContractClient, ContractError,
+    BULK_OP_COOLDOWN_SECS, MAX_BATCH_SIZE, MAX_TRACKED_ADDRESSES,
 };
-use soroban_sdk::{testutils::Address as _, Address, Env};
+use soroban_sdk::{
+    testutils::{Address as _, Ledger},
+    Address, Env,
+};
 
 extern crate std;
 
-/// Mirrors compliance::MAX_TRACKED_ADDRESSES, a private const.
-const CAP: u32 = 50_000;
+const CAP: u32 = MAX_TRACKED_ADDRESSES;
 
 /// A read-only page scan over an already-maximally-full index should not
 /// cost meaningfully more than scanning the page itself; this is a generous
@@ -55,6 +57,13 @@ fn fill_index_to_cap(
         }
         client.bulk_allow_addresses(admin, &batch);
         remaining -= batch_size;
+        // bulk_allow_addresses enforces BULK_OP_COOLDOWN_SECS between calls by
+        // the same admin (#454); step the ledger clock past it before the next
+        // batch so filling the index doesn't trip the cooldown.
+        if remaining > 0 {
+            env.ledger()
+                .set_timestamp(env.ledger().timestamp() + BULK_OP_COOLDOWN_SECS + 1);
+        }
     }
     all
 }

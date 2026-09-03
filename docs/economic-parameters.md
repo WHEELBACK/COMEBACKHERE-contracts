@@ -19,7 +19,7 @@ to close.
 
 | Constant | Value | Location | Rationale |
 |---|---|---|---|
-| `MAX_TRACKED_ADDRESSES` | `50_000` | `lib.rs:128` | Upper bound on `DataKey::AddressIndex` growth. Once reached, tracking a *new* address is rejected with `AddressIndexFull` rather than growing the index further, to cap unbounded storage-rent growth. Existing tracked addresses are unaffected by the cap. |
+| `MAX_TRACKED_ADDRESSES` | `2_000` | `compliance/src/lib.rs` | Upper bound on the paged address index's growth. Once reached, tracking a *new* address is rejected with `AddressIndexFull` rather than growing the index further, to cap unbounded storage-rent growth. Existing tracked addresses are unaffected by the cap. |
 | `MAX_BATCH_SIZE` | `50` | `lib.rs:132` | Cap on addresses accepted per admin batch call (`bulk_allow_addresses`, `bulk_block_addresses`). Chosen to match the identical `MAX_BATCH_SIZE = 50` used in `invoice` and `treasury` — see "Cross-contract interactions" below. |
 
 ## Invoice (`contracts/invoice/src`)

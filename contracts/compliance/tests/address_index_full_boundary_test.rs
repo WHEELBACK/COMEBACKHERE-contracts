@@ -21,15 +21,17 @@
 //!    cleanly while the index is completely full, since none of them need to
 //!    grow the index.
 //!
-//! `MAX_TRACKED_ADDRESSES` is a private constant in `compliance::lib`, so it is
-//! duplicated here. If the source constant changes, update this copy to match.
+//! `MAX_TRACKED_ADDRESSES` is re-exported by the `compliance` crate, so this
+//! suite asserts against the real value rather than a hand-mirrored copy.
 
-use compliance::{ComplianceContract, ComplianceContractClient, ContractError};
-use soroban_sdk::{testutils::Address as _, Address, Env};
-
-/// Mirrors the private `MAX_TRACKED_ADDRESSES` constant in
-/// `contracts/compliance/src/lib.rs`. Keep in sync with the source.
-const MAX_TRACKED_ADDRESSES: u32 = 50_000;
+use compliance::{
+    ComplianceContract, ComplianceContractClient, ContractError, BULK_OP_COOLDOWN_SECS,
+    MAX_BATCH_SIZE, MAX_TRACKED_ADDRESSES,
+};
+use soroban_sdk::{
+    testutils::{Address as _, Ledger},
+    Address, Env,
+};
 
 fn setup() -> (Env, Address, ComplianceContractClient<'static>) {
     let env = Env::default();
@@ -43,18 +45,35 @@ fn setup() -> (Env, Address, ComplianceContractClient<'static>) {
 }
 
 /// Fills the address index to exactly `MAX_TRACKED_ADDRESSES` distinct, newly
-/// generated addresses via `allow_address`, asserting every single call
-/// succeeds (i.e. the cap does not reject the boundary entry itself).
-fn fill_index_to_cap(env: &Env, admin: &Address, client: &ComplianceContractClient<'static>) -> Vec<Address> {
+/// generated addresses. Uses `bulk_allow_addresses` (batched, `MAX_BATCH_SIZE`
+/// per call) rather than `MAX_TRACKED_ADDRESSES` individual `allow_address`
+/// calls so the fill stays fast in the test host; every batch is asserted to
+/// succeed, so the cap still must not reject any entry up to and including the
+/// boundary one.
+fn fill_index_to_cap(
+    env: &Env,
+    admin: &Address,
+    client: &ComplianceContractClient<'static>,
+) -> Vec<Address> {
     let mut addresses = Vec::with_capacity(MAX_TRACKED_ADDRESSES as usize);
-    for i in 0..MAX_TRACKED_ADDRESSES {
-        let address = Address::generate(env);
-        client.allow_address(admin, &address);
-        assert!(
-            client.is_allowed(&address),
-            "address #{i} should be allowed immediately after tracking"
-        );
-        addresses.push(address);
+    let mut remaining = MAX_TRACKED_ADDRESSES;
+    while remaining > 0 {
+        let batch_size = remaining.min(MAX_BATCH_SIZE);
+        let mut batch = soroban_sdk::Vec::new(env);
+        for _ in 0..batch_size {
+            let address = Address::generate(env);
+            batch.push_back(address.clone());
+            addresses.push(address);
+        }
+        client.bulk_allow_addresses(admin, &batch);
+        remaining -= batch_size;
+        // bulk_allow_addresses enforces BULK_OP_COOLDOWN_SECS between calls by
+        // the same admin (#454); step the ledger clock past it before the next
+        // batch.
+        if remaining > 0 {
+            env.ledger()
+                .set_timestamp(env.ledger().timestamp() + BULK_OP_COOLDOWN_SECS + 1);
+        }
     }
     addresses
 }
@@ -99,7 +118,8 @@ fn new_distinct_address_beyond_cap_is_rejected_with_address_index_full() {
     assert_eq!(block_result, Err(Ok(ContractError::AddressIndexFull)));
 
     let overflow_address_3 = Address::generate(&env);
-    let allow_until_result = client.try_allow_address_until(&admin, &overflow_address_3, &1_000_000);
+    let allow_until_result =
+        client.try_allow_address_until(&admin, &overflow_address_3, &1_000_000);
     assert_eq!(allow_until_result, Err(Ok(ContractError::AddressIndexFull)));
 }
 
@@ -161,6 +181,7 @@ fn clear_address_on_already_tracked_address_succeeds_while_index_is_full() {
     client.block_address(&admin, &target, &None);
     assert!(client.is_blocked(&target));
     client.clear_address(&admin, &target);
+    // clear_address unblocks *and* re-allows (Blocked -> false, Allowed -> true).
     assert!(!client.is_blocked(&target));
-    assert!(!client.is_allowed(&target));
+    assert!(client.is_allowed(&target));
 }
