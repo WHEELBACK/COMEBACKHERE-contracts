@@ -185,7 +185,12 @@ fn generate_cases() -> Vec<Case> {
 /// Drives the real contract into the state described by `case` using a fresh
 /// address per case, then returns `is_allowed` for comparison against the
 /// reference implementation.
-fn real_is_allowed(env: &Env, client: &ComplianceContractClient, admin: &Address, case: &Case) -> bool {
+fn real_is_allowed(
+    env: &Env,
+    client: &ComplianceContractClient,
+    admin: &Address,
+    case: &Case,
+) -> bool {
     let address = Address::generate(env);
 
     if case.allowed {

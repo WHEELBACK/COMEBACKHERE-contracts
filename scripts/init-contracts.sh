@@ -107,7 +107,7 @@ stellar contract invoke \
     --id "$TREASURY_ID" \
     --source admin \
     --network "$NETWORK" \
-    -- initialize --admin "$ADMIN_ADDRESS" --threshold 1
+    -- initialize --admin "$ADMIN_ADDRESS" --threshold 1 --signers '[]'
 
 # 7. Deploy and Initialize Settlement Workflow
 echo "Deploying Settlement Workflow contract..."

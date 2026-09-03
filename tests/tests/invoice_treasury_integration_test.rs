@@ -1,5 +1,5 @@
 use invoice::{
-    InvoiceContract, InvoiceContractClient, InvoiceStatus, MaybeAddress, MaybeBytes,
+    InvoiceContract, InvoiceContractClient, InvoiceError, InvoiceStatus, MaybeAddress, MaybeBytes,
 };
 use soroban_sdk::{testutils::Address as _, Address, Env};
 use treasury::{TreasuryContract, TreasuryContractClient};

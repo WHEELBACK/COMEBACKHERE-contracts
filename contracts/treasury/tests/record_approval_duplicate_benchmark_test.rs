@@ -84,7 +84,7 @@ fn bench_duplicate_heavy_approvals_dedup() {
     // the settlement stays Pending (admin has not yet approved).
     // But we want no auto-execution, so use a fresh merchant and high threshold.
     let merchant = Address::generate(&env);
-    let settlement_id = client.propose_settlement(&admin, &merchant, &1_000_000);
+    let settlement_id = client.propose_settlement(&signers[0], &merchant, &1_000_000);
 
     eprintln!("\n[bench_duplicate_heavy] K={K} distinct signers, threshold={threshold}");
 
@@ -156,7 +156,7 @@ fn bench_duplicate_free_approvals_grow_linearly() {
     let signers = register_n_signers(&client, &admin, &env, N);
 
     let merchant = Address::generate(&env);
-    let settlement_id = client.propose_settlement(&admin, &merchant, &1_000_000);
+    let settlement_id = client.propose_settlement(&signers[0], &merchant, &1_000_000);
 
     eprintln!("\n[bench_duplicate_free] N={N} distinct signers, threshold={threshold}");
     eprintln!("[bench_duplicate_free] Each signer approves exactly once — list grows 0→{N}");
@@ -224,7 +224,7 @@ fn bench_compare_duplicate_heavy_vs_duplicate_free() {
     let (client_heavy, admin_heavy) = setup_treasury(&env_heavy, threshold_heavy);
     let signers_heavy = register_n_signers(&client_heavy, &admin_heavy, &env_heavy, K);
     let merchant_heavy = Address::generate(&env_heavy);
-    let sid_heavy = client_heavy.propose_settlement(&admin_heavy, &merchant_heavy, &1_000_000);
+    let sid_heavy = client_heavy.propose_settlement(&signers_heavy[0], &merchant_heavy, &1_000_000);
 
     // First round: K distinct approvals.
     for s in &signers_heavy {
@@ -245,7 +245,7 @@ fn bench_compare_duplicate_heavy_vs_duplicate_free() {
     let total_calls = K * 2;
     let signers_free = register_n_signers(&client_free, &admin_free, &env_free, total_calls);
     let merchant_free = Address::generate(&env_free);
-    let sid_free = client_free.propose_settlement(&admin_free, &merchant_free, &1_000_000);
+    let sid_free = client_free.propose_settlement(&signers_free[0], &merchant_free, &1_000_000);
 
     for s in &signers_free {
         client_free.approve_settlement(s, &sid_free);

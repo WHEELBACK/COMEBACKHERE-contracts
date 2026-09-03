@@ -134,13 +134,8 @@ fn set_signer_add_instruction_cost_scales_with_list_size() {
     // the measured call fires. Total list length = 1 (admin) + list_size_before.
     let sizes: &[u32] = &[0, 5, 10, 20, 50, 100];
 
-    eprintln!(
-        "\n[signer_scaling] set_signer (add) — instructions for the single measured call"
-    );
-    eprintln!(
-        "{:<30} {:>20}",
-        "total_list_size_at_call", "instructions"
-    );
+    eprintln!("\n[signer_scaling] set_signer (add) — instructions for the single measured call");
+    eprintln!("{:<30} {:>20}", "total_list_size_at_call", "instructions");
     eprintln!("{:-<51}", "");
 
     let mut prev = 0i64;
@@ -152,10 +147,7 @@ fn set_signer_add_instruction_cost_scales_with_list_size() {
         } else {
             format!("+{}", instructions - prev)
         };
-        eprintln!(
-            "{:<30} {:>20}  delta: {}",
-            total_size, instructions, delta
-        );
+        eprintln!("{:<30} {:>20}  delta: {}", total_size, instructions, delta);
         prev = instructions;
 
         // Sanity: the call must have executed (non-zero instruction count).
@@ -174,10 +166,7 @@ fn set_signer_zero_instruction_cost_scales_with_list_size() {
     eprintln!(
         "\n[signer_scaling] set_signer (weight=0) — instructions for the single measured call"
     );
-    eprintln!(
-        "{:<30} {:>20}",
-        "total_list_size_at_call", "instructions"
-    );
+    eprintln!("{:<30} {:>20}", "total_list_size_at_call", "instructions");
     eprintln!("{:-<51}", "");
 
     let mut prev = 0i64;
@@ -189,10 +178,7 @@ fn set_signer_zero_instruction_cost_scales_with_list_size() {
         } else {
             format!("+{}", instructions - prev)
         };
-        eprintln!(
-            "{:<30} {:>20}  delta: {}",
-            total_size, instructions, delta
-        );
+        eprintln!("{:<30} {:>20}  delta: {}", total_size, instructions, delta);
         prev = instructions;
 
         assert!(
@@ -207,13 +193,8 @@ fn set_signer_zero_instruction_cost_scales_with_list_size() {
 fn remove_signer_instruction_cost_scales_with_list_size() {
     let sizes: &[u32] = &[5, 10, 20, 50, 100];
 
-    eprintln!(
-        "\n[signer_scaling] remove_signer — instructions for the single measured call"
-    );
-    eprintln!(
-        "{:<30} {:>20}",
-        "total_list_size_at_call", "instructions"
-    );
+    eprintln!("\n[signer_scaling] remove_signer — instructions for the single measured call");
+    eprintln!("{:<30} {:>20}", "total_list_size_at_call", "instructions");
     eprintln!("{:-<51}", "");
 
     let mut prev = 0i64;
@@ -225,10 +206,7 @@ fn remove_signer_instruction_cost_scales_with_list_size() {
         } else {
             format!("+{}", instructions - prev)
         };
-        eprintln!(
-            "{:<30} {:>20}  delta: {}",
-            total_size, instructions, delta
-        );
+        eprintln!("{:<30} {:>20}  delta: {}", total_size, instructions, delta);
         prev = instructions;
 
         assert!(
@@ -252,7 +230,11 @@ fn set_signer_succeeds_at_100_signers() {
     add_signers(&client, &admin, &env, 99); // admin + 99 = 100 total
 
     let all = client.get_all_signers();
-    assert_eq!(all.len(), 100, "expected 100 signers (admin + 99 registered)");
+    assert_eq!(
+        all.len(),
+        100,
+        "expected 100 signers (admin + 99 registered)"
+    );
 }
 
 #[test]

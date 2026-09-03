@@ -97,7 +97,11 @@ fn bench_resolve_dispute_cost(historical_disputes: u64) -> (u64, u64) {
 ///   cargo test --package comebackhere-treasury --test resolve_dispute_dos_test -- --nocapture
 #[test]
 fn resolve_dispute_cost_scales_with_total_historical_dispute_count() {
-    let sample_sizes = [0u64, 50, 500, 2_000, 8_000];
+    // Sample sizes kept modest: each raises that many disputes through the
+    // contract and then resolves one against an O(DisputeCount) scan, so the
+    // aggregate call count grows fast. These are large enough to make the
+    // linear scaling visible and assertable without a multi-minute test.
+    let sample_sizes = [0u64, 40, 160, 400, 1_000];
     let mut results = Vec::new();
 
     for &n in &sample_sizes {
@@ -167,10 +171,10 @@ fn finding_documented_unbounded_scan_is_not_implicitly_capped() {
     // be the signature of an implicit cap (e.g. an early-exit index) that
     // doesn't exist today.
     let (_, cost_small) = bench_resolve_dispute_cost(1);
-    let (_, cost_large) = bench_resolve_dispute_cost(4_000);
+    let (_, cost_large) = bench_resolve_dispute_cost(1_000);
     assert!(
         cost_large > cost_small * 10,
-        "expected a large gap between resolving with 1 vs. 4000 historical \
+        "expected a large gap between resolving with 1 vs. 1000 historical \
          disputes (got {cost_small} vs {cost_large} instructions), confirming \
          the scan is genuinely unbounded by settlement-relevant history"
     );
