@@ -16,6 +16,11 @@ repos:
         entry: scripts/check-enum-ordering.sh
         language: script
         pass_filenames: false
+      - id: check-enum-doc-comments
+        name: Check enum-level doc comments on #[contracterror]/#[contracttype] enums
+        entry: scripts/check-enum-doc-comments.sh
+        language: script
+        pass_filenames: false
       - id: check-workflow-version-pins
         name: Check centralized workflow version pins
         entry: scripts/check-workflow-version-pins.sh

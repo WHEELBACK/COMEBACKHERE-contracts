@@ -35,4 +35,5 @@ precommit:
 	cargo fmt --all -- --check
 	cargo clippy -- -D warnings
 	./scripts/check-enum-ordering.sh
+	./scripts/check-enum-doc-comments.sh
 	@echo "✓ Pre-commit checks passed"

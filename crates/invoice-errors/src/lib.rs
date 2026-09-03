@@ -2,6 +2,12 @@
 
 use soroban_sdk::contracterror;
 
+/// Error codes for the invoice contract.
+///
+/// Variants are append-only and must not be renumbered; discriminants are
+/// part of the on-chain ABI and are matched by callers and off-chain systems.
+/// New variants must be added at the end with an explicit discriminant one
+/// higher than the current maximum; see `scripts/check-enum-ordering.sh`.
 #[contracterror]
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 #[repr(u32)]

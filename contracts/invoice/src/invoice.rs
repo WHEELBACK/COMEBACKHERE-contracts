@@ -15,6 +15,12 @@ pub const MAX_BATCH_EXPIRE: u32 = 100;
 /// Maximum bytes accepted for optional invoice hash fields.
 pub const MAX_HASH_BYTES: u32 = 64;
 
+/// Lifecycle status of an invoice.
+///
+/// The typical happy path is: `Pending` → `Paid` → `Released`.
+/// Unhappy paths include: `Pending` → `Expired` (timeout without payment),
+/// `Pending` → `Cancelled` (merchant or admin cancellation), `Paid` →
+/// `RefundRequested` → `Refunded` (dispute/refund flow).
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum InvoiceStatus {
@@ -31,6 +37,11 @@ pub enum InvoiceStatus {
 
 // contracttype enum wrappers for optional complex types; Option<Address> and
 // Option<Bytes> are not supported by the contracttype macro in soroban-sdk v20.
+/// Nullable `Address` wrapper compatible with `#[contracttype]`.
+///
+/// `Option<Address>` is not supported by the Soroban contract-type macro, so
+/// this enum serves as a manual `Option` for address fields. `None` signals
+/// absence; `Some(addr)` wraps a concrete address.
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum MaybeAddress {
@@ -38,6 +49,12 @@ pub enum MaybeAddress {
     Some(Address),
 }
 
+/// Nullable `Bytes` wrapper compatible with `#[contracttype]`.
+///
+/// `Option<Bytes>` is not supported by the Soroban contract-type macro, so
+/// this enum serves as a manual `Option` for byte-string fields such as
+/// metadata hashes and payment-link hashes. `None` signals absence;
+/// `Some(bytes)` wraps a concrete byte string.
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum MaybeBytes {
@@ -87,6 +104,12 @@ pub struct StatusTransition {
     pub timestamp: u64,
 }
 
+/// Storage keys for invoice contract state.
+///
+/// Used as keys for Soroban instance and persistent storage lookups. Variants
+/// must not be reordered or removed after deployment; append new variants at
+/// the end so that existing on-chain data keyed by XDR discriminant continues
+/// to decode correctly.
 #[contracttype]
 #[derive(Clone)]
 pub enum DataKey {
