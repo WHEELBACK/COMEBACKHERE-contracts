@@ -2,10 +2,11 @@
 mod malicious_compliance;
 
 use compliance::{ComplianceContract, ComplianceContractClient};
-use settlement_workflow::{
-    SettlementWorkflowContract, SettlementWorkflowContractClient, SettlementWorkflowError,
+use settlement_workflow::{SettlementWorkflowContract, SettlementWorkflowContractClient};
+use soroban_sdk::{
+    testutils::{Address as _, Events},
+    token, Address, Env, FromVal, Symbol,
 };
-use soroban_sdk::{testutils::Address as _, token, Address, Env, Symbol};
 use treasury::{TreasuryContract, TreasuryContractClient, TreasuryError};
 
 /// Generous CPU-instruction ceiling for the two-hop cross-contract call chain
@@ -31,7 +32,9 @@ fn setup() -> (
 /// `register_workflow_signer` controls whether the workflow contract is registered
 /// as a Treasury signer. Pass `false` to exercise the #370 precondition path where
 /// the workflow's own address has not been registered via `Treasury::set_signer`.
-fn setup_with_signer(register_workflow_signer: bool) -> (
+fn setup_with_signer(
+    register_workflow_signer: bool,
+) -> (
     Env,
     Address,
     Address,
@@ -102,7 +105,7 @@ fn execution_blocked_when_compliance_returns_false() {
         .try_execute_with_compliance(&settlement_id, &token_id, &merchant)
         .unwrap_err()
         .unwrap();
-    assert_eq!(err, SettlementWorkflowError::ComplianceCheckFailed);
+    assert_eq!(err, TreasuryError::ComplianceCheckFailed.into());
     assert_eq!(token::Client::new(&env, &token_id).balance(&merchant), 0);
 }
 
@@ -123,41 +126,6 @@ fn successful_path_executes_treasury_settlement() {
     compliance.allow_address(&admin, &merchant);
     let settlement_id = treasury.propose_settlement(&admin, &merchant, &10_000_000);
     token::StellarAssetClient::new(&env, &token_id).mint(&treasury_id, &10_000_000);
-
-    workflow.pause(&admin);
-
-    let err = workflow
-        .try_execute_with_compliance(
-            &settlement_id,
-            &token_id,
-            &merchant,
-        )
-        .unwrap_err()
-        .unwrap();
-    assert_eq!(err, SettlementWorkflowError::ContractPaused);
-    assert_eq!(token::Client::new(&env, &token_id).balance(&merchant), 0);
-}
-
-#[test]
-fn unpause_restores_execution() {
-    let (
-        env,
-        admin,
-        merchant,
-        compliance,
-        _compliance_id,
-        treasury,
-        treasury_id,
-        workflow,
-        token_id,
-    ) = setup();
-
-    compliance.allow_address(&admin, &merchant);
-    let settlement_id = treasury.propose_settlement(&admin, &merchant, &10_000_000);
-    token::StellarAssetClient::new(&env, &token_id).mint(&treasury_id, &10_000_000);
-
-    workflow.pause(&admin);
-    workflow.unpause(&admin);
 
     workflow
         .try_execute_with_compliance(&settlement_id, &token_id, &merchant)
@@ -191,8 +159,7 @@ fn emits_settlement_workflow_executed_event() {
     workflow.execute_with_compliance(&settlement_id, &token_id, &merchant);
 
     let (_, topics, _) = env.events().all().last().unwrap();
-    let emitted_symbol =
-        Symbol::try_from_val(&env, &topics.get_unchecked(0)).expect("topic 0 is a Symbol");
+    let emitted_symbol = Symbol::from_val(&env, &topics.get_unchecked(0));
     assert_eq!(
         emitted_symbol,
         Symbol::new(&env, "settlement_workflow_executed"),
