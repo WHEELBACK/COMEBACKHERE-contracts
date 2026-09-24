@@ -23,12 +23,22 @@ jobs:
 
     services:
       stellar:
-        image: stellar/quickstart:latest
+        # Pinned rather than `latest`: `latest` tracks the newest protocol
+        # (28 at the time of pinning), whose XDR the pinned stellar-cli
+        # (STELLAR_CLI_VERSION in .github/versions.env, 22.x) can't parse
+        # ("xdr value invalid"). v480 runs stellar-core 22.3.0 / protocol 22.
+        # Bump together with the CLI pin.
+        image: stellar/quickstart:v480-latest
         ports:
           - 8000:8000
         env:
           ENABLE_SOROBAN_RPC: "true"
           NETWORK: local
+          # The default testnet-like limits cap contract size at 64 KB, which
+          # the (unoptimized) treasury wasm exceeds (TxSorobanInvalid on
+          # install). This job smoke-tests the init flow, not network limits;
+          # contract-size.yml gates size separately.
+          LIMITS: unlimited
         options: >-
           --health-cmd "curl -sf http://localhost:8000/health"
           --health-interval 5s
