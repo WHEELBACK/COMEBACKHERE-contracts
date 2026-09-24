@@ -681,6 +681,15 @@ impl ComplianceContract {
         Ok(())
     }
 
+    /// Returns the current operator address, if one has been set.
+    ///
+    /// This provides off-chain tooling with a way to query the operator's identity
+    /// for authorization-aware UI or monitoring, matching the protocol's pattern of
+    /// exposing all admin-configured state via corresponding read entrypoints.
+    pub fn get_operator(env: Env) -> Option<Address> {
+        env.storage().instance().get(&DataKey::Operator)
+    }
+
     /// Returns the raw expiry timestamp (seconds since epoch) for `address`, or
     /// `None` if the address has no time-limited allow entry (permanent allow or no allow).
     pub fn get_allow_expiry(env: Env, address: Address) -> Option<u64> {
