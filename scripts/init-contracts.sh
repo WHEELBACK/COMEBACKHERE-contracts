@@ -54,6 +54,23 @@ cargo build --target wasm32-unknown-unknown --release \
     -p comebackhere-treasury \
     -p comebackhere-settlement-workflow
 
+# Rust >= 1.82 builds wasm32-unknown-unknown with `reference-types` enabled, and
+# the prebuilt `core` it links carries call_indirect encodings the Soroban
+# host's validator rejects ("reference-types not enabled: zero byte
+# expected"), so the raw cargo output can't be installed. The contracts don't
+# actually use any post-MVP features beyond sign-ext/mutable-globals, so
+# re-encoding through binaryen with only those enabled yields a deployable
+# module. Custom sections (contractspecv0 etc.) are preserved.
+if ! command -v wasm-opt > /dev/null 2>&1; then
+    log_error "wasm-opt not found. Install binaryen (e.g. 'apt-get install binaryen' or 'brew install binaryen')."
+    exit 1
+fi
+log_info "Lowering contract wasm to the Soroban-supported feature set..."
+for contract in compliance invoice treasury settlement_workflow; do
+    wasm="target/wasm32-unknown-unknown/release/${contract}.wasm"
+    wasm-opt --mvp-features --enable-sign-ext --enable-mutable-globals "$wasm" -o "$wasm"
+done
+
 # 2. Setup network
 log_info "Ensuring network '$NETWORK' is configured..."
 stellar network add --rpc-url "$RPC_URL" --network-passphrase "$NETWORK_PASSPHRASE" "$NETWORK" 2>/dev/null || true
