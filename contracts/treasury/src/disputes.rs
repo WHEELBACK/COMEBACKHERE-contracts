@@ -76,11 +76,7 @@ impl TreasuryContract {
     /// Errors: `DisputeNotFound`, `DisputeAlreadyResolved`, `DisputeNotExpired`.
     /// Panics: `Unauthorized`.
     /// Emits: `dispute_expired`.
-    pub fn expire_dispute(
-        env: Env,
-        admin: Address,
-        dispute_id: u64,
-    ) -> Result<(), TreasuryError> {
+    pub fn expire_dispute(env: Env, admin: Address, dispute_id: u64) -> Result<(), TreasuryError> {
         require_admin(&env, &admin);
         let mut dispute: Dispute = env
             .storage()

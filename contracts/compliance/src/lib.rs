@@ -56,7 +56,9 @@ pub enum DataKey {
     SchemaVersion,
     /// Circuit-breaker flag — when `true`, administrative mutations are rejected.
     Paused,
-    /// Index of all tracked addresses for `export_snapshot`; bounded by `MAX_TRACKED_ADDRESSES`.
+    /// Legacy monolithic address index. Superseded by the paged index
+    /// (`AddrIndexPage` / `AddrIndexCount` / `AddrTracked`); retained only so the
+    /// enum stays append-only. No longer read or written.
     AddressIndex,
     /// Running count of addresses that have ever been allowed.
     AllowCount,
@@ -76,6 +78,16 @@ pub enum DataKey {
     /// Timestamp of the caller's last `bulk_block_addresses` call, keyed per admin.
     /// See [`BULK_OP_COOLDOWN_SECS`] and `check_bulk_op_cooldown` (#454).
     LastBulkBlock(Address),
+    /// O(1) membership marker for the paged address index (persistent). Presence
+    /// means `address` already occupies a slot in the index; `track_address`
+    /// checks this instead of scanning the whole index.
+    AddrTracked(Address),
+    /// Page `n` of the ordered address index (persistent): the insertion-ordered
+    /// addresses at slots `[n * ADDR_INDEX_PAGE_SIZE, (n + 1) * ADDR_INDEX_PAGE_SIZE)`.
+    AddrIndexPage(u32),
+    /// Number of addresses in the paged index (instance). Bounded by
+    /// `MAX_TRACKED_ADDRESSES`.
+    AddrIndexCount,
 }
 
 /// Coarse classification of an address's compliance state.
@@ -127,12 +139,23 @@ pub enum ContractError {
     BulkOperationCooldown = 6,
 }
 
-/// Upper bound on the number of distinct addresses tracked in `DataKey::AddressIndex`.
-/// Once reached, operations that would track a *new* address are rejected with
-/// [`ContractError::AddressIndexFull`] instead of growing the index further — this
-/// caps unbounded storage-rent growth. Existing tracked addresses are unaffected.
-/// See `track_address`.
-const MAX_TRACKED_ADDRESSES: u32 = 50_000;
+/// Upper bound on the number of distinct addresses tracked in the paged address
+/// index. Once reached, operations that would track a *new* address are rejected
+/// with [`ContractError::AddressIndexFull`] instead of growing the index further
+/// — this caps unbounded storage-rent growth. Existing tracked addresses are
+/// unaffected. See `track_address`.
+///
+/// `pub` so the boundary/pagination tests assert against the real value rather
+/// than a hand-mirrored copy that silently drifts.
+pub const MAX_TRACKED_ADDRESSES: u32 = 2_000;
+
+/// Number of addresses stored per `DataKey::AddrIndexPage` entry. The ordered
+/// address index is split into fixed-size pages so `track_address` only ever
+/// reads and rewrites the single small tail page instead of a monolithic `Vec`
+/// that grows past the ledger-entry size limit and costs O(n) to re-serialise
+/// on every insert. Kept small: each insert re-serialises the tail page, so the
+/// page size is the per-insert cost, and reads concatenate pages.
+const ADDR_INDEX_PAGE_SIZE: u32 = 25;
 
 /// Maximum number of addresses accepted per batch admin call, consistent with
 /// the batch caps used elsewhere in the workspace (see #8/#21/#29).
@@ -712,11 +735,7 @@ impl ComplianceContract {
     /// of access, and admins may run it even while paused.
     pub fn sweep_expired(env: Env, admin: Address) -> Result<u32, ContractError> {
         Self::require_admin(&env, &admin)?;
-        let index: Vec<Address> = env
-            .storage()
-            .instance()
-            .get(&DataKey::AddressIndex)
-            .unwrap_or(Vec::new(&env));
+        let index = Self::address_index(&env);
         let now = env.ledger().timestamp();
         let mut swept = 0u32;
         for addr in index.iter() {
@@ -766,11 +785,7 @@ impl ComplianceContract {
         limit: u32,
     ) -> Vec<(Address, AddressState)> {
         Self::require_admin(&env, &admin).unwrap();
-        let index: Vec<Address> = env
-            .storage()
-            .instance()
-            .get(&DataKey::AddressIndex)
-            .unwrap_or(Vec::new(&env));
+        let index = Self::address_index(&env);
         let mut result = Vec::new(&env);
         let start = offset as usize;
         let end = if limit == 0 {
@@ -796,19 +811,33 @@ impl ComplianceContract {
         limit: u64,
     ) -> Vec<(Address, AddressState)> {
         Self::require_admin(&env, &admin).unwrap();
-        let index: Vec<Address> = env
+        let total: u64 = env
             .storage()
             .instance()
-            .get(&DataKey::AddressIndex)
-            .unwrap_or(Vec::new(&env));
+            .get::<_, u32>(&DataKey::AddrIndexCount)
+            .unwrap_or(0) as u64;
         let mut result = Vec::new(&env);
-        let total = index.len() as u64;
+        if limit == 0 || start >= total {
+            return result;
+        }
+        let end = (start.saturating_add(limit)).min(total);
+        let page_size = ADDR_INDEX_PAGE_SIZE as u64;
         let mut i = start;
-        while i < total && (result.len() as u64) < limit {
-            let addr = index.get(i as u32).unwrap();
-            let state = Self::address_state(&env, &addr);
-            result.push_back((addr, state));
-            i += 1;
+        // Only touch the pages the requested window actually spans — cost is
+        // O(window), not O(total index size).
+        while i < end {
+            let page: Vec<Address> = env
+                .storage()
+                .persistent()
+                .get(&DataKey::AddrIndexPage((i / page_size) as u32))
+                .unwrap_or(Vec::new(&env));
+            let page_end = (((i / page_size) + 1) * page_size).min(end);
+            while i < page_end {
+                let addr = page.get((i % page_size) as u32).unwrap();
+                let state = Self::address_state(&env, &addr);
+                result.push_back((addr, state));
+                i += 1;
+            }
         }
         result
     }
@@ -939,25 +968,70 @@ impl ComplianceContract {
         }
     }
 
-    /// Adds `address` to the instance-level AddressIndex if not already present.
+    /// Appends `address` to the paged address index if not already present.
+    ///
+    /// O(1) amortised: membership is a single `AddrTracked` lookup and only the
+    /// tail page is rewritten, so this stays cheap even as the index approaches
+    /// [`MAX_TRACKED_ADDRESSES`].
     ///
     /// # Errors
     /// - [`ContractError::AddressIndexFull`] if `address` is new and the index has
     ///   already reached [`MAX_TRACKED_ADDRESSES`].
     fn track_address(env: &Env, address: &Address) -> Result<(), ContractError> {
-        let mut index: Vec<Address> = env
+        if env
+            .storage()
+            .persistent()
+            .has(&DataKey::AddrTracked(address.clone()))
+        {
+            return Ok(());
+        }
+        let count: u32 = env
             .storage()
             .instance()
-            .get(&DataKey::AddressIndex)
-            .unwrap_or(Vec::new(env));
-        if !index.contains(address) {
-            if index.len() >= MAX_TRACKED_ADDRESSES {
-                return Err(ContractError::AddressIndexFull);
-            }
-            index.push_back(address.clone());
-            env.storage().instance().set(&DataKey::AddressIndex, &index);
+            .get(&DataKey::AddrIndexCount)
+            .unwrap_or(0);
+        if count >= MAX_TRACKED_ADDRESSES {
+            return Err(ContractError::AddressIndexFull);
         }
+        let page_key = DataKey::AddrIndexPage(count / ADDR_INDEX_PAGE_SIZE);
+        let mut page: Vec<Address> = env
+            .storage()
+            .persistent()
+            .get(&page_key)
+            .unwrap_or(Vec::new(env));
+        page.push_back(address.clone());
+        env.storage().persistent().set(&page_key, &page);
+        env.storage()
+            .persistent()
+            .set(&DataKey::AddrTracked(address.clone()), &());
+        env.storage()
+            .instance()
+            .set(&DataKey::AddrIndexCount, &(count + 1));
         Ok(())
+    }
+
+    /// Rebuilds the full ordered address index by concatenating its pages, in
+    /// insertion order. Used by the snapshot/export and sweep paths, which need
+    /// to walk every tracked address; `track_address` never calls this.
+    fn address_index(env: &Env) -> Vec<Address> {
+        let count: u32 = env
+            .storage()
+            .instance()
+            .get(&DataKey::AddrIndexCount)
+            .unwrap_or(0);
+        let mut all = Vec::new(env);
+        let pages = count.div_ceil(ADDR_INDEX_PAGE_SIZE);
+        for p in 0..pages {
+            let page: Vec<Address> = env
+                .storage()
+                .persistent()
+                .get(&DataKey::AddrIndexPage(p))
+                .unwrap_or(Vec::new(env));
+            for addr in page.iter() {
+                all.push_back(addr);
+            }
+        }
+        all
     }
 }
 

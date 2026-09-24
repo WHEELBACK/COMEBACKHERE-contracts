@@ -27,7 +27,9 @@ fn assert_protocol_error_exhaustive(err: ProtocolError) {
 fn protocol_error_variants_are_exhaustive() {
     assert_protocol_error_exhaustive(ProtocolError::Invoice(InvoiceError::NotFound));
     assert_protocol_error_exhaustive(ProtocolError::Treasury(TreasuryError::SettlementNotFound));
-    assert_protocol_error_exhaustive(ProtocolError::Compliance(ComplianceError::AlreadyInitialized));
+    assert_protocol_error_exhaustive(ProtocolError::Compliance(
+        ComplianceError::AlreadyInitialized,
+    ));
 }
 
 #[test]

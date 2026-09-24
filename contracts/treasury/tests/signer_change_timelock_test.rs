@@ -242,8 +242,7 @@ fn set_signer_change_with_zero_weight_deactivates_signer() {
     assert_eq!(client.get_signer_weight(&signer), 4);
 
     // Then queue a timelocked removal via SetSigner weight=0.
-    let cid =
-        client.propose_signer_change(&admin, &SignerChangeKind::SetSigner(signer.clone(), 0));
+    let cid = client.propose_signer_change(&admin, &SignerChangeKind::SetSigner(signer.clone(), 0));
     env.ledger().set_timestamp(TIMELOCK_SECS);
     client.execute_signer_change(&admin, &cid);
 
@@ -260,8 +259,7 @@ fn remove_signer_change_removes_signer() {
     client.set_signer(&admin, &signer, &2);
     assert_eq!(client.get_signer_weight(&signer), 2);
 
-    let cid =
-        client.propose_signer_change(&admin, &SignerChangeKind::RemoveSigner(signer.clone()));
+    let cid = client.propose_signer_change(&admin, &SignerChangeKind::RemoveSigner(signer.clone()));
     env.ledger().set_timestamp(TIMELOCK_SECS);
     client.execute_signer_change(&admin, &cid);
 
@@ -297,10 +295,7 @@ fn update_threshold_change_applies_new_threshold() {
     let settlement = client.approve_settlement(&admin, &sid);
     // approval_weight is 1 (only admin), threshold is 3 → not yet executed.
     assert_eq!(settlement.approval_weight, 1);
-    assert_eq!(
-        settlement.status,
-        treasury::SettlementStatus::Pending
-    );
+    assert_eq!(settlement.status, treasury::SettlementStatus::Pending);
 }
 
 #[test]

@@ -182,7 +182,10 @@ fn get_balance_reflects_deposits_and_withdrawals() {
     treasury_client.withdraw(&depositor, &token_id, &partial);
 
     // Verify balance after withdrawal
-    assert_eq!(treasury_client.get_balance(&depositor, &token_id), amount - partial);
+    assert_eq!(
+        treasury_client.get_balance(&depositor, &token_id),
+        amount - partial
+    );
 
     // Verify unrelated address still has 0 balance
     let stranger = Address::generate(&env);

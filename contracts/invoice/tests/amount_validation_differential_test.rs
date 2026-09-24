@@ -30,12 +30,18 @@ fn python_validate(amount_usdc: i128, gross_usdc: i128) -> (bool, Option<String>
         amount_usdc, gross_usdc
     );
 
+    // Resolve the reference script from the workspace root relative to this
+    // crate, so the test works regardless of where the checkout lives (a
+    // devcontainer, a CI runner, a local clone).
+    let script = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../scripts/reference_amount_validation.py"
+    );
     let mut child = Command::new("python3")
-        .arg("scripts/reference_amount_validation.py")
+        .arg(script)
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
-        .current_dir("/workspaces/COMEBACKHERE-contracts")
         .spawn()
         .expect("failed to spawn Python process");
 
@@ -49,8 +55,8 @@ fn python_validate(amount_usdc: i128, gross_usdc: i128) -> (bool, Option<String>
     let output = child.wait_with_output().expect("failed to wait on Python");
     let stdout = String::from_utf8_lossy(&output.stdout);
 
-    let result: Value = serde_json::from_str(&stdout)
-        .expect(&format!("failed to parse Python output: {}", stdout));
+    let result: Value =
+        serde_json::from_str(&stdout).expect(&format!("failed to parse Python output: {}", stdout));
 
     let valid = result["valid"].as_bool().expect("missing 'valid' field");
     let error = if let Some(e) = result["error"].as_str() {

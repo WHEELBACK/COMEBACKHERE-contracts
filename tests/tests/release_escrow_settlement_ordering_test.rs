@@ -142,7 +142,9 @@ fn release_escrow_then_execute_settlement_happy_path_ordering() {
     assert_eq!(fx.token.balance(&fx.treasury_id), amount);
     assert_eq!(fx.token.balance(&fx.merchant), 0);
 
-    let settlement_id = fx.treasury.propose_settlement(&fx.admin, &fx.merchant, &amount);
+    let settlement_id = fx
+        .treasury
+        .propose_settlement(&fx.admin, &fx.merchant, &amount);
     fx.treasury
         .execute_settlement(&fx.admin, &settlement_id, &fx.token_id);
 
@@ -168,7 +170,8 @@ fn release_escrow_then_execute_settlement_happy_path_ordering() {
 #[test]
 fn settlement_proposed_before_release_still_executes_correctly_after() {
     let fx = setup();
-    let amount = 5_000_000i128;
+    // Must be >= USDC_FACTOR (1 USDC): create_invoice enforces require_usdc_precision.
+    let amount = 10_000_000i128;
 
     let inv_id = fx.invoice.create_invoice(
         &fx.merchant,
@@ -188,7 +191,9 @@ fn settlement_proposed_before_release_still_executes_correctly_after() {
         &MaybeAddress::None,
     );
 
-    let settlement_id = fx.treasury.propose_settlement(&fx.admin, &fx.merchant, &amount);
+    let settlement_id = fx
+        .treasury
+        .propose_settlement(&fx.admin, &fx.merchant, &amount);
 
     fx.invoice.release_escrow(&fx.admin, &inv_id);
     assert_eq!(

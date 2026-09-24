@@ -74,46 +74,31 @@ fn prop_quorum_first_reached_at_threshold() {
     // The invariant is verified at every intermediate step.
     let cases: &[(&[(usize, u32)], u32)] = &[
         // ---- trivial / single signer ----
-        (&[(0, 1)], 1),              // exact: one signer hits threshold
-        (&[(0, 1)], 2),              // never reaches threshold
-        (&[(0, 2)], 1),              // overshoots threshold immediately
-        (&[(0, 0)], 0),              // zero threshold, zero weight
-        (&[(0, 1)], 0),              // zero threshold, weight=1 (threshold already met before step)
+        (&[(0, 1)], 1), // exact: one signer hits threshold
+        (&[(0, 1)], 2), // never reaches threshold
+        (&[(0, 2)], 1), // overshoots threshold immediately
+        (&[(0, 0)], 0), // zero threshold, zero weight
+        (&[(0, 1)], 0), // zero threshold, weight=1 (threshold already met before step)
         // ---- two distinct signers ----
-        (&[(0, 1), (1, 1)], 2),      // reaches threshold exactly on second approval
-        (&[(0, 1), (1, 1)], 3),      // two signers never reach threshold of 3
-        (&[(0, 2), (1, 1)], 2),      // first signer already satisfies threshold
-        (&[(0, 1), (1, 2)], 2),      // second signer pushes over threshold
+        (&[(0, 1), (1, 1)], 2), // reaches threshold exactly on second approval
+        (&[(0, 1), (1, 1)], 3), // two signers never reach threshold of 3
+        (&[(0, 2), (1, 1)], 2), // first signer already satisfies threshold
+        (&[(0, 1), (1, 2)], 2), // second signer pushes over threshold
         // ---- duplicate signers (no-op on repeat) ----
-        (&[(0, 3), (0, 3)], 3),       // duplicate — weight stays at 3 after step 1
+        (&[(0, 3), (0, 3)], 3), // duplicate — weight stays at 3 after step 1
         (&[(0, 1), (0, 1), (1, 2)], 2), // dup then new signer reaches threshold
         (&[(0, 1), (1, 1), (0, 5)], 2), // dup at end; threshold reached at step 2
         // ---- larger sequences ----
-        (
-            &[(0, 1), (1, 1), (2, 1), (3, 1), (4, 1)],
-            3,
-        ), // reaches threshold at step 3 (0-indexed: after signer 2)
-        (
-            &[(0, 10), (1, 10), (2, 10)],
-            25,
-        ), // never reaches 25 with 10+10+10=30 — wait, 30 >= 25, so reached at step 3
-        (
-            &[(0, 10), (1, 10), (2, 10)],
-            31,
-        ), // never reaches 31
-        (
-            &[(0, 5), (1, 5), (2, 5), (3, 5)],
-            20,
-        ), // reaches exactly at step 4
+        (&[(0, 1), (1, 1), (2, 1), (3, 1), (4, 1)], 3), // reaches threshold at step 3 (0-indexed: after signer 2)
+        (&[(0, 10), (1, 10), (2, 10)], 25), // never reaches 25 with 10+10+10=30 — wait, 30 >= 25, so reached at step 3
+        (&[(0, 10), (1, 10), (2, 10)], 31), // never reaches 31
+        (&[(0, 5), (1, 5), (2, 5), (3, 5)], 20), // reaches exactly at step 4
         // ---- weight distribution variety ----
-        (&[(0, 100), (1, 1)], 50),    // first signer weight >> threshold
-        (&[(0, 1), (1, 100)], 50),    // second signer weight >> threshold
+        (&[(0, 100), (1, 1)], 50), // first signer weight >> threshold
+        (&[(0, 1), (1, 100)], 50), // second signer weight >> threshold
         (&[(0, 25), (1, 25), (2, 25), (3, 25)], 100), // evenly distributed, hits at step 4
         // ---- all duplicates except last ----
-        (
-            &[(0, 1), (0, 1), (0, 1), (0, 1), (1, 10)],
-            5,
-        ), // signer 0 is dup 4x, then signer 1 with weight 10 reaches threshold
+        (&[(0, 1), (0, 1), (0, 1), (0, 1), (1, 10)], 5), // signer 0 is dup 4x, then signer 1 with weight 10 reaches threshold
         // ---- near u32::MAX territory (saturation) ----
         (&[(0, u32::MAX / 2), (1, u32::MAX / 2)], u32::MAX - 1),
         (&[(0, u32::MAX)], u32::MAX),

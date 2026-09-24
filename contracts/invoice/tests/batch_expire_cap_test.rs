@@ -129,8 +129,14 @@ fn oversized_adversarial_batch_is_rejected_before_any_processing() {
     }
 
     // The already-cancelled invoices must remain Cancelled, untouched.
-    assert_eq!(client.get_invoice(&cancelled_id).status, InvoiceStatus::Cancelled);
-    assert_eq!(client.get_invoice(&cancelled_id_2).status, InvoiceStatus::Cancelled);
+    assert_eq!(
+        client.get_invoice(&cancelled_id).status,
+        InvoiceStatus::Cancelled
+    );
+    assert_eq!(
+        client.get_invoice(&cancelled_id_2).status,
+        InvoiceStatus::Cancelled
+    );
 }
 
 /// Precisely `MAX_BATCH_EXPIRE + 1` IDs — the exact boundary named in the
