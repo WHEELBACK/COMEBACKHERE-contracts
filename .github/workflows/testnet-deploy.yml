@@ -73,7 +73,10 @@ jobs:
           echo "DEPLOYER_ADDRESS=$DEPLOYER_ADDR" >> $GITHUB_ENV
           echo "Deployer Address: $DEPLOYER_ADDR"
 
+      # target-cpu=mvp: see scripts/init-contracts.sh.
       - name: Build contract WASM binaries
+        env:
+          CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUSTFLAGS: "-C target-cpu=mvp"
         run: |
           cargo build --target wasm32-unknown-unknown --release \
             -p comebackhere-compliance \
