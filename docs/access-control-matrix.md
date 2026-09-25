@@ -160,6 +160,9 @@ Source: `src/lib.rs`.
 |---|---|---|
 | `execute_with_compliance` | **none directly in this function.** It calls `Compliance::is_allowed` (no auth required by that call) and, if it passes, `Treasury::execute_settlement` using `env.current_contract_address()` as the signer. Soroban auto-authorizes a contract's own outgoing calls, and `Treasury::execute_settlement`'s `require_authorized_signer` check is satisfied purely because this contract's address was pre-registered as a treasury signer via `set_signer`. | **Permissionless (mutating)** — see discrepancy below |
 | `execute_with_compliance_batch` | none directly; loops through the same compliance and treasury call path as `execute_with_compliance` for each settlement ID. | **Permissionless (mutating)** — same invariant as above |
+| `initialize` | `admin.require_auth()` on the `admin` parameter, then stores it along with the pinned compliance/treasury IDs. Guarded against re-entry by an `AlreadyInitialized` panic when a compliance ID is already stored. | **Self-auth (role)** — one-shot; the caller must be the admin it installs |
+| `transfer_admin` | `require_admin(...)`: the `admin` parameter must authenticate *and* match the stored `DataKey::Admin`. Nomination only — the role does not move until the nominee accepts. | **Admin-only** |
+| `accept_admin` | `new_admin.require_auth()` on the `new_admin` parameter, plus an in-body check that it matches the stored `DataKey::PendingAdmin`. Returns `Unauthorized` on a mismatch and `NoPendingAdmin` when nothing is outstanding. | **Self-auth (role)** |
 
 ## Discrepancies found
 

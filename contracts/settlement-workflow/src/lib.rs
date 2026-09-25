@@ -164,10 +164,15 @@ impl SettlementWorkflowContract {
     }
 
     /// Requires `admin` to authorize and to be the stored administrator.
+    ///
+    /// Fails closed when no admin has been stored at all — that only happens on a
+    /// contract that was never initialized, and treating it as "nobody is
+    /// authorized" is safer and less surprising than panicking, since a missing
+    /// admin can never be the caller's own address anyway.
     fn require_admin(env: &Env, admin: &Address) -> Result<(), TreasuryError> {
         admin.require_auth();
-        let stored: Address = env.storage().instance().get(&DataKey::Admin).unwrap();
-        if stored != *admin {
+        let stored: Option<Address> = env.storage().instance().get(&DataKey::Admin);
+        if stored.as_ref() != Some(admin) {
             return Err(TreasuryError::Unauthorized);
         }
         Ok(())

@@ -114,12 +114,21 @@ Source: `contracts/settlement-workflow/src/lib.rs`.
 
 | Event | Topics | Data type | Emitted by |
 |---|---|---|---|
-| `workflow_initialized` | `(Symbol,)` | `(Address, Address)` — `(compliance_id, treasury_id)` | `initialize` |
+| `workflow_initialized` | `(Symbol,)` | `(Address, Address, Address)` — `(admin, compliance_id, treasury_id)` | `initialize` |
 | `settlement_workflow_executed` | `(Symbol, settlement_id: u64)` | `(Address, Address)` — `(merchant, token_contract)` | `execute_with_compliance`, `execute_with_compliance_batch` (per settlement actually executed) |
+| `admin_transfer_initiated` | `(Symbol,)` | `Address` (new_admin) | `transfer_admin` |
+| `admin_transferred` | `(Symbol,)` | `Address` (new_admin) | `accept_admin` |
 
 `settlement_workflow_executed` exists specifically so indexers can distinguish
 compliance-gated execution from a direct `Treasury::execute_settlement` call, which
 emits its own `settlement_executed` event (below) with no knowledge of the gate.
+
+`admin_transfer_initiated` and `admin_transferred` mirror the compliance
+contract's pair above and carry the same two-step meaning: an indexer must read
+`admin_transfer_initiated` as "a nomination is outstanding" and must **not**
+conclude the admin role has moved until `admin_transferred` arrives. A nomination
+that is never accepted, or that is superseded by a later `transfer_admin`, emits
+no `admin_transferred` at all.
 
 ---
 
