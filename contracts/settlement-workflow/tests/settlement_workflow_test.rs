@@ -61,8 +61,9 @@ fn setup_with_signer(
 
     let workflow_id = env.register_contract(None, SettlementWorkflowContract);
     let workflow = SettlementWorkflowContractClient::new(&env, &workflow_id);
-    // Pin the trusted compliance/treasury instances once at init (#364).
-    workflow.initialize(&compliance_id, &treasury_id);
+    // Pin the trusted compliance/treasury instances and the admin once at init
+    // (#364, #621).
+    workflow.initialize(&admin, &compliance_id, &treasury_id);
     // The workflow contract executes settlements as itself, so it must be an
     // authorized Treasury signer.
     if register_workflow_signer {
@@ -171,15 +172,16 @@ fn emits_settlement_workflow_executed_event() {
 fn initialize_is_idempotent_and_pins_trusted_instances() {
     let env = Env::default();
     env.mock_all_auths();
+    let admin = Address::generate(&env);
     let compliance_id = Address::generate(&env);
     let treasury_id = Address::generate(&env);
     let workflow_id = env.register_contract(None, SettlementWorkflowContract);
     let workflow = SettlementWorkflowContractClient::new(&env, &workflow_id);
 
-    workflow.initialize(&compliance_id, &treasury_id);
+    workflow.initialize(&admin, &compliance_id, &treasury_id);
     // Second initialize must trap with AlreadyInitialized.
     let err = workflow
-        .try_initialize(&compliance_id, &treasury_id)
+        .try_initialize(&admin, &compliance_id, &treasury_id)
         .unwrap_err()
         .unwrap();
     assert_eq!(err, TreasuryError::AlreadyInitialized.into());

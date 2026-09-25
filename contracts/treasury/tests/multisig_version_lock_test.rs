@@ -107,6 +107,8 @@ fn treasury_error_shape_is_unchanged() {
     assert_eq!(TreasuryError::SignerChangeTooEarly as u32, 38);
     assert_eq!(TreasuryError::SignerChangeNotFound as u32, 39);
     assert_eq!(TreasuryError::SignerChangeAlreadyFinalised as u32, 40);
+    // Appended for the settlement-workflow two-step admin transfer (#621).
+    assert_eq!(TreasuryError::NoPendingAdmin as u32, 41);
 
     // No wildcard arm: adding, removing, or renaming a variant fails this compile.
     fn assert_exhaustive(err: TreasuryError) {
@@ -150,7 +152,8 @@ fn treasury_error_shape_is_unchanged() {
             | TreasuryError::ForceCancelNotAllowed
             | TreasuryError::SignerChangeTooEarly
             | TreasuryError::SignerChangeNotFound
-            | TreasuryError::SignerChangeAlreadyFinalised => {}
+            | TreasuryError::SignerChangeAlreadyFinalised
+            | TreasuryError::NoPendingAdmin => {}
         }
     }
     assert_exhaustive(TreasuryError::AlreadyOnHold);

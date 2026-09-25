@@ -66,6 +66,13 @@ pub enum TreasuryError {
     // Appended for #447: the referenced signer/threshold change has already been
     // executed or cancelled and cannot be acted on again.
     SignerChangeAlreadyFinalised = 40,
+    // Appended for the settlement-workflow two-step admin transfer (#621):
+    // `accept_admin` was called with no `transfer_admin` nomination outstanding.
+    // Lives here rather than in a workflow-local enum for the same reason
+    // `ComplianceCheckFailed` does — the workflow contract reuses
+    // `TreasuryError` as its single error type, so every code it can return is
+    // declared in this one append-only enum.
+    NoPendingAdmin = 41,
 }
 
 // Issue #48: reason codes attached to a held settlement; None means not on hold
@@ -716,7 +723,10 @@ mod tests {
 
         let (a, w) = client.record_approval(&approvals, &weight, &alice);
         let (a, w) = client.record_approval(&a, &w, &bob);
-        assert!(!client.meets_threshold(&w, &total), "5 of 10 is not a quorum");
+        assert!(
+            !client.meets_threshold(&w, &total),
+            "5 of 10 is not a quorum"
+        );
 
         let (_a, w) = client.record_approval(&a, &w, &carol);
         assert_eq!(w, total);

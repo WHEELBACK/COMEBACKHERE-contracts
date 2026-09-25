@@ -38,8 +38,11 @@ fn deploy_pair(env: &Env, admin: &Address) -> Pair {
     ComplianceContractClient::new(env, &compliance_id).initialize(admin);
 
     let treasury_id = env.register_contract(None, TreasuryContract);
-    TreasuryContractClient::new(env, &treasury_id)
-        .initialize(admin, &1, &soroban_sdk::Vec::new(env));
+    TreasuryContractClient::new(env, &treasury_id).initialize(
+        admin,
+        &1,
+        &soroban_sdk::Vec::new(env),
+    );
 
     // Fund each treasury so an execution can be observed by checking the payer's
     // token balance rather than only the returned Ok/Err.
@@ -58,6 +61,9 @@ fn deploy_pair(env: &Env, admin: &Address) -> Pair {
 struct Fixture {
     env: Env,
     admin: Address,
+    /// A decoy admin the re-initialisation attempt also tries to install, so the
+    /// guard is shown to protect the admin role and not just the pinned links.
+    attacker: Address,
     workflow_id: Address,
     workflow: SettlementWorkflowContractClient<'static>,
     first: Pair,
@@ -68,13 +74,14 @@ fn setup() -> Fixture {
     let env = Env::default();
     env.mock_all_auths();
     let admin = Address::generate(&env);
+    let attacker = Address::generate(&env);
 
     let first = deploy_pair(&env, &admin);
     let second = deploy_pair(&env, &admin);
 
     let workflow_id = env.register_contract(None, SettlementWorkflowContract);
     let workflow = SettlementWorkflowContractClient::new(&env, &workflow_id);
-    workflow.initialize(&first.compliance_id, &first.treasury_id);
+    workflow.initialize(&admin, &first.compliance_id, &first.treasury_id);
 
     // The workflow executes settlements as its own address, so it must be a
     // registered signer on the treasury it was pinned to. It is deliberately
@@ -85,6 +92,7 @@ fn setup() -> Fixture {
     Fixture {
         env,
         admin,
+        attacker,
         workflow_id,
         workflow,
         first,
@@ -101,36 +109,43 @@ fn read_workflow_key(env: &Env, workflow_id: &Address, key: &DataKey) -> Option<
     })
 }
 
-/// Re-attempt the pivot onto the decoy pair and discard the outcome, for tests
-/// whose real subject is what the workflow does *afterwards*.
+/// Re-attempt the pivot onto the decoy pair and the takeover of the admin role,
+/// discarding the outcome, for tests whose real subject is what the workflow
+/// does *afterwards*.
 fn attempt_reinit(f: &Fixture) {
     let _ = f
         .workflow
-        .try_initialize(&f.second.compliance_id, &f.second.treasury_id);
+        .try_initialize(&f.attacker, &f.second.compliance_id, &f.second.treasury_id);
 }
 
-/// A second `initialize` with *different* compliance/treasury addresses must
-/// fail with a typed `AlreadyInitialized` error rather than repointing the gate.
+/// A second `initialize` with *different* arguments — different admin,
+/// different compliance, different treasury — must fail with a typed
+/// `AlreadyInitialized` error rather than taking over the contract.
 #[test]
 fn second_initialize_with_different_arguments_fails_with_typed_error() {
     let f = setup();
 
     let err = f
         .workflow
-        .try_initialize(&f.second.compliance_id, &f.second.treasury_id)
+        .try_initialize(&f.attacker, &f.second.compliance_id, &f.second.treasury_id)
         .unwrap_err()
         .unwrap();
     assert_eq!(err, TreasuryError::AlreadyInitialized.into());
 }
 
-/// The rejected re-initialisation must not have written either link. Compared
-/// against the *original* pair so a swapped-in pair is caught directly, rather
-/// than only inferring it from later behaviour.
+/// The rejected re-initialisation must not have written any of the three stored
+/// links. Compared against the *original* values so a swapped-in set is caught
+/// directly, rather than only inferring it from later behaviour.
 #[test]
-fn reinit_does_not_overwrite_pinned_compliance_or_treasury() {
+fn reinit_does_not_overwrite_admin_or_pinned_instances() {
     let f = setup();
     attempt_reinit(&f);
 
+    assert_eq!(
+        read_workflow_key(&f.env, &f.workflow_id, &DataKey::Admin),
+        Some(f.admin.clone()),
+        "re-initialisation must not replace the admin"
+    );
     assert_eq!(
         read_workflow_key(&f.env, &f.workflow_id, &DataKey::ComplianceId),
         Some(f.first.compliance_id.clone()),
@@ -141,6 +156,41 @@ fn reinit_does_not_overwrite_pinned_compliance_or_treasury() {
         Some(f.first.treasury_id.clone()),
         "re-initialisation must not repoint the pinned treasury instance"
     );
+}
+
+/// The rejected call must also leave no half-written pending admin behind: a
+/// successful-looking nomination from the attacker's re-init would let them
+/// complete a takeover they were never entitled to start.
+#[test]
+fn reinit_does_not_stage_a_pending_admin() {
+    let f = setup();
+    attempt_reinit(&f);
+
+    assert_eq!(
+        read_workflow_key(&f.env, &f.workflow_id, &DataKey::PendingAdmin),
+        None,
+        "a rejected re-initialisation must not stage a pending admin"
+    );
+}
+
+/// The stored admin keeps its powers after a rejected takeover attempt, and the
+/// attacker never gains any.
+#[test]
+fn reinit_leaves_admin_authority_with_the_original_admin() {
+    let f = setup();
+    attempt_reinit(&f);
+
+    // The original admin can still act.
+    f.workflow
+        .transfer_admin(&f.admin, &Address::generate(&f.env));
+
+    // The attacker cannot.
+    let err = f
+        .workflow
+        .try_transfer_admin(&f.attacker, &f.attacker)
+        .unwrap_err()
+        .unwrap();
+    assert_eq!(err, TreasuryError::Unauthorized.into());
 }
 
 /// Behavioural counterpart to the storage assertion above: a merchant the
@@ -182,7 +232,8 @@ fn workflow_still_executes_against_the_original_pairs_after_reinit_attempt() {
     let f = setup();
 
     let merchant = Address::generate(&f.env);
-    ComplianceContractClient::new(&f.env, &f.first.compliance_id).allow_address(&f.admin, &merchant);
+    ComplianceContractClient::new(&f.env, &f.first.compliance_id)
+        .allow_address(&f.admin, &merchant);
 
     let treasury = TreasuryContractClient::new(&f.env, &f.first.treasury_id);
     let settlement_id = treasury.propose_settlement(&f.admin, &merchant, &SETTLEMENT_AMOUNT);
@@ -215,14 +266,15 @@ fn repeated_reinit_attempts_are_all_rejected() {
     for _ in 0..3 {
         let err = f
             .workflow
-            .try_initialize(&f.second.compliance_id, &f.second.treasury_id)
+            .try_initialize(&f.attacker, &f.second.compliance_id, &f.second.treasury_id)
             .unwrap_err()
             .unwrap();
         assert_eq!(err, TreasuryError::AlreadyInitialized.into());
     }
 
     let merchant = Address::generate(&f.env);
-    ComplianceContractClient::new(&f.env, &f.first.compliance_id).allow_address(&f.admin, &merchant);
+    ComplianceContractClient::new(&f.env, &f.first.compliance_id)
+        .allow_address(&f.admin, &merchant);
     let treasury = TreasuryContractClient::new(&f.env, &f.first.treasury_id);
     let settlement_id = treasury.propose_settlement(&f.admin, &merchant, &SETTLEMENT_AMOUNT);
 

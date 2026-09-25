@@ -1,8 +1,10 @@
 {
   "functions": [
+    "accept_admin",
     "execute_with_compliance",
     "execute_with_compliance_batch",
-    "initialize"
+    "initialize",
+    "transfer_admin"
   ],
   "events": []
 }

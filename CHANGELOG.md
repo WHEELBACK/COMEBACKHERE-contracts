@@ -12,6 +12,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 #### Treasury Contract
 - Timelocked signer and threshold-configuration changes (#447). Admin calls to `set_signer`, `remove_signer`, and `update_threshold` can now be queued via `propose_signer_change` with a 24-hour delay enforced by `execute_signer_change`; any admin can cancel the queued change within that window via `cancel_signer_change`. This restores a meaningful reaction window against a single-compromised-admin-key scenario that the pre-existing immediate entrypoints lacked.
 
+#### Settlement Workflow Contract
+- Two-step admin transfer (`transfer_admin` / `accept_admin`) matching the pattern already used by the invoice and compliance contracts (#621). `initialize` now takes an `admin` argument, and the role can be handed over without redeploying. The handover only takes effect once the nominee calls `accept_admin`, so nominating a mistyped or unreachable address is recoverable rather than a permanent loss of the contract. Both steps emit `admin_transfer_initiated` / `admin_transferred`.
+
 #### Tooling
 - `scripts/check-enum-doc-comments.sh` (#446): new lint script that verifies every `#[contracterror]` and `#[contracttype]` enum has a `///` doc comment on the enum itself (not just its variants). Integrated into `.pre-commit-config.yaml`, `justfile`, and `Makefile` alongside the existing `check-enum-ordering.sh` step.
 - All `#[contracterror]`/`#[contracttype]` enums across `contracts/` and `crates/` now carry enum-level `///` doc comments to satisfy the new lint and to provide a high-level summary before readers dive into individual variant descriptions.

@@ -148,12 +148,15 @@ jobs:
             --network "$NETWORK")
           echo "Settlement Workflow ID: $SETTLEMENT_WORKFLOW_ID"
 
+          # The workflow's admin is fixed at initialize and thereafter only
+          # changeable via the two-step transfer_admin/accept_admin flow (#621),
+          # so there is no single-step override here.
           echo "Initializing Settlement Workflow contract..."
           stellar contract invoke \
             --id "$SETTLEMENT_WORKFLOW_ID" \
             --source "$SOURCE" \
             --network "$NETWORK" \
-            -- initialize --compliance_id "$COMPLIANCE_ID" --treasury_id "$TREASURY_ID"
+            -- initialize --admin "$DEPLOYER_ADDRESS" --compliance_id "$COMPLIANCE_ID" --treasury_id "$TREASURY_ID"
 
           echo "COMPLIANCE_ID=$COMPLIANCE_ID" >> $GITHUB_ENV
           echo "INVOICE_ID=$INVOICE_ID" >> $GITHUB_ENV
