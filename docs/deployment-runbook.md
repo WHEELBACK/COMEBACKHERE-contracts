@@ -47,6 +47,14 @@ treasury additionally has a weighted multisig signer set gating
 this is correct for local development and **must not** be replicated as-is
 for mainnet.
 
+`compliance`, `invoice`, and `settlement-workflow` all support rotating that
+admin key later via a two-step `transfer_admin` / `accept_admin` handover, so a
+key compromised *after* deployment can be replaced without redeploying. The
+current admin nominates a successor, and the role only moves once the successor
+calls `accept_admin` — so a mistyped nomination is recoverable rather than a
+permanent loss of the contract. `treasury`'s admin is the exception: it has no
+`transfer_admin` entrypoint, and losing that key means redeploying.
+
 ### Key generation and custody
 
 - Each signer's key must be generated on hardware the signer personally
@@ -150,8 +158,11 @@ stellar contract invoke --id "$INVOICE_ID" --source admin --network "$NETWORK" \
 
 # 4. Settlement-Workflow — requires COMPLIANCE_ID and TREASURY_ID from steps 1–2
 WORKFLOW_ID=$(stellar contract deploy --wasm .../settlement_workflow.wasm --source admin --network "$NETWORK")
+# --admin sets the workflow's admin. This is the only chance to choose it: the
+# role is thereafter changeable only via the two-step transfer_admin/accept_admin
+# flow, and there is no single-step override.
 stellar contract invoke --id "$WORKFLOW_ID" --source admin --network "$NETWORK" \
-  -- initialize --compliance_id "$COMPLIANCE_ID" --treasury_id "$TREASURY_ID"
+  -- initialize --admin "$ADMIN_ADDRESS" --compliance_id "$COMPLIANCE_ID" --treasury_id "$TREASURY_ID"
 
 # 4a. Register settlement-workflow's own contract address as a treasury signer.
 # execute_with_compliance calls Treasury::execute_settlement using
@@ -172,6 +183,11 @@ stellar contract invoke --id "$TREASURY_ID" --source admin --network "$NETWORK" 
 - [ ] Confirm `SettlementWorkflow::initialize` was called exactly once and
   reverts with `AlreadyInitialized` on a second attempt — this is a one-time,
   irreversible pinning of the compliance/treasury addresses it trusts.
+- [ ] Confirm the `--admin` address passed to `SettlementWorkflow::initialize`
+  is an address you can actually produce signatures for. The role starts
+  transferring on the first `transfer_admin` and only becomes usable once the
+  nominee calls `accept_admin`, so a typo here is recoverable but will leave
+  the contract temporarily un-rotatable.
 - [ ] Confirm `execute_with_compliance` succeeds end-to-end on a small,
   reversible test transaction before routing real settlement volume through
   it.

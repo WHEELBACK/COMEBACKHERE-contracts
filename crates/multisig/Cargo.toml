@@ -17,3 +17,14 @@ testutils = ["soroban-sdk/testutils"]
 
 [dependencies]
 soroban-sdk.workspace = true
+
+# Unit tests in this crate build a real `soroban_sdk::Env` (the `testutils`
+# test host) to exercise the storage-backed helpers, so `soroban-sdk/testutils`
+# has to be on for the test build. It is a dev-dependency rather than a
+# default feature on purpose: this crate is a path dependency of the
+# invoice/treasury/settlement-workflow contracts, and enabling
+# `soroban-sdk/testutils` in their normal (wasm32 release) dependency graph
+# breaks the build — soroban-sdk hard-disables that feature for wasm32.
+# See the note in `scripts/init-contracts.sh` for the same constraint.
+[dev-dependencies]
+soroban-sdk = { workspace = true, features = ["testutils"] }
