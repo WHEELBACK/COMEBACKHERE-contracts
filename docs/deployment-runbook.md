@@ -176,7 +176,34 @@ stellar contract invoke --id "$TREASURY_ID" --source admin --network "$NETWORK" 
   reversible test transaction before routing real settlement volume through
   it.
 
-## 5. See also
+## 5. Rollback and failed-deploy response
+
+Soroban contracts are immutable once deployed, so "rollback" means stopping
+traffic to a bad deployment and repointing clients or configuration to the last
+known-good contract IDs. Keep the previous production IDs, deployment commit,
+and ABI artifacts available until the new deployment has passed post-deploy
+verification and at least one operational monitoring window.
+
+If a deployment step fails before initialization:
+
+- Discard the newly deployed contract ID and redeploy from the same audited
+  commit after fixing the operator or network issue.
+- Do not initialize dependencies against a partially verified contract ID.
+- Record the failed contract ID, transaction hash, and reason in the release
+  log so indexers can ignore it.
+
+If initialization succeeds but verification fails:
+
+- Pause the affected contract where a pause entrypoint exists.
+- Stop any API, dashboard, or relayer configuration from referencing the new
+  ID.
+- Repoint clients to the previous contract IDs and verify read/write traffic
+  against the previous deployment before resuming settlement volume.
+- Open a follow-up incident issue with the commit hash, contract IDs,
+  transaction hashes, signer approvals, and the exact verification step that
+  failed.
+
+## 6. See also
 
 - [`docs/upgrade-guide.md`](upgrade-guide.md) — upgrading a contract already
   deployed via this runbook.

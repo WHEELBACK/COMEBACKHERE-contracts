@@ -133,6 +133,7 @@ Source: `contracts/treasury/src/{lib,settlements,disputes,deposits,holds,signers
 | `threshold_updated` | `(Symbol,)` | `u32` (new_threshold) | `update_threshold` |
 | `treasury_paused` | `(Symbol,)` | `Address` (admin) | `pause` |
 | `treasury_unpaused` | `(Symbol,)` | `Address` (admin) | `unpause` |
+| `withdrawal_limit_set` | `(Symbol,)` | `(i128, u64)` — `(limit, window_secs)` | `set_withdrawal_limit` |
 | `settlement_proposed` | `(Symbol, id: u64)` | `Settlement` | `propose_settlement`, `propose_partial_settlement` |
 | `settlement_approved` | `(Symbol, settlement_id: u64)` | `Settlement` | `approve_settlement`, `batch_approve_settlements` (per settlement) |
 | `settlement_partial_approved` | `(Symbol, settlement_id: u64)` | `Settlement` | `approve_partial_settlement` |
@@ -149,6 +150,7 @@ Source: `contracts/treasury/src/{lib,settlements,disputes,deposits,holds,signers
 | `dispute_raised` | `(Symbol, id: u64)` | `Dispute` | `raise_dispute` |
 | `dispute_expired` | `(Symbol, dispute_id: u64)` | `Dispute` | `expire_dispute` |
 | `dispute_resolved` | `(Symbol, dispute_id: u64)` | `Dispute` | `resolve_dispute` |
+| `dispute_resolved_split` | `(Symbol, dispute_id: u64)` | `Dispute` | `resolve_dispute_split` |
 | `dispute_resolution_voted` | `(Symbol, dispute_id: u64)` | `Dispute` | `vote_dispute_resolution` |
 | `deposit` | `(Symbol, from: Address)` | `i128` (amount) | `deposit`, `batch_deposit` (per token deposited) |
 | `withdraw` | `(Symbol, to: Address)` | `i128` (amount) | `withdraw` |
@@ -159,6 +161,9 @@ Source: `contracts/treasury/src/{lib,settlements,disputes,deposits,holds,signers
 | `rotation_approved` | `(Symbol, rotation_id: u64)` | `SignerRotationProposal` | `approve_signer_rotation` |
 | `rotation_executed` | `(Symbol, rotation_id: u64)` | `SignerRotationProposal` | `approve_signer_rotation` (published in addition to `rotation_approved`, only when the approval reaches threshold) |
 | `rotation_cancelled` | `(Symbol, rotation_id: u64)` | `SignerRotationProposal` | `cancel_rotation` |
+| `signer_change_proposed` | `(Symbol, id: u64)` | `SignerChangeProposal` | `propose_signer_change` |
+| `signer_change_executed` | `(Symbol, id: u64)` | `SignerChangeProposal` | `execute_signer_change` |
+| `signer_change_cancelled` | `(Symbol, id: u64)` | `SignerChangeProposal` | `cancel_signer_change` |
 
 **`Settlement`** (`crates/multisig/src/lib.rs`): `id: u64`, `merchant_address: Address`,
 `amount: i128`, `approvals: Vec<Address>`, `approval_weight: u32`,
@@ -175,6 +180,11 @@ Source: `contracts/treasury/src/{lib,settlements,disputes,deposits,holds,signers
 **`SignerRotationProposal`**: `id: u64`, `old_signer: Address`, `new_signer: Address`,
 `approvals: Vec<Address>`, `approval_weight: u32`, `status: RotationStatus`.
 `RotationStatus`: `Pending | Executed | Cancelled`.
+
+**`SignerChangeProposal`**: `id: u64`, `kind: SignerChangeKind`, `proposed_at: u64`,
+`executable_at: u64`, `status: SignerChangeStatus`.
+`SignerChangeKind`: `SetSigner(Address, u32) | RemoveSigner(Address) | UpdateThreshold(u32)`.
+`SignerChangeStatus`: `Pending | Executed | Cancelled`.
 
 ### Notes for indexers
 

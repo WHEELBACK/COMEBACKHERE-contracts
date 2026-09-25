@@ -28,6 +28,10 @@ lint:
 deny:
     cargo deny check
 
+# Check event schema docs against published event symbols in source
+check-event-schema:
+    python3 scripts/check-event-schema-drift.py
+
 # Audit dependencies for known security vulnerabilities
 audit:
     cargo audit
