@@ -134,6 +134,17 @@ boundaries, a typed `WeightOverflow` rather than a bare panic, and
 - `scripts/check-enum-ordering.sh`, `scripts/check-enum-doc-comments.sh`,
   `scripts/check-workflow-version-pins.sh`, `scripts/regen-abis.sh` — all pass.
 
+### Integration with checks that landed on `main` during this branch
+
+This branch was rebased onto the then-current `main`, which had since gained a
+`clippy-pedantic` job, `scripts/check-event-schema-drift.py`,
+`scripts/check-error-code-uniqueness.sh`, and a rewritten deployment runbook. The
+final commit resolves everything the rebase surfaced: `require_admin` fails closed
+without `unwrap()`, the two new events are documented in `docs/event-schema.md`,
+`initialize`/`transfer_admin`/`accept_admin` are added to
+`docs/access-control-matrix.md`, and the runbook's `initialize` invocation now
+passes `--admin`.
+
 ## Review notes
 
 - `initialize`'s signature changed. This is a breaking interface change for
@@ -143,6 +154,31 @@ boundaries, a typed `WeightOverflow` rather than a bare panic, and
   would have no `Admin` set, so a redeploy is needed to use rotation.
 - `accept_admin` returns `TreasuryError::NoPendingAdmin` rather than panicking
   with a string, matching the invoice contract's behaviour.
+
+## Pre-existing problems found, not fixed here
+
+Three things are broken on `main` today and are out of scope for these four
+issues. Flagging them so they are not mistaken for regressions from this branch:
+
+1. **`contracts/invoice/fuzz` and `contracts/settlement-workflow/fuzz` do not
+   compile.** Both lack a lockfile, so their standalone workspace resolves
+   `ed25519-dalek` 3.x, which does not satisfy `soroban-env-host`'s
+   `ChaCha20Rng: CryptoRng` bound. The new compliance fuzz target is fixed by
+   shipping a root-derived `Cargo.lock`; applying the same fix to the other two
+   would make the scheduled `fuzz.yml` job able to run. That job's matrix is also
+   hardcoded to those two targets, so the new compliance target is not yet
+   exercised in CI — worth adding, but it edits a file another contributor just
+   added.
+2. **`clippy-pedantic` is red on `main`** — 16 findings across
+   `compliance/src/lib.rs` (10), `settlement-workflow/src/lib.rs` (2),
+   `treasury/src/lib.rs` (1) and two `invoice` files. This branch adds none; it
+   fixes the one its own new code would have introduced.
+3. **`abis/compliance.json` is stale on `main`** — `get_operator` (merged in #650)
+   is missing from the snapshot. Not regenerated here to keep this diff focused,
+   and `abi-drift-check.yml` only checks invoice so it is not currently gating.
+4. `treasury` is the only contract with no `transfer_admin`/`accept_admin`, so its
+   admin key is not recoverable without a redeploy. Noted in the deployment
+   runbook; a rotation issue for treasury is probably warranted.
 
 Closes #613
 Closes #620
