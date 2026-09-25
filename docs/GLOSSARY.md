@@ -69,6 +69,13 @@ The lifecycle states of a `Dispute`:
 | `ResolvedCounterparty` | Resolved in favour of the counterparty. |
 | `Expired` | Dispute deadline elapsed; `expire_dispute` was called; linked settlement released. |
 
+### Dispute split
+
+A dispute resolution where the disputed amount is divided between claimant and
+counterparty instead of assigning the whole amount to one side. The treasury
+entrypoint `resolve_dispute_split` records the claimant share in basis points
+on `Dispute.claimant_share_bps` and emits `dispute_resolved_split`.
+
 ---
 
 ## E
@@ -100,6 +107,10 @@ Default value is `0` (no grace). Set via `set_grace_window(admin, seconds)` and 
 A `SettlementStatus::OnHold` state that blocks `execute_settlement` from running. A hold is placed either explicitly via `hold_settlement(admin, settlement_id, reason)` or automatically when a dispute is raised against the settlement. Every hold carries a `SettlementHoldReason` variant (see below) that records why the hold was applied.
 
 `release_hold(admin, settlement_id)` returns the settlement to `Pending` and clears the `hold_reason` to `SettlementHoldReason::None`.
+
+Holds are operationally distinct from disputes: a manual hold can be placed
+without a dispute, while raising a dispute automatically places the settlement
+on hold until the dispute is resolved or expired.
 
 ### `SettlementHoldReason`
 

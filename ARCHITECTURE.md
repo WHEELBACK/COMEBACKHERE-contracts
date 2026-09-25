@@ -202,7 +202,17 @@ If you are looking for where a type like `SettlementHoldReason` is stored on-cha
 
 ## Cross-Contract Call Map
 
+```mermaid
+flowchart LR
+    Merchant[Merchant dashboard] --> Invoice[Invoice contract]
+    Invoice --> Proposal[Settlement proposal workflow]
+    Proposal --> Treasury[Treasury contract]
+    SettlementWorkflow[SettlementWorkflow contract] --> Compliance[Compliance contract]
+    SettlementWorkflow --> Treasury
+    Treasury --> Token[SEP-41 token]
 ```
+
+```text
 SettlementProposalWorkflow
   ├── Invoice::get_invoice(id)              → validates status == Pending
   └── Treasury::propose_settlement(...)     → creates Settlement record

@@ -22,7 +22,7 @@ set -e
 #
 # Usage:
 #   COMPLIANCE_ID=... INVOICE_ID=... TREASURY_ID=... SETTLEMENT_WORKFLOW_ID=... \
-#     ./scripts/protocol-health.sh
+#     ./scripts/protocol-health.sh [--json]
 #
 # Contract IDs default to the values scripts/init-contracts.sh prints, read
 # from a local .protocol-ids file if present (see that script); otherwise
@@ -32,6 +32,11 @@ NETWORK="${NETWORK:-local}"
 RPC_URL="${RPC_URL:-http://localhost:8000}"
 NETWORK_PASSPHRASE="${NETWORK_PASSPHRASE:-Standalone Network ; February 2017}"
 ADMIN_SOURCE="${ADMIN_SOURCE:-admin}"
+OUTPUT_FORMAT="text"
+
+if [ "${1:-}" = "--json" ]; then
+    OUTPUT_FORMAT="json"
+fi
 
 stellar network add --rpc-url "$RPC_URL" --network-passphrase "$NETWORK_PASSPHRASE" "$NETWORK" 2>/dev/null || true
 
@@ -76,36 +81,56 @@ check_paused() {
     fi
 }
 
+json_escape() {
+    printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g'
+}
+
+pause_state() {
+    local id="$1"
+    shift
+    local output
+    if output=$(stellar contract invoke --id "$id" --source "$ADMIN_SOURCE" --network "$NETWORK" --send=no -- "$@" 2>&1); then
+        echo "not_paused"
+    elif echo "$output" | grep -qi "ContractPaused"; then
+        echo "paused"
+    else
+        echo "not_paused"
+    fi
+}
+
+PENDING_COUNT=$(invoke_read "$TREASURY_ID" get_pending_settlements | grep -o '"id"' | wc -l | tr -d ' ')
+SNAPSHOT=$(invoke_read "$COMPLIANCE_ID" export_snapshot --admin "$ADMIN_ADDR" --offset 0 --limit 0)
+BLOCKED_COUNT=$(echo "$SNAPSHOT" | grep -o '"Blocked"' | wc -l | tr -d ' ')
+INVOICE_COUNT=$(invoke_read "$INVOICE_ID" get_invoice_count)
+
+TREASURY_PAUSE=$(pause_state "$TREASURY_ID" propose_settlement --signer "$ADMIN_ADDR" --merchant_address "$ADMIN_ADDR" --amount 1)
+COMPLIANCE_PAUSE=$(pause_state "$COMPLIANCE_ID" allow_address --admin "$ADMIN_ADDR" --address "$ADMIN_ADDR")
+INVOICE_PAUSE=$(pause_state "$INVOICE_ID" cancel_invoice --caller "$ADMIN_ADDR" --id 0)
+
+if [ "$OUTPUT_FORMAT" = "json" ]; then
+    cat <<JSON
+{"network":"$(json_escape "$NETWORK")","contracts":{"treasury":{"id":"$(json_escape "$TREASURY_ID")","pending_settlements":$PENDING_COUNT,"pause_state":"$TREASURY_PAUSE"},"compliance":{"id":"$(json_escape "$COMPLIANCE_ID")","blocked_addresses":$BLOCKED_COUNT,"pause_state":"$COMPLIANCE_PAUSE"},"invoice":{"id":"$(json_escape "$INVOICE_ID")","invoice_count":$INVOICE_COUNT,"pause_state":"$INVOICE_PAUSE"},"settlement_workflow":{"id":"$(json_escape "${SETTLEMENT_WORKFLOW_ID:-}")","has_state":false}}}
+JSON
+    exit 0
+fi
+
 echo "============================================================"
 echo "Protocol Health Summary ($NETWORK)"
 echo "============================================================"
 
 echo ""
 echo "-- Treasury ($TREASURY_ID) --"
-PENDING_COUNT=$(invoke_read "$TREASURY_ID" get_pending_settlements | grep -o '"id"' | wc -l | tr -d ' ')
 echo "Pending settlements: $PENDING_COUNT"
-# propose_settlement checks require_not_paused before require_authorized_signer, and the
-# admin is always a registered signer (weight 1) from `initialize` - not `pause` itself,
-# which has no pause gate of its own (only require_admin).
 check_paused "Treasury" "$TREASURY_ID" propose_settlement --signer "$ADMIN_ADDR" --merchant_address "$ADMIN_ADDR" --amount 1
 
 echo ""
 echo "-- Compliance ($COMPLIANCE_ID) --"
-SNAPSHOT=$(invoke_read "$COMPLIANCE_ID" export_snapshot --admin "$ADMIN_ADDR" --offset 0 --limit 0)
-BLOCKED_COUNT=$(echo "$SNAPSHOT" | grep -o '"Blocked"' | wc -l | tr -d ' ')
 echo "Blocked addresses: $BLOCKED_COUNT"
-# allow_address checks require_not_paused (after require_admin, which the real admin
-# always passes) - not `pause` itself, which has no pause gate of its own. Allowing the
-# admin's own address is a harmless, idempotent dummy call under --send=no.
 check_paused "Compliance" "$COMPLIANCE_ID" allow_address --admin "$ADMIN_ADDR" --address "$ADMIN_ADDR"
 
 echo ""
 echo "-- Invoice ($INVOICE_ID) --"
-INVOICE_COUNT=$(invoke_read "$INVOICE_ID" get_invoice_count)
 echo "Total invoices (all statuses; no on-chain pending-only counter exists today): $INVOICE_COUNT"
-# cancel_invoice checks require_not_paused right after caller auth, before it looks up
-# the invoice - so id=0 (never a valid invoice id; ids start at 1) reliably fails with
-# NotFound *after* the pause check, not before, when the contract isn't paused.
 check_paused "Invoice" "$INVOICE_ID" cancel_invoice --caller "$ADMIN_ADDR" --id 0
 
 if [ -n "$SETTLEMENT_WORKFLOW_ID" ]; then
