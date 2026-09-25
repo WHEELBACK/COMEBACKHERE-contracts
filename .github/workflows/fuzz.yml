@@ -1,0 +1,35 @@
+name: Scheduled Fuzz
+
+on:
+  schedule:
+    - cron: "17 3 * * 1"
+  workflow_dispatch: {}
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  cargo-fuzz:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: settlement-workflow
+            directory: contracts/settlement-workflow/fuzz
+            target: execute_with_compliance
+          - name: invoice
+            directory: contracts/invoice/fuzz
+            target: amount_precision
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install nightly Rust
+        uses: dtolnay/rust-toolchain@nightly
+
+      - name: Install cargo-fuzz
+        run: cargo install cargo-fuzz
+
+      - name: Run fuzz target
+        run: cargo fuzz run "${{ matrix.target }}" -- -max_total_time=120
+        working-directory: ${{ matrix.directory }}
