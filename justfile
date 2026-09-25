@@ -24,6 +24,23 @@ fmt:
 lint:
     cargo clippy -- -D warnings
 
+# Assert no contract error enum repeats a discriminant within its own ABI namespace
+check-error-codes:
+    scripts/check-error-code-uniqueness.sh
+
+# Run settlement workflow fuzz target
+fuzz-settlement-workflow:
+    cd contracts/settlement-workflow/fuzz && cargo fuzz run execute_with_compliance
+
+# Run invoice amount precision fuzz target
+fuzz-invoice-amount:
+    cd contracts/invoice/fuzz && cargo fuzz run amount_precision
+
+# List the available cargo-fuzz targets
+fuzz-list:
+    @echo "settlement-workflow: execute_with_compliance"
+    @echo "invoice: amount_precision"
+
 # Check dependencies for vulnerabilities and license issues
 deny:
     cargo deny check

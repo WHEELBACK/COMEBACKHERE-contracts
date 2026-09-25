@@ -5,6 +5,9 @@ edition.workspace = true
 license.workspace = true
 repository.workspace = true
 publish = false
+description = "Typed client helpers for the COMEBACKHERE compliance contract"
+keywords = ["soroban", "stellar", "compliance"]
+categories = ["api-bindings"]
 
 [lib]
 name = "compliance_client"

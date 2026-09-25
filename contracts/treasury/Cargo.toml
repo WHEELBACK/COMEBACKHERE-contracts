@@ -4,6 +4,9 @@ version = "1.0.0"
 edition = "2021"
 license.workspace = true
 publish = false
+description = "COMEBACKHERE treasury and settlement contract"
+keywords = ["soroban", "stellar", "treasury"]
+categories = ["cryptography::cryptocurrencies"]
 
 [lib]
 crate-type = ["cdylib", "rlib"]

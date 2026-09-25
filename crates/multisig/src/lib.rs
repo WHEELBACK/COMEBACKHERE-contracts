@@ -235,6 +235,19 @@ pub struct SignerChangeProposal {
     pub status: SignerChangeStatus,
 }
 
+/// Expiry metadata for an approval collected toward a multisig action.
+///
+/// `expires_at == 0` means the approval does not expire. Otherwise callers should
+/// compare the value with `Env::ledger().timestamp()` before counting the signer
+/// weight toward quorum.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ApprovalExpiry {
+    pub signer: Address,
+    pub approved_at: u64,
+    pub expires_at: u64,
+}
+
 /// Storage keys for all treasury contract state.
 ///
 /// Used as keys for Soroban instance and persistent storage. Variants must not
@@ -374,6 +387,28 @@ pub fn record_approval(
             .unwrap_or_else(|| soroban_sdk::panic_with_error!(env, TreasuryError::WeightOverflow));
         approvals.push_back(signer.clone());
     }
+}
+
+/// Builds expiry metadata for a newly collected approval.
+pub fn approval_expiry(env: &Env, signer: &Address, ttl_seconds: u64) -> ApprovalExpiry {
+    let approved_at = env.ledger().timestamp();
+    let expires_at = if ttl_seconds == 0 {
+        0
+    } else {
+        approved_at
+            .checked_add(ttl_seconds)
+            .unwrap_or_else(|| soroban_sdk::panic_with_error!(env, TreasuryError::ArithmeticOverflow))
+    };
+    ApprovalExpiry {
+        signer: signer.clone(),
+        approved_at,
+        expires_at,
+    }
+}
+
+/// Returns whether approval metadata is still countable at the current ledger time.
+pub fn approval_is_active(env: &Env, approval: &ApprovalExpiry) -> bool {
+    approval.expires_at == 0 || env.ledger().timestamp() <= approval.expires_at
 }
 
 /// Returns whether `weight` satisfies simple weighted-threshold quorum, i.e. `weight >= threshold`.

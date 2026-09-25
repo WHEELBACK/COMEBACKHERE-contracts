@@ -4,6 +4,9 @@ version = "1.0.0"
 edition = "2021"
 license.workspace = true
 publish = false
+description = "COMEBACKHERE compliance gating contract"
+keywords = ["soroban", "stellar", "compliance"]
+categories = ["cryptography::cryptocurrencies"]
 
 [lib]
 crate-type = ["cdylib", "rlib"]
