@@ -4,6 +4,9 @@ version = "1.0.0"
 edition = "2021"
 license.workspace = true
 publish = false
+description = "COMEBACKHERE invoice escrow contract"
+keywords = ["soroban", "stellar", "escrow"]
+categories = ["cryptography::cryptocurrencies"]
 
 [lib]
 crate-type = ["cdylib", "rlib"]

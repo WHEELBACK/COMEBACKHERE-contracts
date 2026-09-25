@@ -5,6 +5,9 @@ edition.workspace = true
 license.workspace = true
 repository.workspace = true
 publish = false
+description = "Shared multisig types and threshold helpers for COMEBACKHERE contracts"
+keywords = ["soroban", "stellar", "multisig"]
+categories = ["cryptography::cryptocurrencies"]
 
 [lib]
 name = "multisig"

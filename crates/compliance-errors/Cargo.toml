@@ -5,6 +5,9 @@ edition.workspace = true
 license.workspace = true
 repository.workspace = true
 publish = false
+description = "Stable compliance error ABI for COMEBACKHERE contracts"
+keywords = ["soroban", "stellar", "errors"]
+categories = ["cryptography::cryptocurrencies"]
 
 [lib]
 name = "compliance_errors"

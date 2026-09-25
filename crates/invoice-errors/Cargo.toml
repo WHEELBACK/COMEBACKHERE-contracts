@@ -5,6 +5,9 @@ edition.workspace = true
 license.workspace = true
 repository.workspace = true
 publish = false
+description = "Stable invoice error ABI for COMEBACKHERE contracts"
+keywords = ["soroban", "stellar", "errors"]
+categories = ["cryptography::cryptocurrencies"]
 
 [lib]
 name = "invoice_errors"
