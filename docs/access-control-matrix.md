@@ -82,8 +82,10 @@ Source: `src/lib.rs`, `src/deposits.rs`, `src/settlements.rs`, `src/disputes.rs`
 | `partially_execute_settlement` | `require_authorized_signer(&env, &signer)` | Authorized signer |
 | `cancel_settlement` | `require_authorized_signer(&env, &signer)` | Authorized signer |
 | `batch_cancel_settlements` | `require_admin(&env, &admin)` | Admin-only |
+| `force_cancel_settlement` | `require_admin(&env, &admin)` | Admin-only |
 | `get_pending_settlements` | none | Permissionless (read-only) |
 | `get_pending_settlements_page` | none | Permissionless (read-only) |
+| `get_pending_metrics` | none | Permissionless (read-only) |
 | `get_settlement` | none | Permissionless (read-only) |
 | `expire_settlement` | `require_admin(&env, &admin)` | Admin-only |
 | `update_merchant_payout_address` | `merchant.require_auth()` | Self-auth (role) |
@@ -106,6 +108,13 @@ Source: `src/lib.rs`, `src/deposits.rs`, `src/settlements.rs`, `src/disputes.rs`
 | `propose_signer_rotation` | `require_authorized_signer(&env, &proposer)` | Authorized signer |
 | `approve_signer_rotation` | `require_authorized_signer(&env, &approver)` | Authorized signer |
 | `cancel_rotation` | `require_admin(&env, &admin)` | Admin-only |
+| `set_withdrawal_limit` | `require_admin(&env, &admin)` | Admin-only |
+| `get_withdrawal_limit` | none | Permissionless (read-only) |
+| `resolve_dispute_split` | `require_admin(&env, &admin)` | Admin-only |
+| `propose_signer_change` | `require_admin(&env, &admin)` | Admin-only |
+| `execute_signer_change` | `require_admin(&env, &admin)` | Admin-only |
+| `cancel_signer_change` | `require_admin(&env, &admin)` | Admin-only |
+| `get_signer_change` | none | Permissionless (read-only) |
 
 ## `contracts/compliance`
 
@@ -150,6 +159,7 @@ Source: `src/lib.rs`.
 | Entrypoint | Auth check in source | Category |
 |---|---|---|
 | `execute_with_compliance` | **none directly in this function.** It calls `Compliance::is_allowed` (no auth required by that call) and, if it passes, `Treasury::execute_settlement` using `env.current_contract_address()` as the signer. Soroban auto-authorizes a contract's own outgoing calls, and `Treasury::execute_settlement`'s `require_authorized_signer` check is satisfied purely because this contract's address was pre-registered as a treasury signer via `set_signer`. | **Permissionless (mutating)** — see discrepancy below |
+| `execute_with_compliance_batch` | none directly; loops through the same compliance and treasury call path as `execute_with_compliance` for each settlement ID. | **Permissionless (mutating)** — same invariant as above |
 
 ## Discrepancies found
 
