@@ -81,7 +81,7 @@ spam from a compromised or malicious proposer. See
 ## 2. Deployment order
 
 Deployment order is not arbitrary. `contracts/settlement-workflow/src/lib.rs`'s
-`initialize(compliance_id, treasury_id)` **requires both the compliance and
+`initialize(admin, compliance_id, treasury_id)` **requires both the compliance and
 treasury contract addresses to already exist** — settlement-workflow pins
 them into its own instance storage as trusted call targets and refuses to
 accept them per-call afterward (see the `#364` note in that file). This
@@ -151,7 +151,7 @@ stellar contract invoke --id "$INVOICE_ID" --source admin --network "$NETWORK" \
 # 4. Settlement-Workflow — requires COMPLIANCE_ID and TREASURY_ID from steps 1–2
 WORKFLOW_ID=$(stellar contract deploy --wasm .../settlement_workflow.wasm --source admin --network "$NETWORK")
 stellar contract invoke --id "$WORKFLOW_ID" --source admin --network "$NETWORK" \
-  -- initialize --compliance_id "$COMPLIANCE_ID" --treasury_id "$TREASURY_ID"
+  -- initialize --admin "$ADMIN_ADDRESS" --compliance_id "$COMPLIANCE_ID" --treasury_id "$TREASURY_ID"
 
 # 4a. Register settlement-workflow's own contract address as a treasury signer.
 # execute_with_compliance calls Treasury::execute_settlement using

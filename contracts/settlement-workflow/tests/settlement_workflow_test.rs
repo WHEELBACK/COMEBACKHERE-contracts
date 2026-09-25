@@ -61,8 +61,9 @@ fn setup_with_signer(
 
     let workflow_id = env.register_contract(None, SettlementWorkflowContract);
     let workflow = SettlementWorkflowContractClient::new(&env, &workflow_id);
-    // Pin the trusted compliance/treasury instances once at init (#364).
-    workflow.initialize(&compliance_id, &treasury_id);
+    // Pin the trusted compliance/treasury instances once at init (#364) and record
+    // the admin allowed to pause/unpause the workflow (#616).
+    workflow.initialize(&admin, &compliance_id, &treasury_id);
     // The workflow contract executes settlements as itself, so it must be an
     // authorized Treasury signer.
     if register_workflow_signer {
@@ -171,15 +172,16 @@ fn emits_settlement_workflow_executed_event() {
 fn initialize_is_idempotent_and_pins_trusted_instances() {
     let env = Env::default();
     env.mock_all_auths();
+    let admin = Address::generate(&env);
     let compliance_id = Address::generate(&env);
     let treasury_id = Address::generate(&env);
     let workflow_id = env.register_contract(None, SettlementWorkflowContract);
     let workflow = SettlementWorkflowContractClient::new(&env, &workflow_id);
 
-    workflow.initialize(&compliance_id, &treasury_id);
+    workflow.initialize(&admin, &compliance_id, &treasury_id);
     // Second initialize must trap with AlreadyInitialized.
     let err = workflow
-        .try_initialize(&compliance_id, &treasury_id)
+        .try_initialize(&admin, &compliance_id, &treasury_id)
         .unwrap_err()
         .unwrap();
     assert_eq!(err, TreasuryError::AlreadyInitialized.into());
@@ -320,4 +322,234 @@ fn execute_with_compliance_is_idempotent_against_retried_call() {
         token::Client::new(&env, &token_id).balance(&merchant),
         10_000_000
     );
+}
+
+// ─── #616 Pause control matrix ────────────────────────────────────────────────
+
+/// A freshly initialized workflow is not paused, and reports the admin recorded
+/// at initialization.
+#[test]
+fn workflow_is_not_paused_after_initialize() {
+    let (
+        _env,
+        admin,
+        _merchant,
+        _compliance,
+        _compliance_id,
+        _treasury,
+        _treasury_id,
+        workflow,
+        _token_id,
+    ) = setup();
+
+    assert!(!workflow.is_paused());
+    assert_eq!(workflow.get_admin(), admin);
+}
+
+/// `is_paused` flips true after `pause` and back to false after `unpause`.
+#[test]
+fn is_paused_tracks_pause_and_unpause() {
+    let (
+        _env,
+        admin,
+        _merchant,
+        _compliance,
+        _compliance_id,
+        _treasury,
+        _treasury_id,
+        workflow,
+        _token_id,
+    ) = setup();
+
+    workflow.pause(&admin);
+    assert!(workflow.is_paused());
+
+    workflow.unpause(&admin);
+    assert!(!workflow.is_paused());
+}
+
+/// While paused, `execute_with_compliance` is rejected with `ContractPaused` and
+/// no funds move.
+#[test]
+fn execute_with_compliance_rejected_while_paused() {
+    let (
+        env,
+        admin,
+        merchant,
+        compliance,
+        _compliance_id,
+        treasury,
+        treasury_id,
+        workflow,
+        token_id,
+    ) = setup();
+
+    compliance.allow_address(&admin, &merchant);
+    let settlement_id = treasury.propose_settlement(&admin, &merchant, &10_000_000);
+    token::StellarAssetClient::new(&env, &token_id).mint(&treasury_id, &10_000_000);
+
+    workflow.pause(&admin);
+
+    let err = workflow
+        .try_execute_with_compliance(&settlement_id, &token_id, &merchant)
+        .unwrap_err()
+        .unwrap();
+    assert_eq!(err, TreasuryError::ContractPaused.into());
+    assert_eq!(token::Client::new(&env, &token_id).balance(&merchant), 0);
+}
+
+/// While paused, `execute_with_compliance_batch` is rejected with `ContractPaused`
+/// and no settlement in the batch is executed.
+#[test]
+fn execute_with_compliance_batch_rejected_while_paused() {
+    let (
+        env,
+        admin,
+        merchant,
+        compliance,
+        _compliance_id,
+        treasury,
+        treasury_id,
+        workflow,
+        token_id,
+    ) = setup();
+
+    compliance.allow_address(&admin, &merchant);
+    let good_1 = treasury.propose_settlement(&admin, &merchant, &5_000_000);
+    let good_2 = treasury.propose_settlement(&admin, &merchant, &5_000_000);
+    token::StellarAssetClient::new(&env, &token_id).mint(&treasury_id, &10_000_000);
+
+    let mut ids = soroban_sdk::Vec::new(&env);
+    ids.push_back(good_1);
+    ids.push_back(good_2);
+
+    workflow.pause(&admin);
+
+    let err = workflow
+        .try_execute_with_compliance_batch(&ids, &token_id, &merchant)
+        .unwrap_err()
+        .unwrap();
+    assert_eq!(err, TreasuryError::ContractPaused.into());
+    assert_eq!(token::Client::new(&env, &token_id).balance(&merchant), 0);
+}
+
+/// Unpausing restores the execution path: the pending settlement settles normally.
+#[test]
+fn execution_resumes_after_unpause() {
+    let (
+        env,
+        admin,
+        merchant,
+        compliance,
+        _compliance_id,
+        treasury,
+        treasury_id,
+        workflow,
+        token_id,
+    ) = setup();
+
+    compliance.allow_address(&admin, &merchant);
+    let settlement_id = treasury.propose_settlement(&admin, &merchant, &10_000_000);
+    token::StellarAssetClient::new(&env, &token_id).mint(&treasury_id, &10_000_000);
+
+    workflow.pause(&admin);
+    workflow.unpause(&admin);
+
+    workflow
+        .try_execute_with_compliance(&settlement_id, &token_id, &merchant)
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        token::Client::new(&env, &token_id).balance(&merchant),
+        10_000_000
+    );
+}
+
+/// The pause check precedes the compliance gate, so a blocked merchant is reported
+/// as paused while the workflow is halted rather than as a compliance failure.
+#[test]
+fn paused_workflow_reports_paused_before_compliance_check() {
+    let (
+        _env,
+        admin,
+        merchant,
+        _compliance,
+        _compliance_id,
+        treasury,
+        _treasury_id,
+        workflow,
+        token_id,
+    ) = setup();
+
+    // merchant is not on the allowlist: unpaused this is ComplianceCheckFailed.
+    let settlement_id = treasury.propose_settlement(&admin, &merchant, &1_000_000);
+
+    workflow.pause(&admin);
+
+    let err = workflow
+        .try_execute_with_compliance(&settlement_id, &token_id, &merchant)
+        .unwrap_err()
+        .unwrap();
+    assert_eq!(err, TreasuryError::ContractPaused.into());
+}
+
+/// Only the recorded admin can pause; a random address is rejected with
+/// `Unauthorized`.
+#[test]
+fn non_admin_cannot_pause_or_unpause() {
+    let (
+        env,
+        _admin,
+        _merchant,
+        _compliance,
+        _compliance_id,
+        _treasury,
+        _treasury_id,
+        workflow,
+        _token_id,
+    ) = setup();
+
+    let outsider = Address::generate(&env);
+    assert_eq!(
+        workflow.try_pause(&outsider).unwrap_err().unwrap(),
+        TreasuryError::Unauthorized.into()
+    );
+    assert!(!workflow.is_paused());
+    assert_eq!(
+        workflow.try_unpause(&outsider).unwrap_err().unwrap(),
+        TreasuryError::Unauthorized.into()
+    );
+}
+
+/// `pause` / `unpause` emit their own events so monitoring can follow the
+/// circuit breaker without polling `is_paused`.
+#[test]
+fn pause_and_unpause_emit_events() {
+    let (
+        env,
+        admin,
+        _merchant,
+        _compliance,
+        _compliance_id,
+        _treasury,
+        _treasury_id,
+        workflow,
+        _token_id,
+    ) = setup();
+
+    workflow.pause(&admin);
+    let (_, topics, data) = env.events().all().last().unwrap();
+    assert_eq!(
+        Symbol::from_val(&env, &topics.get_unchecked(0)),
+        Symbol::new(&env, "settlement_workflow_paused")
+    );
+    assert_eq!(Address::from_val(&env, &data), admin);
+
+    workflow.unpause(&admin);
+    let (_, topics, data) = env.events().all().last().unwrap();
+    assert_eq!(
+        Symbol::from_val(&env, &topics.get_unchecked(0)),
+        Symbol::new(&env, "settlement_workflow_unpaused")
+    );
+    assert_eq!(Address::from_val(&env, &data), admin);
 }

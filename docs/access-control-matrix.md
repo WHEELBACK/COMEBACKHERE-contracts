@@ -158,8 +158,13 @@ Source: `src/lib.rs`.
 
 | Entrypoint | Auth check in source | Category |
 |---|---|---|
-| `execute_with_compliance` | **none directly in this function.** It calls `Compliance::is_allowed` (no auth required by that call) and, if it passes, `Treasury::execute_settlement` using `env.current_contract_address()` as the signer. Soroban auto-authorizes a contract's own outgoing calls, and `Treasury::execute_settlement`'s `require_authorized_signer` check is satisfied purely because this contract's address was pre-registered as a treasury signer via `set_signer`. | **Permissionless (mutating)** — see discrepancy below |
-| `execute_with_compliance_batch` | none directly; loops through the same compliance and treasury call path as `execute_with_compliance` for each settlement ID. | **Permissionless (mutating)** — same invariant as above |
+| `initialize` | `admin.require_auth()`; only succeeds once (`AlreadyInitialized` guard) | Self-auth (bootstrap) |
+| `pause` | `Self::require_admin(&env, &admin)` (panics `Unauthorized` on failure) | Admin-only |
+| `unpause` | `Self::require_admin(&env, &admin)` (panics `Unauthorized` on failure) | Admin-only |
+| `is_paused` | none | Permissionless (read-only) |
+| `get_admin` | none | Permissionless (read-only) |
+| `execute_with_compliance` | `Self::require_not_paused(&env)` (pause gate, #616), then **no auth check of its own.** It calls `Compliance::is_allowed` (no auth required by that call) and, if it passes, `Treasury::execute_settlement` using `env.current_contract_address()` as the signer. Soroban auto-authorizes a contract's own outgoing calls, and `Treasury::execute_settlement`'s `require_authorized_signer` check is satisfied purely because this contract's address was pre-registered as a treasury signer via `set_signer`. | **Permissionless (mutating)** — see discrepancy below |
+| `execute_with_compliance_batch` | `Self::require_not_paused(&env)`, then none directly; loops through the same compliance and treasury call path as `execute_with_compliance` for each settlement ID. | **Permissionless (mutating)** — same invariant as above |
 
 ## Discrepancies found
 

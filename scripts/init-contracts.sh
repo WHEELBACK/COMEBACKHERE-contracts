@@ -143,7 +143,7 @@ stellar contract invoke \
     --id "$SETTLEMENT_WORKFLOW_ID" \
     --source admin \
     --network "$NETWORK" \
-    -- initialize --compliance_id "$COMPLIANCE_ID" --treasury_id "$TREASURY_ID"
+    -- initialize --admin "$ADMIN_ADDRESS" --compliance_id "$COMPLIANCE_ID" --treasury_id "$TREASURY_ID"
 
 echo ""
 echo "============================================================"

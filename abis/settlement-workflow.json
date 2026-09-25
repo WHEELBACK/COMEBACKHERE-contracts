@@ -2,7 +2,11 @@
   "functions": [
     "execute_with_compliance",
     "execute_with_compliance_batch",
-    "initialize"
+    "get_admin",
+    "initialize",
+    "is_paused",
+    "pause",
+    "unpause"
   ],
   "events": []
 }

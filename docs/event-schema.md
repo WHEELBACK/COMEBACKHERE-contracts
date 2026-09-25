@@ -115,7 +115,15 @@ Source: `contracts/settlement-workflow/src/lib.rs`.
 | Event | Topics | Data type | Emitted by |
 |---|---|---|---|
 | `workflow_initialized` | `(Symbol,)` | `(Address, Address)` — `(compliance_id, treasury_id)` | `initialize` |
+| `settlement_workflow_paused` | `(Symbol,)` | `Address` (admin) | `pause` |
+| `settlement_workflow_unpaused` | `(Symbol,)` | `Address` (admin) | `unpause` |
 | `settlement_workflow_executed` | `(Symbol, settlement_id: u64)` | `(Address, Address)` — `(merchant, token_contract)` | `execute_with_compliance`, `execute_with_compliance_batch` (per settlement actually executed) |
+
+`settlement_workflow_paused` / `settlement_workflow_unpaused` mirror treasury's
+`treasury_paused` / `treasury_unpaused` pair: while the workflow is paused, both
+`execute_with_compliance` and `execute_with_compliance_batch` are rejected with
+`ContractPaused`, so no settlement reaches the treasury through this contract.
+Pause state is readable via `is_paused`.
 
 `settlement_workflow_executed` exists specifically so indexers can distinguish
 compliance-gated execution from a direct `Treasury::execute_settlement` call, which
