@@ -1,8 +1,7 @@
 # External Security Audit — Scope & Request for Proposal
 
-> **Status:** Draft RFP · Coordination artifact · No code changes accompany this PR.
-> **Issue:** Closes #308
-> **Branch:** `docs/external-audit-scope`
+> **Status:** Draft RFP · Coordination artifact.
+> **Last refreshed:** 2026-09-25.
 
 This document scopes an external security audit of the COMEBACKHERE protocol
 contracts. It is a coordination artifact prepared for circulation to candidate
@@ -55,7 +54,9 @@ produces zero findings (negative-result declarations are required).
 
 ## 3. Scope — Code
 
-The three contracts declared in-scope by `SECURITY.md` and `ARCHITECTURE.md`.
+The current audit scope covers the four deployable contracts declared in
+`SECURITY.md` and `ARCHITECTURE.md`, plus the shared crates needed to reason
+about their ABI and state-machine behavior.
 
 ### 3.1 Invoice — `contracts/invoice/`
 
