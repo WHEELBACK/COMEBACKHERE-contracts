@@ -18,6 +18,7 @@ testutils = ["soroban-sdk/testutils"]
 [dependencies]
 soroban-sdk.workspace = true
 compliance-errors = { package = "comebackhere-compliance-errors", path = "../../crates/compliance-errors" }
+error-macros = { package = "comebackhere-error-macros", path = "../../crates/error-macros" }
 
 [dev-dependencies]
 soroban-sdk = { workspace = true, features = ["testutils"] }

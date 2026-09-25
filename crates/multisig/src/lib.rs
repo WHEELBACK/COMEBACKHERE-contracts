@@ -1,71 +1,71 @@
 #![no_std]
-use soroban_sdk::{contracterror, contracttype, Address, Env, Vec};
+use error_macros::declare_contract_error;
+use soroban_sdk::{contracttype, Address, Env, Vec};
 
-/// Error codes for all treasury contract operations. Variants are append-only
-/// and must never be renumbered, as discriminants are stored on-chain and
-/// matched by off-chain systems; see `scripts/check-enum-ordering.sh`.
-#[contracterror]
-#[derive(Copy, Clone, Debug, Eq, PartialEq)]
-#[repr(u32)]
-pub enum TreasuryError {
-    AlreadyInitialized = 1,
-    ZeroThreshold = 2,
-    SettlementNotFound = 3,
-    AlreadyExecuted = 4,
-    ThresholdNotMet = 5,
-    ThresholdNotConfigured = 6,
-    InvalidAmount = 7,
-    ContractPaused = 8,
-    Unauthorized = 9,
-    UnauthorizedSigner = 10,
-    InvalidTokenContract = 11,
-    TokenNotAllowed = 12,
-    RotationNotFound = 13,
-    RotationAlreadyExecuted = 14,
-    SettlementOnHold = 15,
-    DisputeNotExpired = 16,
-    AlreadyOnHold = 17,
-    ThresholdUnreachable = 18,
-    ComplianceCheckFailed = 19,
-    // Appended (not renumbered) to keep discriminants stable for existing
-    // on-chain state; see scripts/check-enum-ordering.sh (#74).
-    ArithmeticOverflow = 20,
-    DisputeNotFound = 21,
-    DisputeAlreadyResolved = 22,
-    ResolutionDirectionMismatch = 23,
-    BatchTooLarge = 24,
-    WeightOverflow = 25,
-    SettlementNotCancellable = 26,
-    TtlNotElapsed = 27,
-    AllowlistFull = 28,
-    NotOnHold = 29,
-    DestinationNotAllowed = 30,
-    InsufficientBalance = 31,
-    NotPaused = 32,
-    RotationProposalCooldown = 33,
-    // Settlement-workflow precondition: the workflow contract must be registered
-    // as a treasury signer (see settlement-workflow #370). Without this the nested
-    // `execute_settlement` would fail with the generic `UnauthorizedSigner`, which
-    // gives a first-time deployer no hint that the fix is a `set_signer` call for
-    // the workflow's own address.
-    WorkflowNotRegisteredSigner = 34,
-    // Per-window withdrawal limit was exceeded; see `set_withdrawal_limit` and
-    // `enforce_withdrawal_limit` in `deposits.rs` (#455).
-    WithdrawalLimitExceeded = 35,
-    // Appended for `resolve_dispute_split` (#456): the provided claimant basis-points
-    // ratio exceeds BPS_DENOMINATOR (10_000), making a valid split impossible.
-    InvalidSplitRatio = 36,
-    // Appended for `force_cancel_settlement`: the target settlement is already in a
-    // terminal state (Executed, Cancelled, Expired) and cannot be force-cancelled.
-    ForceCancelNotAllowed = 37,
-    // Appended for #447: a timelocked signer/threshold change cannot be executed
-    // before its minimum delay has elapsed.
-    SignerChangeTooEarly = 38,
-    // Appended for #447: no pending signer/threshold change exists with the given id.
-    SignerChangeNotFound = 39,
-    // Appended for #447: the referenced signer/threshold change has already been
-    // executed or cancelled and cannot be acted on again.
-    SignerChangeAlreadyFinalised = 40,
+declare_contract_error! {
+    /// Error codes for all treasury contract operations. Variants are append-only
+    /// and must never be renumbered, as discriminants are stored on-chain and
+    /// matched by off-chain systems; see `scripts/check-enum-ordering.sh`.
+    pub enum TreasuryError {
+        AlreadyInitialized = 1,
+        ZeroThreshold = 2,
+        SettlementNotFound = 3,
+        AlreadyExecuted = 4,
+        ThresholdNotMet = 5,
+        ThresholdNotConfigured = 6,
+        InvalidAmount = 7,
+        ContractPaused = 8,
+        Unauthorized = 9,
+        UnauthorizedSigner = 10,
+        InvalidTokenContract = 11,
+        TokenNotAllowed = 12,
+        RotationNotFound = 13,
+        RotationAlreadyExecuted = 14,
+        SettlementOnHold = 15,
+        DisputeNotExpired = 16,
+        AlreadyOnHold = 17,
+        ThresholdUnreachable = 18,
+        ComplianceCheckFailed = 19,
+        // Appended (not renumbered) to keep discriminants stable for existing
+        // on-chain state; see scripts/check-enum-ordering.sh (#74).
+        ArithmeticOverflow = 20,
+        DisputeNotFound = 21,
+        DisputeAlreadyResolved = 22,
+        ResolutionDirectionMismatch = 23,
+        BatchTooLarge = 24,
+        WeightOverflow = 25,
+        SettlementNotCancellable = 26,
+        TtlNotElapsed = 27,
+        AllowlistFull = 28,
+        NotOnHold = 29,
+        DestinationNotAllowed = 30,
+        InsufficientBalance = 31,
+        NotPaused = 32,
+        RotationProposalCooldown = 33,
+        // Settlement-workflow precondition: the workflow contract must be registered
+        // as a treasury signer (see settlement-workflow #370). Without this the nested
+        // `execute_settlement` would fail with the generic `UnauthorizedSigner`, which
+        // gives a first-time deployer no hint that the fix is a `set_signer` call for
+        // the workflow's own address.
+        WorkflowNotRegisteredSigner = 34,
+        // Per-window withdrawal limit was exceeded; see `set_withdrawal_limit` and
+        // `enforce_withdrawal_limit` in `deposits.rs` (#455).
+        WithdrawalLimitExceeded = 35,
+        // Appended for `resolve_dispute_split` (#456): the provided claimant basis-points
+        // ratio exceeds BPS_DENOMINATOR (10_000), making a valid split impossible.
+        InvalidSplitRatio = 36,
+        // Appended for `force_cancel_settlement`: the target settlement is already in a
+        // terminal state (Executed, Cancelled, Expired) and cannot be force-cancelled.
+        ForceCancelNotAllowed = 37,
+        // Appended for #447: a timelocked signer/threshold change cannot be executed
+        // before its minimum delay has elapsed.
+        SignerChangeTooEarly = 38,
+        // Appended for #447: no pending signer/threshold change exists with the given id.
+        SignerChangeNotFound = 39,
+        // Appended for #447: the referenced signer/threshold change has already been
+        // executed or cancelled and cannot be acted on again.
+        SignerChangeAlreadyFinalised = 40,
+    }
 }
 
 // Issue #48: reason codes attached to a held settlement; None means not on hold
@@ -395,9 +395,9 @@ pub fn approval_expiry(env: &Env, signer: &Address, ttl_seconds: u64) -> Approva
     let expires_at = if ttl_seconds == 0 {
         0
     } else {
-        approved_at
-            .checked_add(ttl_seconds)
-            .unwrap_or_else(|| soroban_sdk::panic_with_error!(env, TreasuryError::ArithmeticOverflow))
+        approved_at.checked_add(ttl_seconds).unwrap_or_else(|| {
+            soroban_sdk::panic_with_error!(env, TreasuryError::ArithmeticOverflow)
+        })
     };
     ApprovalExpiry {
         signer: signer.clone(),

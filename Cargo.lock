@@ -270,6 +270,7 @@ name = "comebackhere-compliance"
 version = "1.0.0"
 dependencies = [
  "comebackhere-compliance-errors",
+ "comebackhere-error-macros",
  "soroban-sdk",
 ]
 
@@ -284,6 +285,14 @@ dependencies = [
 
 [[package]]
 name = "comebackhere-compliance-errors"
+version = "0.1.0"
+dependencies = [
+ "comebackhere-error-macros",
+ "soroban-sdk",
+]
+
+[[package]]
+name = "comebackhere-error-macros"
 version = "0.1.0"
 dependencies = [
  "soroban-sdk",
@@ -304,6 +313,7 @@ dependencies = [
 name = "comebackhere-invoice-errors"
 version = "0.1.0"
 dependencies = [
+ "comebackhere-error-macros",
  "soroban-sdk",
 ]
 
@@ -311,6 +321,7 @@ dependencies = [
 name = "comebackhere-multisig"
 version = "0.4.0"
 dependencies = [
+ "comebackhere-error-macros",
  "soroban-sdk",
 ]
 

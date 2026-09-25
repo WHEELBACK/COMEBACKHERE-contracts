@@ -21,9 +21,9 @@
 
 #![no_std]
 
-use soroban_sdk::{
-    contract, contracterror, contractimpl, contracttype, Address, Bytes, Env, Symbol, Vec,
-};
+use soroban_sdk::{contract, contractimpl, contracttype, Address, Bytes, Env, Symbol, Vec};
+
+use error_macros::declare_contract_error;
 
 pub use compliance_errors::ComplianceError;
 
@@ -121,22 +121,21 @@ pub struct AddressStatus {
     pub is_currently_allowed: bool,
 }
 
-/// Primary error type for the compliance contract.
-///
-/// Variants must only be appended at the end (highest numeric value) to preserve
-/// on-chain backwards compatibility. Range: 1..=6 (see `ARCHITECTURE.md`).
-#[contracterror]
-#[derive(Copy, Clone, Debug, PartialEq)]
-#[repr(u32)]
-pub enum ContractError {
-    Unauthorized = 1,
-    ContractPaused = 2,
-    AlreadyInitialized = 3,
-    BatchTooLarge = 4,
-    AddressIndexFull = 5,
-    /// A bulk allow/block call was made before [`BULK_OP_COOLDOWN_SECS`] elapsed since the
-    /// caller's previous bulk call (see #454).
-    BulkOperationCooldown = 6,
+declare_contract_error! {
+    /// Primary error type for the compliance contract.
+    ///
+    /// Variants must only be appended at the end (highest numeric value) to preserve
+    /// on-chain backwards compatibility. Range: 1..=6 (see `ARCHITECTURE.md`).
+    pub enum ContractError {
+        Unauthorized = 1,
+        ContractPaused = 2,
+        AlreadyInitialized = 3,
+        BatchTooLarge = 4,
+        AddressIndexFull = 5,
+        /// A bulk allow/block call was made before [`BULK_OP_COOLDOWN_SECS`] elapsed since the
+        /// caller's previous bulk call (see #454).
+        BulkOperationCooldown = 6,
+    }
 }
 
 /// Upper bound on the number of distinct addresses tracked in the paged address

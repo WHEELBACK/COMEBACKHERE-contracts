@@ -19,6 +19,13 @@
 # contracts/ and crates/, parses each variant's explicit discriminant, and
 # verifies that discriminants are strictly increasing by 1 (i.e. no gaps,
 # no reordering, no insertions in the middle).
+#
+# #627: error enums declared through `declare_contract_error!` (crates/error-macros)
+# are checked too. The macro supplies #[repr(u32)] itself, so the source contains
+# the macro invocation rather than the attribute, and the invocation is treated as
+# an equivalent block opener here. Without this, moving an error enum behind the
+# macro would have silently removed it from this check's coverage — the exact
+# failure mode this script exists to prevent.
 
 set -euo pipefail
 
@@ -27,6 +34,9 @@ echo "=== Enum ordering check ==="
 errors=0
 status_file="$(mktemp)"
 trap 'rm -f "$status_file"' EXIT
+
+# Macro invocations that stand in for `#[repr(u32)] pub enum <Name> { ... }`.
+ERROR_ENUM_MACROS='declare_contract_error'
 
 # Find all #[repr(u32)] enum definitions under contracts/ and crates/
 # We use awk to extract the enum name and its variants with explicit discriminants.
@@ -44,8 +54,14 @@ find contracts crates -name '*.rs' -type f | while read -r file; do
     # Then extract each variant's discriminant value.
     #
     # awk state machine:
-    #   1 = found "#[repr(u32)]"
+    #   1 = an enum block opener was seen and the `pub enum` line has not yet
+    #       arrived ("pending"). Armed by either `#[repr(u32)]` or one of the
+    #       $ERROR_ENUM_MACROS invocations.
     #   2 = inside enum block (between { and })
+    #
+    # The `pub enum` line is allowed to be indented: inside a
+    # `declare_contract_error! { ... }` invocation it is nested one level, but the
+    # variants inside it are still laid out exactly as in a hand-written enum.
     found_repr=0
     in_enum=0
     enum_name=""
@@ -56,14 +72,35 @@ find contracts crates -name '*.rs' -type f | while read -r file; do
     has_errors=0
 
     while IFS= read -r line; do
+        trimmed="${line#"${line%%[![:space:]]*}"}"
+
+        # #627: a `declare_contract_error!` invocation carries the same
+        # #[contracterror] + #[repr(u32)] contract as a hand-written attribute
+        # block, so it arms the same block detection. Only the macros named in
+        # $ERROR_ENUM_MACROS are treated this way — an arbitrary macro could
+        # expand to anything.
+        if [[ "$trimmed" =~ ^([A-Za-z0-9_]+)! ]]; then
+            macro_name="${BASH_REMATCH[1]}"
+            case "|$ERROR_ENUM_MACROS|" in
+                *"|$macro_name|"*)
+                    found_repr=1
+                    continue
+                    ;;
+            esac
+        fi
+
         # Check for #[repr(u32)]
         if [[ "$line" =~ '#[repr(u32)]' ]]; then
             found_repr=1
             continue
         fi
 
-        # If we found repr, look for enum declaration
-        if [[ $found_repr -eq 1 && "$line" =~ ^pub[[:space:]]+enum[[:space:]]+([A-Za-z0-9_]+) ]]; then
+        # If we found an opener, look for the enum declaration. The `pub enum`
+        # line is NOT skipped with `continue` below: its opening brace has to be
+        # counted, otherwise the first variant is read at depth 0 and — because
+        # the body is only parsed once the depth is non-zero — every variant of
+        # every enum would be silently ignored.
+        if [[ $found_repr -eq 1 && "$trimmed" =~ ^pub[[:space:]]+enum[[:space:]]+([A-Za-z0-9_]+) ]]; then
             enum_name="${BASH_REMATCH[1]}"
             in_enum=1
             brace_depth=0
@@ -72,11 +109,14 @@ find contracts crates -name '*.rs' -type f | while read -r file; do
             expected_next=1
             has_errors=0
             found_repr=0
-            continue
-        fi
-
-        # Reset if we found repr but no enum follows (e.g. on struct)
-        if [[ $found_repr -eq 1 ]]; then
+        elif [[ $found_repr -eq 1 ]]; then
+            # Doc comments between the opener and the `pub enum` line are expected
+            # in the macro form (the macro forwards them to the generated enum),
+            # so they must not disarm the pending block. Anything else — a struct
+            # carrying a repr, say — does.
+            if [[ "$trimmed" =~ ^/// ]]; then
+                continue
+            fi
             found_repr=0
         fi
 
@@ -98,11 +138,6 @@ find contracts crates -name '*.rs' -type f | while read -r file; do
                     variant="${BASH_REMATCH[1]}"
                     disc="${BASH_REMATCH[2]}"
 
-                    # Skip if this is a known "historical" variant not following the pattern
-                    if [[ "$enum_name" == "InvoiceError" && "$variant" == "NotReleased" ]]; then
-                        continue  # Code 11, follows pattern
-                    fi
-
                     if [[ "$disc" -ne "$expected_next" ]]; then
                         echo "ERROR: $file: enum $enum_name variant $variant has discriminant $disc but expected $expected_next"
                         has_errors=1
@@ -110,7 +145,7 @@ find contracts crates -name '*.rs' -type f | while read -r file; do
                     expected_next=$((disc + 1))
                 fi
 
-                if [[ $brace_depth -eq 0 ]]; then
+                if [[ $brace_depth -le 0 ]]; then
                     in_enum=0
                     if [[ $has_errors -ne 0 ]]; then
                         errors=1
