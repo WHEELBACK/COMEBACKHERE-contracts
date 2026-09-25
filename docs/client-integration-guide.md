@@ -66,3 +66,6 @@ position, and deduplicate replayed events — the same requirement documented
 for Invoice's audit trail in `ARCHITECTURE.md`. Current state can always be
 reconciled by calling read entrypoints directly (e.g. `Invoice::get_invoice`,
 `Treasury::get_settlement`) rather than trusting the event log alone.
+
+For concrete TypeScript snippets, see
+[`docs/typescript-integration-examples.md`](typescript-integration-examples.md).
