@@ -1,7 +1,7 @@
 #![no_std]
 
 use compliance_client::ComplianceClient;
-use multisig::TreasuryError;
+use multisig::{Settlement, TreasuryError};
 use soroban_sdk::{
     contract, contractclient, contractimpl, contracttype, Address, Env, Symbol, Vec,
 };
@@ -16,6 +16,10 @@ use soroban_sdk::{
 pub trait TreasuryInterface {
     fn execute_settlement(env: Env, signer: Address, settlement_id: u64, token_contract: Address);
     fn get_signer_weight(env: Env, signer: Address) -> u32;
+    /// Read-only: used to attach the settled amount to the workflow's own summary
+    /// event, so indexers don't have to correlate against `settlement_executed` to
+    /// learn how much moved (#614).
+    fn get_settlement(env: Env, settlement_id: u64) -> Settlement;
 }
 
 /// Storage keys for the workflow contract.
@@ -161,8 +165,15 @@ impl SettlementWorkflowContract {
     /// if the compliance check fails, instead of panicking or reusing a generic
     /// `Unauthorized` (see #74). Traps with `ContractPaused` while the workflow is
     /// paused (#616).
-    /// Emits: `settlement_workflow_executed` so indexers can distinguish this gated
-    /// path from a direct `Treasury::execute_settlement` call (#366).
+    ///
+    /// Emits `settlement_workflow_executed` with `(merchant, token_contract, amount)`
+    /// so this gated path is distinguishable from a direct `Treasury::execute_settlement`
+    /// call and carries the amount in one place (#366, #614).
+    ///
+    /// Note on failures: a rejected call reverts the whole invocation, so no event is
+    /// published for a compliance-blocked merchant — indexers must alert on the failed
+    /// transaction itself (which carries `ComplianceCheckFailed`) rather than on a
+    /// missing event. See `docs/event-schema.md`.
     pub fn execute_with_compliance(
         env: Env,
         settlement_id: u64,
@@ -178,12 +189,16 @@ impl SettlementWorkflowContract {
             &settlement_id,
             &token_contract,
         );
+        // Read the amount *after* execution, so a non-existent / already-executed
+        // settlement still fails inside `execute_settlement` exactly as before this
+        // event existed instead of trapping in this read first.
+        let amount = treasury.get_settlement(&settlement_id).amount;
         env.events().publish(
             (
                 Symbol::new(&env, "settlement_workflow_executed"),
                 settlement_id,
             ),
-            (merchant.clone(), token_contract.clone()),
+            (merchant.clone(), token_contract.clone(), amount),
         );
         Ok(())
     }
@@ -196,7 +211,13 @@ impl SettlementWorkflowContract {
     /// returned and emitted. If the shared compliance gate fails, the whole batch is
     /// rejected with `ComplianceCheckFailed`. Traps with `ContractPaused` while the
     /// workflow is paused (#616).
-    /// Emits: `settlement_workflow_executed` for each settlement actually executed.
+    ///
+    /// Emits `settlement_workflow_executed` for each settlement actually executed,
+    /// each carrying `(merchant, token_contract, amount)`, followed by exactly one
+    /// `workflow_batch_completed` summarising the outcome as `(requested, executed)`
+    /// (#614). The summary is emitted even when every item was skipped, so a partial
+    /// batch is one query away from being detected instead of having to be inferred by
+    /// diffing per-item events.
     pub fn execute_with_compliance_batch(
         env: Env,
         settlement_ids: Vec<u64>,
@@ -207,6 +228,7 @@ impl SettlementWorkflowContract {
         let compliance = ComplianceClient::new(&env, &Self::compliance_id(&env));
         compliance.require_allowed_for_treasury(&merchant)?;
         let treasury = TreasuryOnlyClient::new(&env, &Self::treasury_id(&env));
+        let requested = settlement_ids.len();
         let mut executed = Vec::new(&env);
         for id in settlement_ids.iter() {
             let result = treasury.try_execute_settlement(
@@ -215,14 +237,25 @@ impl SettlementWorkflowContract {
                 &token_contract,
             );
             if result.is_ok() {
+                // Read after execution: a skipped (non-existent) ID is never read,
+                // so `get_settlement`'s `SettlementNotFound` panic can't turn a
+                // skippable ID into a batch-wide abort.
+                let amount = treasury.get_settlement(&id).amount;
                 executed.push_back(id);
                 env.events().publish(
                     (Symbol::new(&env, "settlement_workflow_executed"), id),
-                    (merchant.clone(), token_contract.clone()),
+                    (merchant.clone(), token_contract.clone(), amount),
                 );
             }
             // Invalid / already-executed / threshold-failed IDs are silently skipped.
         }
+        // `workflow_batch_completed` (not `settlement_workflow_batch_completed`):
+        // Soroban symbols are capped at 32 characters and the longer name is
+        // rejected by the host at runtime with `InvalidInput`.
+        env.events().publish(
+            (Symbol::new(&env, "workflow_batch_completed"),),
+            (requested, executed.len()),
+        );
         Ok(executed)
     }
 }
