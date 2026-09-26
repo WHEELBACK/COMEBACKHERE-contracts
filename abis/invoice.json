@@ -19,6 +19,7 @@
     "initialize",
     "mark_paid",
     "pause",
+    "process_refund",
     "reject_refund",
     "release_escrow",
     "request_refund",

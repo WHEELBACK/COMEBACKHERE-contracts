@@ -35,4 +35,17 @@ pub enum InvoiceError {
     CooldownActive = 21,
     InvoiceCountOverflow = 22,
     HashTooLong = 23,
+    // Appended for #70: the stored invoice does not describe a completed
+    // payment, so a refund must not be recorded or paid out against it. Raised
+    // by `verify_payment_state` before any refund state is written.
+    PaymentStateInconsistent = 24,
+    // Appended for #70: the cross-contract call that executes the refund payout
+    // failed (token contract paused, insufficient escrow balance, wrong token,
+    // or not a SEP-41 contract at all). The refund is abandoned with no state
+    // change rather than being marked `Refunded` without the customer being
+    // paid.
+    RefundTransferFailed = 25,
+    // Appended for #70: the invoice was created without a `token_address`, so
+    // there is no contract to execute the refund payout through.
+    RefundTokenNotSet = 26,
 }

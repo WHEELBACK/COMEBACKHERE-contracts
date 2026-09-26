@@ -1,4 +1,5 @@
 use crate::events::{self, InvoiceAmountUpdatedEvent};
+use crate::refund::{refund_recipient, transfer_net_refund, verify_payment_state};
 use crate::validation::{
     require_admin, require_expiry_not_too_long, require_hash_not_too_long, require_not_paused,
     require_positive_amount, require_usdc_precision, require_valid_payment_link_hash,
@@ -380,6 +381,15 @@ impl InvoiceContract {
     }
 
     /// Approve a refund request. Admin-only. Transitions RefundRequested → Refunded.
+    ///
+    /// Records the refund decision on-chain only: no tokens move. Use
+    /// [`Self::process_refund`] to approve *and* pay the payer out in the same
+    /// transaction.
+    ///
+    /// #70: the invoice's payment state is verified first, so a refund can
+    /// never be approved against an invoice that does not describe a completed
+    /// payment. Errors: `NotRefundRequested`, `PaymentStateInconsistent`.
+    /// Emits: `refund_approved`.
     pub fn approve_refund(env: Env, admin: Address, id: u64) -> Result<(), InvoiceError> {
         require_admin(&env, &admin)?;
         require_not_paused(&env)?;
@@ -393,6 +403,71 @@ impl InvoiceContract {
         if invoice.status != InvoiceStatus::RefundRequested {
             return Err(InvoiceError::NotRefundRequested);
         }
+        verify_payment_state(&invoice)?;
+
+        invoice.status = InvoiceStatus::Refunded;
+        env.storage()
+            .persistent()
+            .set(&DataKey::Invoice(id), &invoice);
+        append_history(
+            &env,
+            id,
+            InvoiceStatus::RefundRequested,
+            InvoiceStatus::Refunded,
+        );
+        events::refund_approved(&env, id, &invoice);
+        Ok(())
+    }
+
+    /// Approve a refund **and** pay the payer out on-chain. Admin-only.
+    /// Transitions `RefundRequested` → `Refunded`.
+    ///
+    /// This is the refund path that actually moves money, and it spans a
+    /// contract boundary: the amount is transferred by the invoice's own
+    /// `token_address` contract from the escrow balance this contract holds
+    /// (#70). Three properties make the boundary safe:
+    ///
+    /// 1. **The payment state is verified before anything else.** An invoice
+    ///    that does not describe a completed payment is rejected with
+    ///    `PaymentStateInconsistent`, so no payout is ever attempted against it.
+    /// 2. **The transfer is the last thing that can fail, and it fails
+    ///    safely.** `try_transfer` turns any token-side failure into
+    ///    `RefundTransferFailed`, and because the status transition is written
+    ///    only after the transfer returns `Ok`, a failed payout leaves the
+    ///    invoice in `RefundRequested` — retryable, and not falsely recorded as
+    ///    refunded.
+    /// 3. **The funds debited are not caller-chosen.** They come from this
+    ///    contract's own escrow balance, and the recipient is the payer recorded
+    ///    at `mark_paid`, not anything the caller supplies.
+    ///
+    /// Errors: `NotRefundRequested`, `PaymentStateInconsistent`,
+    /// `RefundTokenNotSet`, `RefundTransferFailed`.
+    /// Emits: `refund_approved`.
+    pub fn process_refund(env: Env, admin: Address, id: u64) -> Result<(), InvoiceError> {
+        require_admin(&env, &admin)?;
+        require_not_paused(&env)?;
+
+        let mut invoice: Invoice = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Invoice(id))
+            .ok_or(InvoiceError::NotFound)?;
+
+        if invoice.status != InvoiceStatus::RefundRequested {
+            return Err(InvoiceError::NotRefundRequested);
+        }
+        // Verify before resolving the recipient and the token, so an
+        // inconsistent invoice cannot reach the cross-contract call at all.
+        verify_payment_state(&invoice)?;
+        let payer = refund_recipient(&invoice)?;
+        let token_id = match &invoice.token_address {
+            MaybeAddress::Some(token_id) => token_id.clone(),
+            MaybeAddress::None => return Err(InvoiceError::RefundTokenNotSet),
+        };
+
+        // Payout first: on failure this returns `Err` and none of the writes
+        // below run, which is what keeps the two contracts from disagreeing.
+        transfer_net_refund(&env, &token_id, &payer, invoice.amount_usdc)?;
 
         invoice.status = InvoiceStatus::Refunded;
         env.storage()
@@ -409,6 +484,9 @@ impl InvoiceContract {
     }
 
     /// Reject a refund request. Admin-only. Transitions RefundRequested → Paid.
+    /// #70: the payment state is verified for the same reason as on
+    /// `approve_refund` — a refund round-trip must not be able to land on an
+    /// invoice that never described a completed payment.
     pub fn reject_refund(env: Env, admin: Address, id: u64) -> Result<(), InvoiceError> {
         require_admin(&env, &admin)?;
         require_not_paused(&env)?;
@@ -421,6 +499,7 @@ impl InvoiceContract {
         if invoice.status != InvoiceStatus::RefundRequested {
             return Err(InvoiceError::NotRefundRequested);
         }
+        verify_payment_state(&invoice)?;
 
         invoice.status = InvoiceStatus::Paid;
         env.storage()

@@ -126,7 +126,7 @@ sequenceDiagram
 
 Each contract defines error codes via a `#[contracterror]` enum. New variants **must** be appended at the end (highest numeric value) to preserve on-chain backwards compatibility — existing contracts and clients may depend on the current ordinal positions.
 
-### Invoice Contract (`InvoiceError` — range 1..=21)
+### Invoice Contract (`InvoiceError` — range 1..=26)
 
 | Code | Name | Description |
 |---|---|---|
@@ -151,6 +151,11 @@ Each contract defines error codes via a `#[contracterror]` enum. New variants **
 | 19 | `TokenMismatch` | Provided payment token does not match invoice's expected token |
 | 20 | `BatchTooLarge` | Batch input exceeds `MAX_BATCH_SIZE` |
 | 21 | `CooldownActive` | `create_invoice` called again before `CreationCooldown` elapsed |
+| 22 | `InvoiceCountOverflow` | `u64` invoice id counter would overflow |
+| 23 | `HashTooLong` | Optional hash field exceeds `MAX_HASH_BYTES` (64) |
+| 24 | `PaymentStateInconsistent` | Invoice does not describe a completed payment (no `paid_at`, no recorded payer, or `amount_usdc`/`gross_usdc` inconsistent) — refunds are refused (#70) |
+| 25 | `RefundTransferFailed` | The cross-contract token transfer executing a refund failed; the refund is abandoned with no state change (#70) |
+| 26 | `RefundTokenNotSet` | Refund payout attempted on an invoice created without a `token_address` (#70) |
 
 ### Treasury Contract (`TreasuryError` — range 1..=17)
 
@@ -224,7 +229,11 @@ SettlementWorkflow
 Treasury::execute_settlement
   └── Token::transfer(treasury → merchant)  → SEP-41 token transfer
 
-Invoice (standalone — no outbound cross-contract calls)
+Invoice::process_refund                      → verify payment state, then
+  └── Token::transfer(escrow → payer)         Token::transfer(escrow → payer)  → SEP-41 token transfer; a failure reverts the whole
+                                               refund with RefundTransferFailed (#70)
+
+Invoice (cross-contract calls: Token only, on the refund payout path)
 Treasury (standalone — no outbound cross-contract calls except Token)
 Compliance (standalone — no outbound cross-contract calls)
 ```

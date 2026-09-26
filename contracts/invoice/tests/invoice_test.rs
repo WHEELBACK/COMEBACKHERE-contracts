@@ -802,6 +802,7 @@ fn test_abi_snapshot_matches_contract() {
         "amend_invoice",
         "request_refund",
         "approve_refund",
+        "process_refund",
         "reject_refund",
         "release_escrow",
         "batch_expire",
