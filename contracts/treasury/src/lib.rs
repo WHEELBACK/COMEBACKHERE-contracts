@@ -49,6 +49,9 @@ impl TreasuryContract {
         env.storage().instance().set(&DataKey::DisputeCount, &0u64);
         env.storage()
             .instance()
+            .set(&DataKey::SettlementExpirySecs, &(7u64 * 24 * 60 * 60));
+        env.storage()
+            .instance()
             .set(&DataKey::Signer(admin.clone()), &1u32);
         let mut signer_list = Vec::new(&env);
         signer_list.push_back(admin.clone());
@@ -148,6 +151,25 @@ impl TreasuryContract {
             .get(&DataKey::WithdrawalWindowSecs)
             .unwrap_or(0);
         (limit, window_secs)
+    }
+
+    /// Configures the settlement proposal expiry window (admin-only).
+    /// Emits: `settlement_expiry_updated`.
+    pub fn set_settlement_expiry(env: Env, admin: Address, expiry_secs: u64) {
+        require_admin(&env, &admin);
+        env.storage()
+            .instance()
+            .set(&DataKey::SettlementExpirySecs, &expiry_secs);
+        env.events()
+            .publish((Symbol::new(&env, "settlement_expiry_updated"),), expiry_secs);
+    }
+
+    /// Returns the currently configured settlement expiry window in seconds.
+    pub fn get_settlement_expiry(env: Env) -> u64 {
+        env.storage()
+            .instance()
+            .get(&DataKey::SettlementExpirySecs)
+            .unwrap_or(7u64 * 24 * 60 * 60)
     }
 }
 
