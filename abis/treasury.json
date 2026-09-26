@@ -43,6 +43,7 @@
     "remove_signer",
     "resolve_dispute",
     "resolve_dispute_split",
+    "revoke_approval",
     "set_signer",
     "set_withdrawal_limit",
     "unpause",

@@ -13,6 +13,17 @@ and this crate adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.h
 
 ---
 
+## [0.5.0] — Settlement approval revocation and token-removal guard (issues #577, #567)
+
+### Added
+
+- Two new `TreasuryError` variants appended at discriminants 41–42:
+  - `TokenHasPendingSettlements = 41` — returned when `remove_allowed_token` is called for an allowlisted token while any settlement is still `Pending`.
+  - `ApprovalNotFound = 42` — returned when `revoke_approval` is called by a signer who has not approved the settlement.
+- New `revoke_approval` helper: the inverse of `record_approval` (removes the signer from the approval list and subtracts their weight, saturating at zero).
+
+---
+
 ## [0.4.0] — Timelocked signer/threshold changes (issue #447)
 
 ### Added

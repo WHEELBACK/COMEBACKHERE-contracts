@@ -25,7 +25,7 @@ use treasury::{
 /// Expected version of `crates/multisig` (see its `Cargo.toml`). Bump this only
 /// alongside a review of every exhaustive match below - if they still compile,
 /// the ABI-relevant shape of multisig's types is unchanged.
-const EXPECTED_MULTISIG_VERSION: &str = "0.4.0";
+const EXPECTED_MULTISIG_VERSION: &str = "0.5.0";
 
 const MULTISIG_CARGO_TOML: &str = include_str!("../../../crates/multisig/Cargo.toml");
 
@@ -107,6 +107,9 @@ fn treasury_error_shape_is_unchanged() {
     assert_eq!(TreasuryError::SignerChangeTooEarly as u32, 38);
     assert_eq!(TreasuryError::SignerChangeNotFound as u32, 39);
     assert_eq!(TreasuryError::SignerChangeAlreadyFinalised as u32, 40);
+    // Appended for #567 and #577: allowlist-removal guard and approval revocation.
+    assert_eq!(TreasuryError::TokenHasPendingSettlements as u32, 41);
+    assert_eq!(TreasuryError::ApprovalNotFound as u32, 42);
 
     // No wildcard arm: adding, removing, or renaming a variant fails this compile.
     fn assert_exhaustive(err: TreasuryError) {
@@ -150,7 +153,9 @@ fn treasury_error_shape_is_unchanged() {
             | TreasuryError::ForceCancelNotAllowed
             | TreasuryError::SignerChangeTooEarly
             | TreasuryError::SignerChangeNotFound
-            | TreasuryError::SignerChangeAlreadyFinalised => {}
+            | TreasuryError::SignerChangeAlreadyFinalised
+            | TreasuryError::TokenHasPendingSettlements
+            | TreasuryError::ApprovalNotFound => {}
         }
     }
     assert_exhaustive(TreasuryError::AlreadyOnHold);

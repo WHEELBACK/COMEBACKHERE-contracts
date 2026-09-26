@@ -66,6 +66,12 @@ pub enum TreasuryError {
     // Appended for #447: the referenced signer/threshold change has already been
     // executed or cancelled and cannot be acted on again.
     SignerChangeAlreadyFinalised = 40,
+    // Appended for #567: `remove_allowed_token` refuses to remove an allowlisted token
+    // while any settlement is still `Pending`.
+    TokenHasPendingSettlements = 41,
+    // Appended for #577: `revoke_approval` was called by a signer who has not approved
+    // the settlement.
+    ApprovalNotFound = 42,
 }
 
 // Issue #48: reason codes attached to a held settlement; None means not on hold
@@ -389,15 +395,56 @@ pub fn record_approval(
     }
 }
 
+/// Withdraws `signer`'s approval: removes `signer` from `approvals` and subtracts their weight
+/// from `weight`. The inverse of [`record_approval`]. Returns `false` (leaving both untouched)
+/// if `signer` has not approved.
+///
+/// The weight subtracted is `signer`'s *current* weight, mirroring how [`record_approval`] adds
+/// the weight in force at approval time. The subtraction saturates at zero, so if a signer's
+/// weight was raised after they approved the total can never underflow; it can only end up
+/// lower (execution stays blocked) rather than higher.
+///
+/// # Examples
+///
+/// ```rust,no_run
+/// use soroban_sdk::{Address, Env, Vec};
+/// use multisig::{record_approval, revoke_approval};
+///
+/// # let env: Env = unimplemented!();
+/// # let signer: Address = unimplemented!();
+/// # let mut approvals: Vec<Address> = unimplemented!();
+/// # let mut weight: u32 = 0;
+/// record_approval(&env, &mut approvals, &mut weight, &signer);
+/// // Changed their mind before execution: take the approval back.
+/// assert!(revoke_approval(&env, &mut approvals, &mut weight, &signer));
+/// // Revoking again is a no-op.
+/// assert!(!revoke_approval(&env, &mut approvals, &mut weight, &signer));
+/// ```
+pub fn revoke_approval(
+    env: &Env,
+    approvals: &mut Vec<Address>,
+    weight: &mut u32,
+    signer: &Address,
+) -> bool {
+    match approvals.first_index_of(signer) {
+        Some(index) => {
+            approvals.remove(index);
+            *weight = weight.saturating_sub(signer_weight(env, signer));
+            true
+        }
+        None => false,
+    }
+}
+
 /// Builds expiry metadata for a newly collected approval.
 pub fn approval_expiry(env: &Env, signer: &Address, ttl_seconds: u64) -> ApprovalExpiry {
     let approved_at = env.ledger().timestamp();
     let expires_at = if ttl_seconds == 0 {
         0
     } else {
-        approved_at
-            .checked_add(ttl_seconds)
-            .unwrap_or_else(|| soroban_sdk::panic_with_error!(env, TreasuryError::ArithmeticOverflow))
+        approved_at.checked_add(ttl_seconds).unwrap_or_else(|| {
+            soroban_sdk::panic_with_error!(env, TreasuryError::ArithmeticOverflow)
+        })
     };
     ApprovalExpiry {
         signer: signer.clone(),
