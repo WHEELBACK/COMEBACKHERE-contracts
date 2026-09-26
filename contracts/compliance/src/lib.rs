@@ -424,6 +424,58 @@ impl ComplianceContract {
             .get(&DataKey::TierLimit(tier))
     }
 
+    /// Set the jurisdiction code for an address.
+    ///
+    /// Stores an ISO country code (e.g., `US`, `EU`, `JP`) per address for
+    /// jurisdiction-based compliance rules. The code is validated for length
+    /// (2-3 characters) and ASCII alphanumeric format. This is purely metadata
+    /// storage; rule logic using jurisdiction data is handled separately.
+    ///
+    /// # Parameters
+    /// - `admin`: Current administrator. Must authorize this call.
+    /// - `address`: The address to tag with a jurisdiction.
+    /// - `code`: ISO country code (e.g., `Bytes::from_slice(&env, b"US")`).
+    ///
+    /// # Errors
+    /// - [`ContractError::Unauthorized`] if `admin` is not the stored administrator.
+    /// - Panics with `"InvalidJurisdictionCode"` if `code` is not 2-3 ASCII uppercase letters.
+    ///
+    /// # Events
+    /// Publishes `("jurisdiction_set",) → (address, code)`.
+    pub fn set_jurisdiction(
+        env: Env,
+        admin: Address,
+        address: Address,
+        code: Bytes,
+    ) -> Result<(), ContractError> {
+        Self::require_admin(&env, &admin)?;
+
+        // Validate jurisdiction code: must be 2-3 uppercase ASCII letters
+        let code_len = code.len();
+        if code_len < 2 || code_len > 3 {
+            panic!("InvalidJurisdictionCode");
+        }
+        for &byte in code.iter() {
+            if !((byte >= b'A' && byte <= b'Z') || (byte >= b'0' && byte <= b'9')) {
+                panic!("InvalidJurisdictionCode");
+            }
+        }
+
+        env.storage()
+            .persistent()
+            .set(&DataKey::Jurisdiction(address.clone()), &code.clone());
+        env.events()
+            .publish((Symbol::new(&env, "jurisdiction_set"),), (address, code));
+        Ok(())
+    }
+
+    /// Returns the jurisdiction code for an address, if one has been set.
+    pub fn get_jurisdiction(env: Env, address: Address) -> Option<Bytes> {
+        env.storage()
+            .persistent()
+            .get(&DataKey::Jurisdiction(address))
+    }
+
     /// Block a batch of addresses (admin-only).
     ///
     /// Like [`block_address`](Self::block_address), this is **not** gated behind
