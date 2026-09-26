@@ -367,7 +367,8 @@ pub fn require_authorized_signer(env: &Env, signer: &Address) {
 
 /// Adds `signer`'s weight to `weight` and appends `signer` to `approvals`, unless `signer` has
 /// already approved (in which case this is a no-op). Captures the dedup-then-accumulate pattern
-/// used for settlement, dispute, and rotation approvals.
+/// used for settlement, dispute, and rotation approvals. Also records the current ledger timestamp
+/// as the signer's last-active time under `DataKey::SignerLastActive(signer)` (#587).
 ///
 /// # Examples
 ///
@@ -404,6 +405,12 @@ pub fn record_approval(
             .unwrap_or_else(|| soroban_sdk::panic_with_error!(env, TreasuryError::WeightOverflow));
         approvals.push_back(signer.clone());
     }
+    // Always update last-active timestamp, even for duplicate calls, so the
+    // timestamp reflects the most recent approval attempt by this signer.
+    let now = env.ledger().timestamp();
+    env.storage()
+        .instance()
+        .set(&DataKey::SignerLastActive(signer.clone()), &now);
 }
 
 /// Builds expiry metadata for a newly collected approval.

@@ -95,6 +95,21 @@ impl TreasuryContract {
         result
     }
 
+    /// Returns the ledger timestamp of the most recent approval recorded for
+    /// `signer`, or `None` if the signer has never submitted an approval (#587).
+    ///
+    /// The timestamp is updated by `record_approval` on every approval path
+    /// (settlement proposals and approvals, dispute votes, signer rotations)
+    /// so this value reflects the last time the key was actively used.
+    /// Operators can use this to detect inactive keys early and rotate them
+    /// before it becomes a quorum risk — e.g. flag any signer that has not
+    /// approved anything in the last 90 days.
+    pub fn get_signer_last_active(env: Env, signer: Address) -> Option<u64> {
+        env.storage()
+            .instance()
+            .get(&DataKey::SignerLastActive(signer))
+    }
+
     /// Proposes replacing `old_signer` with `new_signer` in the authorised signer set.
     /// Enforces a 1-hour cooldown per proposer to prevent rotation spam.
     /// Errors: `UnauthorizedSigner`, `RotationProposalCooldown`, `ArithmeticOverflow`.
