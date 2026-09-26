@@ -803,6 +803,8 @@ fn test_abi_snapshot_matches_contract() {
         "request_refund",
         "approve_refund",
         "process_refund",
+        "calculate_net_refund",
+        "get_refund_breakdown",
         "reject_refund",
         "release_escrow",
         "batch_expire",
@@ -834,6 +836,7 @@ fn test_abi_snapshot_matches_contract() {
         "contract_unpaused",
         "refund_approved",
         "refund_rejected",
+        "refund_processed",
     ]
     .iter()
     .copied()

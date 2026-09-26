@@ -48,4 +48,10 @@ pub enum InvoiceError {
     // Appended for #70: the invoice was created without a `token_address`, so
     // there is no contract to execute the refund payout through.
     RefundTokenNotSet = 26,
+    // Appended for #71: a refund fee above `MAX_REFUND_FEE_BPS` (10_000 bps =
+    // 100%), which would make the deduction meaningless.
+    RefundFeeTooHigh = 27,
+    // Appended for #71: refund fee arithmetic (`gross_amount * fee_bps`)
+    // overflowed, so the net payout cannot be computed.
+    ArithmeticOverflow = 28,
 }

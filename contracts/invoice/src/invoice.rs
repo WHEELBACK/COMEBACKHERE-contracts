@@ -134,4 +134,7 @@ pub enum DataKey {
     CreationCooldown,
     /// Timestamp of the last successful create_invoice call for a given merchant.
     LastCreatedAt(Address),
+    /// Fee breakdown of a processed refund: gross amount, processing fee,
+    /// network fee and the net amount transferred to the payer (#71).
+    RefundBreakdown(u64),
 }

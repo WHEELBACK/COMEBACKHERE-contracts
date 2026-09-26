@@ -90,20 +90,23 @@ fn every_variant_serializes_uniquely() {
         ),
         (
             "LastCreatedAt(b)",
-            xdr(&env, DataKey::LastCreatedAt(addr_b)),
+            xdr(&env, DataKey::LastCreatedAt(addr_b.clone())),
         ),
+        ("RefundBreakdown(1)", xdr(&env, DataKey::RefundBreakdown(1))),
+        ("RefundBreakdown(2)", xdr(&env, DataKey::RefundBreakdown(2))),
     ]);
 }
 
 /// The `u64` payload alone must not be enough to make two keyed collections
-/// collide: an invoice, its history log and its position in the pending index
-/// all take the same id, and each has to keep its own slot.
+/// collide: an invoice, its history log and its refund fee record (#71) all take
+/// the same id, and each has to keep its own slot.
 #[test]
 fn same_id_keyed_collections_stay_separate() {
     let env = Env::default();
     assert_all_unique(vec![
         ("Invoice(7)", xdr(&env, DataKey::Invoice(7))),
         ("InvoiceHistory(7)", xdr(&env, DataKey::InvoiceHistory(7))),
+        ("RefundBreakdown(7)", xdr(&env, DataKey::RefundBreakdown(7))),
     ]);
 }
 

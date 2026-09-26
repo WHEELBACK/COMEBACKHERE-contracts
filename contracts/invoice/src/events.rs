@@ -14,6 +14,7 @@
 // - Optional types (Option<u64>) serialize to null or value
 
 use crate::invoice::Invoice;
+use crate::refund::NetRefund;
 use soroban_sdk::{contracttype, Address, Env, Symbol};
 
 /// Emitted when an amendment changes an invoice's amount fields.
@@ -70,6 +71,42 @@ pub fn refund_approved(env: &Env, id: u64, invoice: &Invoice) {
 pub fn refund_rejected(env: &Env, id: u64, invoice: &Invoice) {
     env.events()
         .publish((Symbol::new(env, "refund_rejected"), id), invoice.clone());
+}
+
+/// Emitted when a refund is processed on-chain and the net payout is
+/// transferred to the payer (#71).
+///
+/// Carries the whole gross-vs-net breakdown rather than only the amount paid,
+/// so an indexer or a support workflow can show the customer exactly what was
+/// deducted (payment-gateway fee, network fee) instead of re-deriving it from
+/// the invoice. Mirrors [`crate::NetRefund`], which is also stored under
+/// `DataKey::RefundBreakdown` for the same invoice.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct RefundProcessedEvent {
+    pub id: u64,
+    /// The payer the net amount was transferred to.
+    pub payer: Address,
+    pub gross_amount: i128,
+    pub processing_fee: i128,
+    pub network_fee: i128,
+    pub net_amount: i128,
+    /// Ledger timestamp the payout was executed at.
+    pub processed_at: u64,
+}
+
+pub fn refund_processed(env: &Env, id: u64, payer: &Address, refund: &NetRefund) {
+    let payload = RefundProcessedEvent {
+        id,
+        payer: payer.clone(),
+        gross_amount: refund.gross_amount,
+        processing_fee: refund.processing_fee,
+        network_fee: refund.network_fee,
+        net_amount: refund.net_amount,
+        processed_at: env.ledger().timestamp(),
+    };
+    env.events()
+        .publish((Symbol::new(env, "refund_processed"), id), payload);
 }
 
 /// Minimal payload emitted when escrow is released for a paid invoice.

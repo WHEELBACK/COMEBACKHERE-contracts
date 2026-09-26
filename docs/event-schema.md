@@ -50,6 +50,7 @@ all entrypoints in `contracts/invoice/src/entrypoints/` call through these helpe
 | `contract_unpaused` | `(Symbol,)` | `Address` (admin) | `unpause` |
 | `invoice_amended` | `(Symbol, id: u64)` | `InvoiceAmountUpdatedEvent` | `amend_invoice` |
 | `invoice_expiry_extended` | `(Symbol, id: u64)` | `InvoiceExpiryExtendedEvent` | `extend_expiry` |
+| `refund_processed` | `(Symbol, id: u64)` | `RefundProcessedEvent` | `process_refund` |
 
 **`Invoice`** (`contracts/invoice/src/invoice.rs`):
 `id: u64`, `merchant: Address`, `amount_usdc: i128`, `gross_usdc: i128`,
@@ -68,6 +69,16 @@ wrappers used in place of `Option<Address>`/`Option<Bytes>`, which soroban-sdk v
 `old_gross_usdc: i128`, `new_gross_usdc: i128`.
 
 **`InvoiceExpiryExtendedEvent`**: `id: u64`, `old_expires_at: u64`, `new_expires_at: u64`.
+
+**`RefundProcessedEvent`** (#71): `id: u64`, `payer: Address`, `gross_amount: i128`,
+`processing_fee: i128`, `network_fee: i128`, `net_amount: i128`, `processed_at: u64`.
+
+Published alongside `refund_approved` by `process_refund`, and carrying the same
+`NetRefund` record that is stored under `DataKey::RefundBreakdown(id)`. It exists
+so an indexer can show a customer exactly what was deducted from their refund
+without re-deriving the fee arithmetic: `gross_amount` is what was paid,
+`processing_fee` is the merchant gateway's `fee_bps` share, `network_fee` is the
+flat payout cost, and `net_amount` is the amount actually transferred.
 
 ### Reconstructing invoice status history
 

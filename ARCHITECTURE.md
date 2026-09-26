@@ -126,7 +126,7 @@ sequenceDiagram
 
 Each contract defines error codes via a `#[contracterror]` enum. New variants **must** be appended at the end (highest numeric value) to preserve on-chain backwards compatibility — existing contracts and clients may depend on the current ordinal positions.
 
-### Invoice Contract (`InvoiceError` — range 1..=26)
+### Invoice Contract (`InvoiceError` — range 1..=28)
 
 | Code | Name | Description |
 |---|---|---|
@@ -156,6 +156,8 @@ Each contract defines error codes via a `#[contracterror]` enum. New variants **
 | 24 | `PaymentStateInconsistent` | Invoice does not describe a completed payment (no `paid_at`, no recorded payer, or `amount_usdc`/`gross_usdc` inconsistent) — refunds are refused (#70) |
 | 25 | `RefundTransferFailed` | The cross-contract token transfer executing a refund failed; the refund is abandoned with no state change (#70) |
 | 26 | `RefundTokenNotSet` | Refund payout attempted on an invoice created without a `token_address` (#70) |
+| 27 | `RefundFeeTooHigh` | `fee_bps` above `MAX_REFUND_FEE_BPS` (10_000 bps = 100%); rejected before the payout transfer is attempted (#71) |
+| 28 | `ArithmeticOverflow` | Refund fee arithmetic exceeded `i128`; unreachable for any in-range input, kept as a typed backstop so a bound change fails as an error rather than a trap (#71) |
 
 ### Treasury Contract (`TreasuryError` — range 1..=17)
 

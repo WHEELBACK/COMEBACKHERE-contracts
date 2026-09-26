@@ -12,7 +12,7 @@
 
 use invoice::{
     verify_payment_state, Invoice, InvoiceContract, InvoiceContractClient, InvoiceError,
-    InvoiceStatus, MaybeAddress, MaybeBytes,
+    InvoiceStatus, MaybeAddress, MaybeBytes, REFUND_NETWORK_FEE,
 };
 use soroban_sdk::{testutils::Address as _, Address, Env};
 
@@ -66,6 +66,16 @@ use test_token::{TestToken, TestTokenClient};
 
 const AMOUNT: i128 = 10_000_000;
 const GROSS: i128 = 10_250_000;
+
+/// The fee policy these tests process refunds under. Pinned to `0` so the
+/// assertions below stay about payment-state consistency (#70) rather than
+/// about the gross-vs-net fee model (#71), which has its own suite in
+/// `refund_fee_test.rs`. The network fee still applies, so every balance a
+/// payer receives is `AMOUNT - REFUND_NETWORK_FEE`.
+const NO_FEE_BPS: u32 = 0;
+
+/// What a payer actually receives under [`NO_FEE_BPS`].
+const NET_PAYOUT: i128 = AMOUNT - REFUND_NETWORK_FEE;
 
 struct Fixture {
     env: Env,
@@ -138,11 +148,11 @@ fn process_refund_pays_the_recorded_payer() {
     let token = TestTokenClient::new(&f.env, &f.token_id);
     token.mint(&f.invoice_id, &AMOUNT);
 
-    f.invoice.process_refund(&f.admin, &id);
+    f.invoice.process_refund(&f.admin, &id, &NO_FEE_BPS);
 
     assert_eq!(f.invoice.get_invoice(&id).status, InvoiceStatus::Refunded);
-    assert_eq!(token.balance(&f.payer), AMOUNT);
-    assert_eq!(token.balance(&f.invoice_id), 0);
+    assert_eq!(token.balance(&f.payer), NET_PAYOUT);
+    assert_eq!(token.balance(&f.invoice_id), REFUND_NETWORK_FEE);
 }
 
 /// The payer the refund is paid to is the one recorded at `mark_paid`, never a
@@ -241,7 +251,7 @@ fn payment_contract_call_failure_leaves_the_refund_retryable() {
     assert_eq!(token.balance(&f.invoice_id), 0);
 
     assert_eq!(
-        f.invoice.try_process_refund(&f.admin, &id),
+        f.invoice.try_process_refund(&f.admin, &id, &NO_FEE_BPS),
         Err(Ok(InvoiceError::RefundTransferFailed))
     );
 
@@ -254,9 +264,9 @@ fn payment_contract_call_failure_leaves_the_refund_retryable() {
 
     // Retryable: once the escrow is funded, the same call succeeds.
     token.mint(&f.invoice_id, &AMOUNT);
-    f.invoice.process_refund(&f.admin, &id);
+    f.invoice.process_refund(&f.admin, &id, &NO_FEE_BPS);
     assert_eq!(f.invoice.get_invoice(&id).status, InvoiceStatus::Refunded);
-    assert_eq!(token.balance(&f.payer), AMOUNT);
+    assert_eq!(token.balance(&f.payer), NET_PAYOUT);
 }
 
 /// The address registered as `token_address` is not a token contract at all —
@@ -286,7 +296,7 @@ fn non_token_address_fails_the_refund_safely() {
     f.invoice.request_refund(&f.payer, &id);
 
     assert_eq!(
-        f.invoice.try_process_refund(&f.admin, &id),
+        f.invoice.try_process_refund(&f.admin, &id, &NO_FEE_BPS),
         Err(Ok(InvoiceError::RefundTransferFailed))
     );
     assert_eq!(
@@ -320,7 +330,7 @@ fn refund_without_a_token_address_is_refused() {
     f.invoice.request_refund(&f.payer, &id);
 
     assert_eq!(
-        f.invoice.try_process_refund(&f.admin, &id),
+        f.invoice.try_process_refund(&f.admin, &id, &NO_FEE_BPS),
         Err(Ok(InvoiceError::RefundTokenNotSet))
     );
     assert_eq!(
@@ -338,7 +348,7 @@ fn paused_payment_contract_fails_the_refund() {
     f.invoice.pause(&f.admin);
 
     assert_eq!(
-        f.invoice.try_process_refund(&f.admin, &id),
+        f.invoice.try_process_refund(&f.admin, &id, &NO_FEE_BPS),
         Err(Ok(InvoiceError::ContractPaused))
     );
     assert_eq!(
@@ -384,20 +394,20 @@ fn refund_is_refused_for_an_undisputed_invoice_and_cannot_repeat() {
         &MaybeAddress::Some(f.token_id.clone()),
     );
     assert_eq!(
-        f.invoice.try_process_refund(&f.admin, &id),
+        f.invoice.try_process_refund(&f.admin, &id, &NO_FEE_BPS),
         Err(Ok(InvoiceError::NotRefundRequested))
     );
 
     f.invoice.request_refund(&f.payer, &id);
-    f.invoice.process_refund(&f.admin, &id);
+    f.invoice.process_refund(&f.admin, &id, &NO_FEE_BPS);
     assert_eq!(f.invoice.get_invoice(&id).status, InvoiceStatus::Refunded);
 
     // Second attempt: no second payout, and the invoice is terminal.
     assert_eq!(
-        f.invoice.try_process_refund(&f.admin, &id),
+        f.invoice.try_process_refund(&f.admin, &id, &NO_FEE_BPS),
         Err(Ok(InvoiceError::NotRefundRequested))
     );
-    assert_eq!(token.balance(&f.payer), AMOUNT);
+    assert_eq!(token.balance(&f.payer), NET_PAYOUT);
 }
 
 /// Non-admins cannot trigger a payout.
@@ -408,7 +418,7 @@ fn process_refund_is_admin_only() {
     let stranger = Address::generate(&f.env);
 
     assert_eq!(
-        f.invoice.try_process_refund(&stranger, &id),
+        f.invoice.try_process_refund(&stranger, &id, &NO_FEE_BPS),
         Err(Ok(InvoiceError::Unauthorized))
     );
     assert_eq!(

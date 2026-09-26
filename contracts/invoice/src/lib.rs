@@ -12,13 +12,19 @@ mod invoice;
 mod refund;
 mod validation;
 
-pub use events::{EscrowReleasedEvent, InvoiceAmountUpdatedEvent, InvoiceExpiryExtendedEvent};
+pub use events::{
+    EscrowReleasedEvent, InvoiceAmountUpdatedEvent, InvoiceExpiryExtendedEvent,
+    RefundProcessedEvent,
+};
 use invoice::StatusTransition;
 pub use invoice::{
     BatchInvoiceParams, DataKey, Invoice, InvoiceError, InvoiceStatus, MaybeAddress, MaybeBytes,
     MAX_BATCH_EXPIRE, MAX_BATCH_SIZE,
 };
-pub use refund::{refund_recipient, transfer_net_refund, verify_payment_state};
+pub use refund::{
+    calculate_net_refund, refund_recipient, transfer_net_refund, verify_payment_state, NetRefund,
+    BPS_DENOMINATOR, MAX_REFUND_FEE_BPS, REFUND_NETWORK_FEE,
+};
 
 use soroban_sdk::{contract, Env, Vec};
 

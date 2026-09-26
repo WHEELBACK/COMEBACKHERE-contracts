@@ -1,5 +1,7 @@
 use crate::events::{self, InvoiceAmountUpdatedEvent};
-use crate::refund::{refund_recipient, transfer_net_refund, verify_payment_state};
+use crate::refund::{
+    calculate_net_refund, refund_recipient, transfer_net_refund, verify_payment_state,
+};
 use crate::validation::{
     require_admin, require_expiry_not_too_long, require_hash_not_too_long, require_not_paused,
     require_positive_amount, require_usdc_precision, require_valid_payment_link_hash,
@@ -7,7 +9,7 @@ use crate::validation::{
 use crate::{append_history, pending_index_add, pending_index_remove};
 use crate::{
     DataKey, Invoice, InvoiceContract, InvoiceContractArgs, InvoiceContractClient, InvoiceError,
-    InvoiceStatus, MaybeAddress, MaybeBytes,
+    InvoiceStatus, MaybeAddress, MaybeBytes, NetRefund,
 };
 use soroban_sdk::{contractimpl, Address, Env, Vec};
 
@@ -425,25 +427,37 @@ impl InvoiceContract {
     /// This is the refund path that actually moves money, and it spans a
     /// contract boundary: the amount is transferred by the invoice's own
     /// `token_address` contract from the escrow balance this contract holds
-    /// (#70). Three properties make the boundary safe:
+    /// (#70). Four properties make the boundary safe:
     ///
     /// 1. **The payment state is verified before anything else.** An invoice
     ///    that does not describe a completed payment is rejected with
     ///    `PaymentStateInconsistent`, so no payout is ever attempted against it.
-    /// 2. **The transfer is the last thing that can fail, and it fails
+    /// 2. **The payout is the net of the documented fees, not the gross.** The
+    ///    `fee_bps` argument is the merchant's payment-gateway policy; the
+    ///    customer's `net_amount` is computed once by
+    ///    [`calculate_net_refund`] and is the exact amount transferred (#71).
+    /// 3. **The transfer is the last thing that can fail, and it fails
     ///    safely.** `try_transfer` turns any token-side failure into
     ///    `RefundTransferFailed`, and because the status transition is written
     ///    only after the transfer returns `Ok`, a failed payout leaves the
     ///    invoice in `RefundRequested` — retryable, and not falsely recorded as
     ///    refunded.
-    /// 3. **The funds debited are not caller-chosen.** They come from this
+    /// 4. **The funds debited are not caller-chosen.** They come from this
     ///    contract's own escrow balance, and the recipient is the payer recorded
     ///    at `mark_paid`, not anything the caller supplies.
     ///
+    /// Returns the [`NetRefund`] that was applied, which is also stored under
+    /// `DataKey::RefundBreakdown` and published in the `refund_processed` event.
+    ///
     /// Errors: `NotRefundRequested`, `PaymentStateInconsistent`,
-    /// `RefundTokenNotSet`, `RefundTransferFailed`.
-    /// Emits: `refund_approved`.
-    pub fn process_refund(env: Env, admin: Address, id: u64) -> Result<(), InvoiceError> {
+    /// `RefundTokenNotSet`, `RefundFeeTooHigh`, `RefundTransferFailed`.
+    /// Emits: `refund_approved`, `refund_processed`.
+    pub fn process_refund(
+        env: Env,
+        admin: Address,
+        id: u64,
+        fee_bps: u32,
+    ) -> Result<NetRefund, InvoiceError> {
         require_admin(&env, &admin)?;
         require_not_paused(&env)?;
 
@@ -464,15 +478,20 @@ impl InvoiceContract {
             MaybeAddress::Some(token_id) => token_id.clone(),
             MaybeAddress::None => return Err(InvoiceError::RefundTokenNotSet),
         };
+        // Reject an out-of-range fee before the transfer, not after.
+        let refund = calculate_net_refund(invoice.amount_usdc, fee_bps)?;
 
         // Payout first: on failure this returns `Err` and none of the writes
         // below run, which is what keeps the two contracts from disagreeing.
-        transfer_net_refund(&env, &token_id, &payer, invoice.amount_usdc)?;
+        transfer_net_refund(&env, &token_id, &payer, refund.net_amount)?;
 
         invoice.status = InvoiceStatus::Refunded;
         env.storage()
             .persistent()
             .set(&DataKey::Invoice(id), &invoice);
+        env.storage()
+            .persistent()
+            .set(&DataKey::RefundBreakdown(id), &refund);
         append_history(
             &env,
             id,
@@ -480,7 +499,35 @@ impl InvoiceContract {
             InvoiceStatus::Refunded,
         );
         events::refund_approved(&env, id, &invoice);
-        Ok(())
+        events::refund_processed(&env, id, &payer, &refund);
+        Ok(refund)
+    }
+
+    /// Read-only preview of the fee arithmetic `process_refund` would apply to a
+    /// refund of `gross_amount` under `fee_bps` (#71), so a merchant UI can show
+    /// the customer what they will actually receive before approving.
+    ///
+    /// Deliberately not gated by `require_not_paused`: quoting a refund is a
+    /// read, and an operator working out what a paused contract owes its
+    /// customers is exactly the case where that read has to keep working.
+    ///
+    /// Errors: `RefundFeeTooHigh`, `InvalidAmount`, `ArithmeticOverflow`.
+    pub fn calculate_net_refund(
+        _env: Env,
+        gross_amount: i128,
+        fee_bps: u32,
+    ) -> Result<NetRefund, InvoiceError> {
+        calculate_net_refund(gross_amount, fee_bps)
+    }
+
+    /// The fee breakdown recorded by `process_refund` for `id`, if any.
+    /// Returns `NotFound` for an invoice that was approved without a payout
+    /// (`approve_refund`) or has not been refunded yet.
+    pub fn get_refund_breakdown(env: Env, id: u64) -> Result<NetRefund, InvoiceError> {
+        env.storage()
+            .persistent()
+            .get(&DataKey::RefundBreakdown(id))
+            .ok_or(InvoiceError::NotFound)
     }
 
     /// Reject a refund request. Admin-only. Transitions RefundRequested → Paid.
