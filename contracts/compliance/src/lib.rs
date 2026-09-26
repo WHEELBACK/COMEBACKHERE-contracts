@@ -124,7 +124,7 @@ pub struct AddressStatus {
 /// Primary error type for the compliance contract.
 ///
 /// Variants must only be appended at the end (highest numeric value) to preserve
-/// on-chain backwards compatibility. Range: 1..=6 (see `ARCHITECTURE.md`).
+/// on-chain backwards compatibility. Range: 1..=7 (see `ARCHITECTURE.md`).
 #[contracterror]
 #[derive(Copy, Clone, Debug, PartialEq)]
 #[repr(u32)]
@@ -137,6 +137,9 @@ pub enum ContractError {
     /// A bulk allow/block call was made before [`BULK_OP_COOLDOWN_SECS`] elapsed since the
     /// caller's previous bulk call (see #454).
     BulkOperationCooldown = 6,
+    /// `migrate` was called while storage is at a schema version it has no
+    /// migration path from (see #610).
+    UnexpectedSchemaVersion = 7,
 }
 
 /// Upper bound on the number of distinct addresses tracked in the paged address
@@ -160,6 +163,9 @@ const ADDR_INDEX_PAGE_SIZE: u32 = 25;
 /// Maximum number of addresses accepted per batch admin call, consistent with
 /// the batch caps used elsewhere in the workspace (see #8/#21/#29).
 pub const MAX_BATCH_SIZE: u32 = 50;
+
+/// Storage schema version written by `initialize` and targeted by `migrate` (#610).
+pub const CURRENT_SCHEMA_VERSION: u32 = 2;
 
 /// Minimum time (seconds) a caller must wait between successive calls to the *same* bulk
 /// entrypoint (`bulk_allow_addresses` or `bulk_block_addresses`). `MAX_BATCH_SIZE` bounds how
@@ -192,7 +198,9 @@ impl ComplianceContract {
         admin.require_auth();
         env.storage().instance().set(&DataKey::Admin, &admin);
         env.storage().instance().set(&DataKey::Paused, &false);
-        env.storage().instance().set(&DataKey::SchemaVersion, &1u32);
+        env.storage()
+            .instance()
+            .set(&DataKey::SchemaVersion, &CURRENT_SCHEMA_VERSION);
         Ok(())
     }
 
@@ -475,6 +483,39 @@ impl ComplianceContract {
             .unwrap_or(1)
     }
 
+    /// Admin-only storage migration to [`CURRENT_SCHEMA_VERSION`] (#610).
+    ///
+    /// Idempotent: calling it when storage is already at the current version is a
+    /// no-op. Rejects any stored version it has no migration path from, so an
+    /// operator mistake during an upgrade cannot corrupt data.
+    ///
+    /// # Errors
+    /// - [`ContractError::Unauthorized`] if `admin` is not the stored administrator.
+    /// - [`ContractError::UnexpectedSchemaVersion`] if the stored version is neither
+    ///   the previous nor the current schema version.
+    ///
+    /// # Events
+    /// Publishes `("schema_migrated",) → (from, to)` when a migration runs.
+    pub fn migrate(env: Env, admin: Address) -> Result<u32, ContractError> {
+        Self::require_admin(&env, &admin)?;
+        let from = Self::get_schema_version(env.clone());
+        if from == CURRENT_SCHEMA_VERSION {
+            return Ok(from);
+        }
+        if from != CURRENT_SCHEMA_VERSION - 1 {
+            return Err(ContractError::UnexpectedSchemaVersion);
+        }
+        // v1 -> v2: no stored data layout changes; only the version marker is bumped.
+        env.storage()
+            .instance()
+            .set(&DataKey::SchemaVersion, &CURRENT_SCHEMA_VERSION);
+        env.events().publish(
+            (Symbol::new(&env, "schema_migrated"),),
+            (from, CURRENT_SCHEMA_VERSION),
+        );
+        Ok(CURRENT_SCHEMA_VERSION)
+    }
+
     /// Allow an address until a specific ledger timestamp (seconds since epoch).
     ///
     /// After `expires_at`, [`is_allowed`](Self::is_allowed) returns `false` even if
@@ -554,6 +595,32 @@ impl ComplianceContract {
             .set(&DataKey::PendingAdmin, &new_admin);
         env.events()
             .publish((Symbol::new(&env, "admin_transfer_initiated"),), new_admin);
+        Ok(())
+    }
+
+    /// Cancel a pending admin transfer before it is accepted (#611).
+    ///
+    /// Clears `PendingAdmin` so the nominated address can no longer call
+    /// [`accept_admin`](Self::accept_admin). Not gated behind pause.
+    ///
+    /// # Errors
+    /// - [`ContractError::Unauthorized`] if `admin` is not the stored administrator.
+    ///
+    /// # Panics
+    /// Panics with `"NoPendingAdmin"` if there is no pending transfer.
+    ///
+    /// # Events
+    /// Publishes `("admin_transfer_cancelled",) → pending_admin`.
+    pub fn cancel_admin_transfer(env: Env, admin: Address) -> Result<(), ContractError> {
+        Self::require_admin(&env, &admin)?;
+        let pending: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::PendingAdmin)
+            .expect("NoPendingAdmin");
+        env.storage().instance().remove(&DataKey::PendingAdmin);
+        env.events()
+            .publish((Symbol::new(&env, "admin_transfer_cancelled"),), pending);
         Ok(())
     }
 

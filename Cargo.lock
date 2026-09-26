@@ -321,6 +321,7 @@ dependencies = [
  "comebackhere-compliance-errors",
  "comebackhere-invoice-errors",
  "comebackhere-treasury",
+ "soroban-sdk",
 ]
 
 [[package]]

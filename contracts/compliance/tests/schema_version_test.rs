@@ -28,14 +28,14 @@
 //   2. Add an entry to CHANGELOG.md describing the storage migration path.
 //   3. Include both changes in the same PR so reviewers see the full picture.
 
-use compliance::{ComplianceContract, ComplianceContractClient};
+use compliance::{ComplianceContract, ComplianceContractClient, ContractError, DataKey};
 use soroban_sdk::{testutils::Address as _, Address, Env};
 
 /// The schema version that compliance::initialize stores and
 /// get_schema_version returns.  This is intentionally a snapshot constant —
 /// if the value changes without this constant being updated the test fails,
 /// which is the point.
-const EXPECTED_SCHEMA_VERSION: u32 = 1;
+const EXPECTED_SCHEMA_VERSION: u32 = 2;
 
 fn setup() -> (Env, ComplianceContractClient<'static>) {
     let env = Env::default();
@@ -89,5 +89,57 @@ fn schema_version_is_stable_across_repeated_reads() {
         first, second,
         "get_schema_version returned different values on successive reads: \
          {first} then {second}"
+    );
+}
+
+// ── #610 migrate ──────────────────────────────────────────────────────────────
+
+fn setup_with_version(version: u32) -> (Env, Address, ComplianceContractClient<'static>) {
+    let env = Env::default();
+    env.mock_all_auths();
+    let admin = Address::generate(&env);
+    let id = env.register_contract(None, ComplianceContract);
+    let client = ComplianceContractClient::new(&env, &id);
+    client.initialize(&admin);
+    env.as_contract(&id, || {
+        env.storage()
+            .instance()
+            .set(&DataKey::SchemaVersion, &version);
+    });
+    (env, admin, client)
+}
+
+#[test]
+fn migrate_bumps_previous_version_to_current() {
+    let (_env, admin, client) = setup_with_version(EXPECTED_SCHEMA_VERSION - 1);
+    assert_eq!(client.migrate(&admin), EXPECTED_SCHEMA_VERSION);
+    assert_eq!(client.get_schema_version(), EXPECTED_SCHEMA_VERSION);
+}
+
+#[test]
+fn migrate_is_idempotent() {
+    let (_env, admin, client) = setup_with_version(EXPECTED_SCHEMA_VERSION - 1);
+    client.migrate(&admin);
+    assert_eq!(client.migrate(&admin), EXPECTED_SCHEMA_VERSION);
+    assert_eq!(client.get_schema_version(), EXPECTED_SCHEMA_VERSION);
+}
+
+#[test]
+fn migrate_rejects_unexpected_version() {
+    let (_env, admin, client) = setup_with_version(EXPECTED_SCHEMA_VERSION + 5);
+    assert_eq!(
+        client.try_migrate(&admin),
+        Err(Ok(ContractError::UnexpectedSchemaVersion))
+    );
+    assert_eq!(client.get_schema_version(), EXPECTED_SCHEMA_VERSION + 5);
+}
+
+#[test]
+fn migrate_rejects_non_admin() {
+    let (env, _admin, client) = setup_with_version(EXPECTED_SCHEMA_VERSION - 1);
+    let stranger = Address::generate(&env);
+    assert_eq!(
+        client.try_migrate(&stranger),
+        Err(Ok(ContractError::Unauthorized))
     );
 }

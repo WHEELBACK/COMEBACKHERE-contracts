@@ -80,3 +80,26 @@ fn question_mark_propagation() {
         ProtocolError::Compliance(ComplianceError::AlreadyInitialized)
     );
 }
+
+/// Every variant of every contract error enum must have a non-empty description.
+/// Walks each enum's discriminants until conversion fails, so newly appended
+/// variants are covered automatically.
+#[test]
+fn every_error_has_description() {
+    use soroban_sdk::Error;
+
+    fn check<E: TryFrom<Error> + Into<ProtocolError>>() -> u32 {
+        let mut count = 0;
+        let mut code = 1;
+        while let Ok(e) = E::try_from(Error::from_contract_error(code)) {
+            assert!(!e.into().description().is_empty(), "code {code}");
+            count += 1;
+            code += 1;
+        }
+        count
+    }
+
+    assert_eq!(check::<InvoiceError>(), 23);
+    assert_eq!(check::<TreasuryError>(), 40);
+    assert_eq!(check::<ComplianceError>(), 1);
+}

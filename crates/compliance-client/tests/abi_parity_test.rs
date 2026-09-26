@@ -1,9 +1,10 @@
 //! Fails to compile (and therefore fails CI) if `ComplianceClient`'s `is_allowed`
-//! signature drifts from the compiled compliance contract's public interface.
+//! or `bulk_check_addresses` signature drifts from the compiled compliance contract's public interface.
 //! This is the seam treasury and settlement-workflow rely on for cross-contract
 //! calls into compliance.
 //!
-//! `ComplianceClient` deliberately exposes only `is_allowed` (see Cargo.toml and
+//! `ComplianceClient` deliberately exposes only `is_allowed` and
+//! `bulk_check_addresses` (see Cargo.toml and
 //! src/lib.rs): it is a `#[contractclient]`-generated invocation client, not a
 //! dependency on the `comebackhere-compliance` implementation crate, so that
 //! contracts depending on this crate don't statically link compliance's own
@@ -12,7 +13,7 @@
 
 use compliance::{ComplianceContract, ComplianceContractClient};
 use compliance_client::ComplianceClient;
-use soroban_sdk::{testutils::Address as _, Address, Env};
+use soroban_sdk::{testutils::Address as _, vec, Address, Env, Vec};
 
 #[derive(Debug, Eq, PartialEq)]
 enum TestError {
@@ -50,4 +51,32 @@ fn wrapper_matches_generated_client_compliance_checks() {
     generated.block_address(&admin, &subject, &None);
     assert_eq!(wrapped.is_allowed(&subject), generated.is_allowed(&subject));
     assert!(!wrapped.is_allowed(&subject));
+}
+
+#[test]
+fn wrapper_bulk_check_matches_generated_client_and_preserves_order() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let admin = Address::generate(&env);
+    let allowed = Address::generate(&env);
+    let blocked = Address::generate(&env);
+    let unknown = Address::generate(&env);
+    let contract_id = env.register_contract(None, ComplianceContract);
+    let generated = ComplianceContractClient::new(&env, &contract_id);
+    let wrapped = ComplianceClient::new(&env, &contract_id);
+    generated.initialize(&admin);
+    generated.allow_address(&admin, &allowed);
+    generated.block_address(&admin, &blocked, &None);
+
+    let input = vec![
+        &env,
+        blocked.clone(),
+        allowed.clone(),
+        unknown.clone(),
+        allowed.clone(),
+    ];
+    let results = wrapped.bulk_check_addresses(&input);
+    assert_eq!(results, vec![&env, false, true, false, true]);
+    assert_eq!(results, generated.bulk_check_addresses(&input));
+    assert!(wrapped.bulk_check_addresses(&Vec::new(&env)).is_empty());
 }

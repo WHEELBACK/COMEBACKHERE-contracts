@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+#### Compliance Contract
+- `cancel_admin_transfer` (#611): current admin can revoke a pending `transfer_admin` nomination; emits `admin_transfer_cancelled`.
+- `migrate` (#610): admin-only, idempotent schema migration entrypoint. Schema version bumped 1 → 2 (no data layout change; v1 storage is migrated by rewriting the version marker). Rejects unexpected stored versions with `UnexpectedSchemaVersion`.
+
 #### Treasury Contract
 - Timelocked signer and threshold-configuration changes (#447). Admin calls to `set_signer`, `remove_signer`, and `update_threshold` can now be queued via `propose_signer_change` with a 24-hour delay enforced by `execute_signer_change`; any admin can cancel the queued change within that window via `cancel_signer_change`. This restores a meaningful reaction window against a single-compromised-admin-key scenario that the pre-existing immediate entrypoints lacked.
 

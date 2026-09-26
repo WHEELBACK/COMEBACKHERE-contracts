@@ -546,6 +546,32 @@ fn admin_transfer_wrong_acceptor_panics() {
     assert!(result.is_err());
 }
 
+// ── #611 cancel_admin_transfer ───────────────────────────────────────────────
+
+#[test]
+fn cancel_admin_transfer_then_accept_fails() {
+    let (env, admin, subject, client) = setup();
+    let new_admin = Address::generate(&env);
+    client.transfer_admin(&admin, &new_admin);
+    client.cancel_admin_transfer(&admin);
+    assert!(client.try_accept_admin(&new_admin).is_err());
+    // Original admin keeps privileges.
+    client.allow_address(&admin, &subject);
+    assert!(client.is_allowed(&subject));
+}
+
+#[test]
+fn cancel_admin_transfer_rejects_non_admin() {
+    let (env, admin, _subject, client) = setup();
+    let new_admin = Address::generate(&env);
+    client.transfer_admin(&admin, &new_admin);
+    assert_eq!(
+        client.try_cancel_admin_transfer(&new_admin),
+        Err(Ok(ContractError::Unauthorized))
+    );
+    client.accept_admin(&new_admin);
+}
+
 #[test]
 fn allow_address_returns_unauthorized_for_non_admin() {
     let env = Env::default();
