@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+#### Storage
+- Storage key collision prevention audit (#86). `docs/STORAGE_VERSIONING.md` documents the key namespacing conventions (one append-only `#[contracttype]` key enum per contract, complete composite keys, no raw symbol keys) and the audited key space; the issue's `PaymentKey`/`ConfigKey` targets are mapped to the key enums that exist in this repository. New `storage_key_uniqueness_test.rs` suites assert that every variant of the invoice, treasury, compliance and settlement-workflow key enums serializes to a distinct XDR representation, and `tests/tests/storage_key_namespace_test.rs` proves both that identically-named variants in different contracts cannot collide and that neighbouring variants keep separate slots in real host storage.
+- `invoice::StatusTransition` is now re-exported from the crate root so the invoice's status-transition type is usable by off-chain tooling and integration tests.
+
 #### Treasury Contract
 - Timelocked signer and threshold-configuration changes (#447). Admin calls to `set_signer`, `remove_signer`, and `update_threshold` can now be queued via `propose_signer_change` with a 24-hour delay enforced by `execute_signer_change`; any admin can cancel the queued change within that window via `cancel_signer_change`. This restores a meaningful reaction window against a single-compromised-admin-key scenario that the pre-existing immediate entrypoints lacked.
 
