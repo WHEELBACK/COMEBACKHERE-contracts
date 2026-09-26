@@ -126,6 +126,10 @@ sequenceDiagram
 
 Each contract defines error codes via a `#[contracterror]` enum. New variants **must** be appended at the end (highest numeric value) to preserve on-chain backwards compatibility — existing contracts and clients may depend on the current ordinal positions.
 
+Every one of those enums is declared through the shared `declare_contract_error!` macro in `crates/error-macros`, which supplies the `#[contracterror]`, `#[derive(...)]` and `#[repr(u32)]` block so the convention cannot drift between crates. The variant lists — including the explicit discriminants below — are still written out by hand and are enforced append-only by `scripts/check-enum-ordering.sh`.
+
+> **Stale-range warning:** the ranges in the headings below lag the enums in a few places (`InvoiceError` is `1..=23` and `ContractError` is `1..=6`, not `1..=21` and `1..=4`; `TreasuryError` is `1..=40`, not `1..=17`). The enums are the ABI source of truth; the per-crate READMEs under `crates/` carry current, per-code tables.
+
 ### Invoice Contract (`InvoiceError` — range 1..=21)
 
 | Code | Name | Description |
@@ -189,12 +193,13 @@ Each contract defines error codes via a `#[contracterror]` enum. New variants **
 
 ## Shared Crates — Types, Not Storage
 
-The two shared crates (`crates/multisig` and `crates/protocol-errors`) provide types and error definitions that are imported by the contracts. They are **not deployed contracts** and have **no DataKeys or on-chain storage of their own**.
+The shared crates (`crates/multisig`, `crates/protocol-errors`, and `crates/error-macros`) provide types and error definitions that are imported by the contracts. They are **not deployed contracts** and have **no DataKeys or on-chain storage of their own**.
 
 | Crate | What it provides | Storage |
 |---|---|---|
-| `crates/multisig` | `SettlementHoldReason` enum, multisig helper types | None |
+| `crates/multisig` | `SettlementHoldReason` enum, multisig helper types, `TreasuryError` | None |
 | `crates/protocol-errors` | Shared error type utilities | None |
+| `crates/error-macros` | `declare_contract_error!` macro used by every `#[contracterror]` enum | None |
 
 If you are looking for where a type like `SettlementHoldReason` is stored on-chain, look at the **Treasury** DataKey table above (`Settlement(u64)` embeds it). The crates themselves are compile-time dependencies only.
 

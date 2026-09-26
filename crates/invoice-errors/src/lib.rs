@@ -1,38 +1,37 @@
 #![no_std]
 
-use soroban_sdk::contracterror;
+use error_macros::declare_contract_error;
 
-/// Error codes for the invoice contract.
-///
-/// Variants are append-only and must not be renumbered; discriminants are
-/// part of the on-chain ABI and are matched by callers and off-chain systems.
-/// New variants must be added at the end with an explicit discriminant one
-/// higher than the current maximum; see `scripts/check-enum-ordering.sh`.
-#[contracterror]
-#[derive(Copy, Clone, Debug, Eq, PartialEq)]
-#[repr(u32)]
-pub enum InvoiceError {
-    Unauthorized = 1,
-    ContractPaused = 2,
-    InvalidAmount = 3,
-    NotPending = 4,
-    Expired = 5,
-    NotFound = 6,
-    AlreadyInitialized = 7,
-    ZeroDuration = 8,
-    ExpiryOverflow = 9,
-    NotPaid = 10,
-    NotReleased = 11,
-    AmountPrecision = 12,
-    DuplicateNonce = 13,
-    ExpiryTooLong = 14,
-    MetadataMismatch = 15,
-    NoPendingAdmin = 16,
-    InvalidPaymentLinkHash = 17,
-    NotRefundRequested = 18,
-    TokenMismatch = 19,
-    BatchTooLarge = 20,
-    CooldownActive = 21,
-    InvoiceCountOverflow = 22,
-    HashTooLong = 23,
+declare_contract_error! {
+    /// Error codes for the invoice contract.
+    ///
+    /// Variants are append-only and must not be renumbered; discriminants are
+    /// part of the on-chain ABI and are matched by callers and off-chain systems.
+    /// New variants must be added at the end with an explicit discriminant one
+    /// higher than the current maximum; see `scripts/check-enum-ordering.sh`.
+    pub enum InvoiceError {
+        Unauthorized = 1,
+        ContractPaused = 2,
+        InvalidAmount = 3,
+        NotPending = 4,
+        Expired = 5,
+        NotFound = 6,
+        AlreadyInitialized = 7,
+        ZeroDuration = 8,
+        ExpiryOverflow = 9,
+        NotPaid = 10,
+        NotReleased = 11,
+        AmountPrecision = 12,
+        DuplicateNonce = 13,
+        ExpiryTooLong = 14,
+        MetadataMismatch = 15,
+        NoPendingAdmin = 16,
+        InvalidPaymentLinkHash = 17,
+        NotRefundRequested = 18,
+        TokenMismatch = 19,
+        BatchTooLarge = 20,
+        CooldownActive = 21,
+        InvoiceCountOverflow = 22,
+        HashTooLong = 23,
+    }
 }

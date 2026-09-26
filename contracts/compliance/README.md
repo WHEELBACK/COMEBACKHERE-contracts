@@ -8,6 +8,7 @@ The Compliance contract manages an allowlist of addresses permitted to interact 
 |----------|---------------|------------|---------|--------|
 | `initialize` | `admin` | `admin: Address` | `Result<(), ContractError>` | `AlreadyInitialized` |
 | `is_allowed` | None | `address: Address` | `bool` | None |
+| `bulk_check_addresses` | None | `addresses: Vec<Address>` | `Vec<bool>` | None |
 | `is_blocked` | None | `address: Address` | `bool` | None |
 | `allow_address` | `admin` | `admin: Address, address: Address` | `Result<(), ContractError>` | `Unauthorized`, `ContractPaused` |
 | `block_address` | `admin` | `admin: Address, address: Address` | `Result<(), ContractError>` | `Unauthorized` |
@@ -75,6 +76,43 @@ stellar contract invoke \
 
 This means an address that is both `Allowed` and `Blocked` is treated as blocked;
 `clear_address` must be called to restore it to an allowed state.
+
+### Read order in `is_allowed`
+
+The four rules above describe the *answer*; the order in which storage is
+actually read is a separate, deliberate choice, and it is the one that makes
+`bulk_check_addresses` affordable.
+
+The two flags are not symmetric in the precedence. A block only ever *overrides*
+an allow — an address that is not allowed is `false` whether or not it is
+blocked — so the `Allowed` entry alone settles the answer for every address not
+on the allowlist. `is_allowed` therefore reads **`Allowed` first**, and only
+consults `Blocked` / `BlockedUntil` for addresses that are actually on the
+allowlist.
+
+Consequences:
+
+- An address with no `Allowed` entry costs **one** storage read; the block flag
+  is never read.
+- A block still overrides an allow, so an address that is both is `false` while
+  the block is in force — the same answer as before, just reached with the
+  reads in the other order.
+- `AllowedUntil` is only read once the address is known to be allowed, since a
+  lapsed allow and a missing allow both mean `false`.
+
+The observable result is identical either way.
+`tests/is_allowed_differential_test.rs` re-derives these rules from this section
+independently and sweeps the full
+(blocked, blocked_until, allowed, allowed_until, now) product, so a reordering
+that changed any answer would fail there.
+
+> **Do not probe the flags with `has()`.** `clear_address` writes
+> `Blocked = false` rather than removing the key, so the key's *presence* and
+> the address's block *status* are not the same thing. Read the value.
+
+`tests/bulk_check_budget_test.rs` measures the entrypoint's cost and holds
+`bulk_check_addresses` to a budget ceiling; see that file for the
+before/after numbers behind this read order.
 
 ## `is_blocked`
 

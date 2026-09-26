@@ -21,9 +21,9 @@
 
 #![no_std]
 
-use soroban_sdk::{
-    contract, contracterror, contractimpl, contracttype, Address, Bytes, Env, Symbol, Vec,
-};
+use soroban_sdk::{contract, contractimpl, contracttype, Address, Bytes, Env, Symbol, Vec};
+
+use error_macros::declare_contract_error;
 
 pub use compliance_errors::ComplianceError;
 
@@ -121,22 +121,21 @@ pub struct AddressStatus {
     pub is_currently_allowed: bool,
 }
 
-/// Primary error type for the compliance contract.
-///
-/// Variants must only be appended at the end (highest numeric value) to preserve
-/// on-chain backwards compatibility. Range: 1..=6 (see `ARCHITECTURE.md`).
-#[contracterror]
-#[derive(Copy, Clone, Debug, PartialEq)]
-#[repr(u32)]
-pub enum ContractError {
-    Unauthorized = 1,
-    ContractPaused = 2,
-    AlreadyInitialized = 3,
-    BatchTooLarge = 4,
-    AddressIndexFull = 5,
-    /// A bulk allow/block call was made before [`BULK_OP_COOLDOWN_SECS`] elapsed since the
-    /// caller's previous bulk call (see #454).
-    BulkOperationCooldown = 6,
+declare_contract_error! {
+    /// Primary error type for the compliance contract.
+    ///
+    /// Variants must only be appended at the end (highest numeric value) to preserve
+    /// on-chain backwards compatibility. Range: 1..=6 (see `ARCHITECTURE.md`).
+    pub enum ContractError {
+        Unauthorized = 1,
+        ContractPaused = 2,
+        AlreadyInitialized = 3,
+        BatchTooLarge = 4,
+        AddressIndexFull = 5,
+        /// A bulk allow/block call was made before [`BULK_OP_COOLDOWN_SECS`] elapsed since the
+        /// caller's previous bulk call (see #454).
+        BulkOperationCooldown = 6,
+    }
 }
 
 /// Upper bound on the number of distinct addresses tracked in the paged address
@@ -239,53 +238,95 @@ impl ComplianceContract {
         Ok(())
     }
 
+    /// Screens many addresses in one call, returning one `bool` per input in
+    /// input order. See [`is_allowed_at`](Self::is_allowed_at) for the
+    /// per-address decision and why the ledger timestamp is read once here
+    /// rather than per address.
     pub fn bulk_check_addresses(env: Env, addresses: Vec<Address>) -> Vec<bool> {
+        // The ledger timestamp is constant for the duration of one invocation,
+        // so it is read once for the whole batch instead of once (or twice) per
+        // address inside `is_allowed`. For a 50-address batch that is up to 100
+        // fewer ledger reads.
+        let now = env.ledger().timestamp();
         let mut results = Vec::new(&env);
         for address in addresses.iter() {
-            results.push_back(Self::is_allowed(env.clone(), address));
+            results.push_back(Self::is_allowed_at(&env, &address, now));
         }
         results
     }
 
     pub fn is_allowed(env: Env, address: Address) -> bool {
-        let blocked: bool = env
-            .storage()
-            .persistent()
-            .get(&DataKey::Blocked(address.clone()))
-            .unwrap_or(false);
-        if blocked {
-            // If there's a BlockedUntil timestamp, the block auto-expires once now >= unblock_at.
-            if let Some(unblock_at) = env
-                .storage()
-                .persistent()
-                .get::<_, u64>(&DataKey::BlockedUntil(address.clone()))
-            {
-                if env.ledger().timestamp() >= unblock_at {
-                    // Block has expired — fall through to allow check below.
-                } else {
-                    return false;
-                }
-            } else {
-                return false;
-            }
-        }
-        let allowed: bool = env
-            .storage()
-            .persistent()
+        Self::is_allowed_at(&env, &address, env.ledger().timestamp())
+    }
+
+    /// The shared `is_allowed` decision, with the ledger timestamp passed in.
+    ///
+    /// Split out so [`is_allowed`](Self::is_allowed) and
+    /// [`bulk_check_addresses`](Self::bulk_check_addresses) cannot drift apart,
+    /// and so a batch can evaluate every address against a single
+    /// `env.ledger().timestamp()` read: the timestamp cannot change mid-call, so
+    /// re-reading it per address is redundant work in both cases.
+    ///
+    /// # Read order
+    ///
+    /// The documented precedence (`contracts/compliance/README.md#is_allowed-precedence`)
+    /// is: not allowed ⇒ `false`, regardless of block status; blocked and still
+    /// blocked ⇒ `false`, overriding an allow. Crucially, *both* of those are
+    /// `false`, so an address that is not on the allowlist has the same answer
+    /// whether or not the block flag is ever read. That makes `Allowed` the
+    /// cheaper flag to read first: when it is unset the call returns immediately
+    /// and the `Blocked` entry is never touched at all.
+    ///
+    /// So the implementation reads `Allowed` first and only consults `Blocked`
+    /// for addresses that are actually on the allowlist. For a batch of
+    /// addresses that are not allowed — a screening endpoint checking strangers
+    /// being the common case — this halves the storage reads, from two per
+    /// address to one. The `Blocked`-first order it replaces also had to read
+    /// `BlockedUntil` for blocked addresses, which this order avoids for
+    /// addresses that are blocked *and* not allowed.
+    ///
+    /// The two orders are equivalent, and that equivalence is what
+    /// `tests/is_allowed_differential_test.rs` asserts: it re-derives the
+    /// precedence independently and sweeps the full
+    /// (blocked, blocked_until, allowed, allowed_until, now) product, so a
+    /// reordering that changed any answer would fail there.
+    ///
+    /// Note the block/allow flags are read as *values*, never probed with
+    /// `has()` — `clear_address` writes `Blocked = false` rather than removing
+    /// the key, so key presence and block status are not the same thing.
+    fn is_allowed_at(env: &Env, address: &Address, now: u64) -> bool {
+        let storage = env.storage().persistent();
+
+        // `Allowed` first: an address that is not allowed is `false` under the
+        // precedence no matter what its block flag says, so `Blocked` and
+        // `BlockedUntil` do not need to be read at all.
+        let allowed: bool = storage
             .get(&DataKey::Allowed(address.clone()))
             .unwrap_or(false);
         if !allowed {
             return false;
         }
-        // Check optional expiry
-        if let Some(expires_at) = env
-            .storage()
-            .persistent()
-            .get::<_, u64>(&DataKey::AllowedUntil(address))
+
+        // On the allowlist, so block status is now the deciding question. If
+        // there is a `BlockedUntil` timestamp, the block auto-expires once
+        // now >= unblock_at and stops overriding the allow.
+        let blocked: bool = storage
+            .get(&DataKey::Blocked(address.clone()))
+            .unwrap_or(false);
+        if blocked
+            && !matches!(
+                storage.get::<_, u64>(&DataKey::BlockedUntil(address.clone())),
+                Some(unblock_at) if now >= unblock_at
+            )
         {
-            return env.ledger().timestamp() < expires_at;
+            return false;
         }
-        true
+
+        // Check optional expiry on the allow
+        match storage.get::<_, u64>(&DataKey::AllowedUntil(address.clone())) {
+            Some(expires_at) => now < expires_at,
+            None => true,
+        }
     }
 
     /// Returns whether `address` is explicitly blocked. No auth required.
