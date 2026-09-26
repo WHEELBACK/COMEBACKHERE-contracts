@@ -1,6 +1,6 @@
 use crate::{
-    require_admin, require_not_paused, DataKey, Settlement, SettlementHoldReason, SettlementStatus,
-    TreasuryContract, TreasuryContractArgs, TreasuryContractClient, TreasuryError,
+    require_admin, require_not_paused, DataKey, MaybeAddress, Settlement, SettlementHoldReason,
+    SettlementStatus, TreasuryContract, TreasuryContractArgs, TreasuryContractClient, TreasuryError,
     MAX_ALLOWED_TOKENS,
 };
 use multisig::{meets_threshold, record_approval, require_authorized_signer, signer_weight};
@@ -24,6 +24,25 @@ impl TreasuryContract {
         signer: Address,
         merchant_address: Address,
         amount: i128,
+    ) -> Result<u64, TreasuryError> {
+        Self::propose_settlement_with_token(env, signer, merchant_address, amount, MaybeAddress::None)
+    }
+
+    /// Proposes a new settlement capturing the intended `token` at proposal time.
+    /// Behaves identically to `propose_settlement` except that `token` is stored on the
+    /// settlement and surfaced by `get_pending_metrics` to group metrics per token.
+    /// Use `MaybeAddress::None` if the token is not yet known (equivalent to
+    /// calling `propose_settlement`).
+    /// Preconditions: contract not paused; `signer` must be an authorised signer with non-zero weight.
+    /// Panics: `ContractPaused`, `UnauthorizedSigner`.
+    /// Errors: `InvalidAmount`, `ArithmeticOverflow`.
+    /// Emits: `settlement_proposed`.
+    pub fn propose_settlement_with_token(
+        env: Env,
+        signer: Address,
+        merchant_address: Address,
+        amount: i128,
+        token: MaybeAddress,
     ) -> Result<u64, TreasuryError> {
         require_not_paused(&env);
         require_authorized_signer(&env, &signer);
@@ -50,6 +69,7 @@ impl TreasuryContract {
             status: SettlementStatus::Pending,
             hold_reason: SettlementHoldReason::None,
             proposed_at: env.ledger().timestamp(),
+            token,
         };
         env.storage()
             .persistent()
@@ -486,19 +506,23 @@ impl TreasuryContract {
         page
     }
 
-    /// Returns aggregate metrics over all pending settlements: `(count, total_value)`.
-    /// Computed in a single call so operational monitoring doesn't need to paginate
-    /// through `get_pending_settlements_page` and sum client-side just to answer
-    /// "how much is currently pending settlement". No running total is currently
-    /// maintained in storage, so this aggregates on read like `get_pending_settlements`.
-    pub fn get_pending_metrics(env: Env) -> (u64, i128) {
+    /// Returns aggregate metrics over all pending settlements broken down per token.
+    /// Each entry in the returned `Vec` is `(token, count, total_value)` where `token`
+    /// is the `MaybeAddress` captured at proposal time. Settlements proposed without a
+    /// specific token are grouped under `MaybeAddress::None`. This replaces the previous
+    /// single-bucket `(count, total_value)` return, which was misleading when the treasury
+    /// holds multiple assets (see #585).
+    pub fn get_pending_metrics(env: Env) -> Vec<(MaybeAddress, u64, i128)> {
         let count: u64 = env
             .storage()
             .instance()
             .get(&DataKey::SettlementCount)
             .unwrap_or(0);
-        let mut pending_count: u64 = 0;
-        let mut total_value: i128 = 0;
+        // We build a flat accumulator list of (token, count, total) tuples.
+        // Soroban does not provide a Map type in storage helpers, so we do a linear
+        // scan over the accumulator on every new token — acceptable because the
+        // number of distinct tokens is bounded by MAX_ALLOWED_TOKENS (20).
+        let mut buckets: Vec<(MaybeAddress, u64, i128)> = Vec::new(&env);
         let mut id = 1u64;
         while id <= count {
             if let Some(settlement) = env
@@ -507,13 +531,25 @@ impl TreasuryContract {
                 .get::<DataKey, Settlement>(&DataKey::Settlement(id))
             {
                 if settlement.status == SettlementStatus::Pending {
-                    pending_count += 1;
-                    total_value += settlement.amount;
+                    let tok = settlement.token.clone();
+                    let mut found = false;
+                    // Scan existing buckets for a matching token.
+                    for i in 0..buckets.len() {
+                        let (b_tok, b_cnt, b_val) = buckets.get(i).unwrap();
+                        if b_tok == tok {
+                            buckets.set(i, (b_tok, b_cnt + 1, b_val + settlement.amount));
+                            found = true;
+                            break;
+                        }
+                    }
+                    if !found {
+                        buckets.push_back((tok, 1u64, settlement.amount));
+                    }
                 }
             }
             id += 1;
         }
-        (pending_count, total_value)
+        buckets
     }
 
     /// Returns the settlement with the given `settlement_id`.

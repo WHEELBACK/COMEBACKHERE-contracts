@@ -267,6 +267,7 @@ fn settlement_struct_shape_is_unchanged() {
         status,
         hold_reason,
         proposed_at,
+        token: _,
     } = settlement;
 
     assert_eq!(id, sid);

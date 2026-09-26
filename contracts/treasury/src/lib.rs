@@ -1,9 +1,9 @@
 #![no_std]
 
 pub use multisig::{
-    DataKey, Dispute, DisputeStatus, RotationStatus, Settlement, SettlementHoldReason,
-    SettlementStatus, SignerChangeKind, SignerChangeProposal, SignerChangeStatus,
-    SignerRotationProposal, TreasuryError,
+    DataKey, Dispute, DisputeStatus, MaybeAddress, RotationStatus, Settlement,
+    SettlementHoldReason, SettlementStatus, SignerChangeKind, SignerChangeProposal,
+    SignerChangeStatus, SignerRotationProposal, TreasuryError,
 };
 
 use soroban_sdk::{contract, contractimpl, Address, Env, Symbol, Vec};
