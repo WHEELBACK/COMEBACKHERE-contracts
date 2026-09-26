@@ -1158,3 +1158,112 @@ fn set_tier_limit_unauthorized_for_non_admin() {
     let result = client.try_set_tier_limit(&non_admin, &0, &1_000_000);
     assert_eq!(result, Err(Ok(ContractError::Unauthorized)));
 }
+
+#[test]
+fn all_mutating_entrypoints_emit_events() {
+    // This test verifies that every mutating entrypoint emits an event for indexer tracking.
+    // Entrypoints tested:
+    // - bulk_allow_addresses, allow_address, allow_address_with_tier, allow_address_until
+    // - bulk_block_addresses, block_address, block_address_until
+    // - clear_address, revoke_allow
+    // - pause, unpause
+    // - set_operator, set_tier_limit
+    // - transfer_admin, accept_admin
+    // - sweep_expired
+    let (env, admin, subject, client) = setup();
+    let now = env.ledger().timestamp();
+
+    // Test bulk_allow_addresses emits
+    let addrs = soroban_sdk::Vec::from_array(&env, [Address::generate(&env)]);
+    env.events().publish((Symbol::new(&env, "test_marker"),), admin.clone());
+    client.bulk_allow_addresses(&admin, &addrs).unwrap();
+    assert_eq!(last_event_symbol(&env), Symbol::new(&env, "address_allowed"));
+
+    // Test allow_address emits
+    let addr2 = Address::generate(&env);
+    env.events().publish((Symbol::new(&env, "test_marker"),), admin.clone());
+    client.allow_address(&admin, &addr2).unwrap();
+    assert_eq!(last_event_symbol(&env), Symbol::new(&env, "address_allowed"));
+
+    // Test allow_address_with_tier emits
+    let addr3 = Address::generate(&env);
+    env.events().publish((Symbol::new(&env, "test_marker"),), admin.clone());
+    client.allow_address_with_tier(&admin, &addr3, &1).unwrap();
+    assert_eq!(last_event_symbol(&env), Symbol::new(&env, "address_allowed"));
+
+    // Test allow_address_until emits
+    let addr4 = Address::generate(&env);
+    env.events().publish((Symbol::new(&env, "test_marker"),), admin.clone());
+    client.allow_address_until(&admin, &addr4, &(now + 1000)).unwrap();
+    assert_eq!(last_event_symbol(&env), Symbol::new(&env, "address_allowed_until"));
+
+    // Test bulk_block_addresses emits
+    let blockaddrs = soroban_sdk::Vec::from_array(&env, [Address::generate(&env)]);
+    env.events().publish((Symbol::new(&env, "test_marker"),), admin.clone());
+    client.bulk_block_addresses(&admin, &blockaddrs).unwrap();
+    assert_eq!(last_event_symbol(&env), Symbol::new(&env, "address_blocked"));
+
+    // Test block_address emits
+    let addr5 = Address::generate(&env);
+    env.events().publish((Symbol::new(&env, "test_marker"),), admin.clone());
+    client.block_address(&admin, &addr5, &None).unwrap();
+    assert_eq!(last_event_symbol(&env), Symbol::new(&env, "address_blocked"));
+
+    // Test block_address_until emits
+    let addr6 = Address::generate(&env);
+    env.events().publish((Symbol::new(&env, "test_marker"),), admin.clone());
+    client.block_address_until(&admin, &addr6, &(now + 1000), &None).unwrap();
+    assert_eq!(last_event_symbol(&env), Symbol::new(&env, "address_blocked_until"));
+
+    // Test clear_address emits
+    env.events().publish((Symbol::new(&env, "test_marker"),), admin.clone());
+    client.clear_address(&admin, &subject).unwrap();
+    assert_eq!(last_event_symbol(&env), Symbol::new(&env, "address_cleared"));
+
+    // Test revoke_allow emits
+    let addr7 = Address::generate(&env);
+    client.allow_address(&admin, &addr7).unwrap();
+    env.events().publish((Symbol::new(&env, "test_marker"),), admin.clone());
+    client.revoke_allow(&admin, &addr7).unwrap();
+    assert_eq!(last_event_symbol(&env), Symbol::new(&env, "address_revoked"));
+
+    // Test pause emits
+    env.events().publish((Symbol::new(&env, "test_marker"),), admin.clone());
+    client.pause(&admin).unwrap();
+    assert_eq!(last_event_symbol(&env), Symbol::new(&env, "compliance_paused"));
+
+    // Test unpause emits
+    env.events().publish((Symbol::new(&env, "test_marker"),), admin.clone());
+    client.unpause(&admin).unwrap();
+    assert_eq!(last_event_symbol(&env), Symbol::new(&env, "compliance_unpaused"));
+
+    // Test set_operator emits
+    let op = Address::generate(&env);
+    env.events().publish((Symbol::new(&env, "test_marker"),), admin.clone());
+    client.set_operator(&admin, &op).unwrap();
+    assert_eq!(last_event_symbol(&env), Symbol::new(&env, "operator_set"));
+
+    // Test set_tier_limit emits
+    env.events().publish((Symbol::new(&env, "test_marker"),), admin.clone());
+    client.set_tier_limit(&admin, &0, &1_000_000).unwrap();
+    assert_eq!(last_event_symbol(&env), Symbol::new(&env, "tier_limit_set"));
+
+    // Test transfer_admin emits
+    let new_admin = Address::generate(&env);
+    env.events().publish((Symbol::new(&env, "test_marker"),), admin.clone());
+    client.transfer_admin(&admin, &new_admin).unwrap();
+    assert_eq!(last_event_symbol(&env), Symbol::new(&env, "admin_transfer_initiated"));
+
+    // Test accept_admin emits
+    env.events().publish((Symbol::new(&env, "test_marker"),), new_admin.clone());
+    client.accept_admin(&new_admin).unwrap();
+    assert_eq!(last_event_symbol(&env), Symbol::new(&env, "admin_transferred"));
+
+    // Test sweep_expired emits (when there are expired entries)
+    let addr8 = Address::generate(&env);
+    client.allow_address_until(&new_admin, &addr8, &(now + 50)).unwrap();
+    env.ledger().set_timestamp(now + 100);
+    env.events().publish((Symbol::new(&env, "test_marker"),), new_admin.clone());
+    client.sweep_expired(&new_admin).unwrap();
+    assert_eq!(last_event_symbol(&env), Symbol::new(&env, "address_allow_expired"));
+}
