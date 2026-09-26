@@ -41,7 +41,7 @@ fn execute_settlement_baseline_no_reentry_pays_merchant_once() {
     token.set_callback_target(&CallbackTarget::None, &treasury_id);
 
     let merchant = Address::generate(&env);
-    let sid = client.propose_settlement(&admin, &merchant, &amount);
+    let sid = client.propose_settlement(&admin, &merchant, &amount, &0_u64);
     client.execute_settlement(&admin, &sid, &token_id);
 
     assert_eq!(token.balance(&merchant), amount);
@@ -73,7 +73,7 @@ fn execute_settlement_reentrancy_demonstrates_cei_violation_double_payout() {
     token.set_callback_target(&CallbackTarget::ExecuteSettlement, &treasury_id);
 
     let merchant = Address::generate(&env);
-    let sid = client.propose_settlement(&admin, &merchant, &amount);
+    let sid = client.propose_settlement(&admin, &merchant, &amount, &0_u64);
     token.set_execute_settlement_params(&admin, &sid);
 
     let result = client.try_execute_settlement(&admin, &sid, &token_id);
@@ -104,7 +104,7 @@ fn execute_settlement_reentrancy_status_is_settled_once() {
     token.set_callback_target(&CallbackTarget::ExecuteSettlement, &treasury_id);
 
     let merchant = Address::generate(&env);
-    let sid = client.propose_settlement(&admin, &merchant, &amount);
+    let sid = client.propose_settlement(&admin, &merchant, &amount, &0_u64);
     token.set_execute_settlement_params(&admin, &sid);
 
     // Pre-state: the settlement was just proposed, so it must still be

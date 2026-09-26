@@ -15,6 +15,9 @@ const MAX_BATCH_SIZE: u32 = 50;
 #[contractimpl]
 impl TreasuryContract {
     /// Proposes a new settlement of `amount` tokens payable to `merchant_address`.
+    /// An optional `execution_deadline` (Unix timestamp) may be set; if non-zero,
+    /// `execute_settlement` will reject calls after that timestamp even when approvals
+    /// are complete. Pass `0` for no deadline.
     /// Preconditions: contract not paused; `signer` must be an authorised signer with non-zero weight.
     /// Panics: `ContractPaused`, `UnauthorizedSigner`.
     /// Errors: `InvalidAmount`, `ArithmeticOverflow`.
@@ -24,6 +27,7 @@ impl TreasuryContract {
         signer: Address,
         merchant_address: Address,
         amount: i128,
+        execution_deadline: u64,
     ) -> Result<u64, TreasuryError> {
         require_not_paused(&env);
         require_authorized_signer(&env, &signer);
@@ -50,6 +54,7 @@ impl TreasuryContract {
             status: SettlementStatus::Pending,
             hold_reason: SettlementHoldReason::None,
             proposed_at: env.ledger().timestamp(),
+            execution_deadline,
         };
         env.storage()
             .persistent()
@@ -66,8 +71,9 @@ impl TreasuryContract {
         signer: Address,
         merchant_address: Address,
         amount: i128,
+        execution_deadline: u64,
     ) -> Result<u64, TreasuryError> {
-        Self::propose_settlement(env, signer, merchant_address, amount)
+        Self::propose_settlement(env, signer, merchant_address, amount, execution_deadline)
     }
 
     /// Adds `signer`'s weight to the approval set of a pending settlement.
@@ -247,6 +253,13 @@ impl TreasuryContract {
         }
         if !meets_threshold(settlement.approval_weight, threshold) {
             return Err(TreasuryError::ThresholdNotMet);
+        }
+        // Enforce execution deadline: if the proposer set a non-zero deadline,
+        // reject execution after that timestamp even when approvals are complete.
+        if settlement.execution_deadline > 0
+            && env.ledger().timestamp() > settlement.execution_deadline
+        {
+            return Err(TreasuryError::ExecutionDeadlineExceeded);
         }
         if token_contract == env.current_contract_address() {
             return Err(TreasuryError::InvalidTokenContract);

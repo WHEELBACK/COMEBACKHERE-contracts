@@ -36,7 +36,7 @@ impl TreasuryComplianceWorkflow {
         }
         let signer = env.current_contract_address();
         Ok(TreasuryContractClient::new(&env, &treasury_contract)
-            .propose_settlement(&signer, &merchant, &amount))
+            .propose_settlement(&signer, &merchant, &amount, &0_u64))
     }
 }
 

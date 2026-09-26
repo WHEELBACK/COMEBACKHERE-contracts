@@ -17,7 +17,7 @@ fn paused_rejects_propose_settlement() {
     let env = Env::default();
     let (client, admin) = paused_setup(&env);
     let merchant = Address::generate(&env);
-    client.propose_settlement(&admin, &merchant, &1_000);
+    client.propose_settlement(&admin, &merchant, &1_000, &0_u64);
 }
 
 #[test]

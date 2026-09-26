@@ -23,7 +23,7 @@ fn expire_dispute_transitions_to_expired() {
     let merchant = Address::generate(&env);
     let claimant = Address::generate(&env);
 
-    let sid = client.propose_settlement(&admin, &merchant, &10_000_000);
+    let sid = client.propose_settlement(&admin, &merchant, &10_000_000, &0_u64);
     let did = client.raise_dispute(&claimant, &sid, &merchant, &5_000_000, &500);
 
     env.ledger().with_mut(|l| l.timestamp = 600);
@@ -42,7 +42,7 @@ fn expire_dispute_releases_settlement_hold() {
     let merchant = Address::generate(&env);
     let claimant = Address::generate(&env);
 
-    let sid = client.propose_settlement(&admin, &merchant, &10_000_000);
+    let sid = client.propose_settlement(&admin, &merchant, &10_000_000, &0_u64);
     let did = client.raise_dispute(&claimant, &sid, &merchant, &5_000_000, &500);
 
     let s = client.get_settlement(&sid);
@@ -65,7 +65,7 @@ fn expire_dispute_at_exact_deadline_succeeds() {
     let merchant = Address::generate(&env);
     let claimant = Address::generate(&env);
 
-    let sid = client.propose_settlement(&admin, &merchant, &10_000_000);
+    let sid = client.propose_settlement(&admin, &merchant, &10_000_000, &0_u64);
     let did = client.raise_dispute(&claimant, &sid, &merchant, &5_000_000, &500);
 
     // The guard is `timestamp < expires_at`, so timestamp == expires_at must succeed.
@@ -84,7 +84,7 @@ fn raise_dispute_stores_expires_at_field() {
     let merchant = Address::generate(&env);
     let claimant = Address::generate(&env);
 
-    let sid = client.propose_settlement(&admin, &merchant, &10_000_000);
+    let sid = client.propose_settlement(&admin, &merchant, &10_000_000, &0_u64);
     let did = client.raise_dispute(&claimant, &sid, &merchant, &5_000_000, &86_400);
 
     let dispute = client.get_dispute(&did);

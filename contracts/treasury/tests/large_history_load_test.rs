@@ -63,7 +63,7 @@ fn treasury_with_history(env: &Env, n: u64) -> (TreasuryContractClient<'static>,
 
     for _ in 0..n {
         let merchant = Address::generate(env);
-        client.propose_settlement(&admin, &merchant, &1_000_000);
+        client.propose_settlement(&admin, &merchant, &1_000_000, &0_u64);
     }
 
     (client, admin)
@@ -163,7 +163,7 @@ fn page_scan_skips_executed_entries_at_scale() {
     let mut executed_ids = std::vec::Vec::new();
     for i in 1..=LARGE_HISTORY {
         let merchant = Address::generate(&env);
-        let sid = client.propose_settlement(&admin, &merchant, &1_000_000);
+        let sid = client.propose_settlement(&admin, &merchant, &1_000_000, &0_u64);
         if i % 10 == 0 {
             client.execute_settlement(&admin, &sid, &token_id);
             executed_ids.push(sid);

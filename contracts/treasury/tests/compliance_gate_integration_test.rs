@@ -157,7 +157,7 @@ fn settlement_rejected_when_compliance_absent_or_failing() {
         setup();
 
     // merchant is not allowed by default
-    let settlement_id = treasury.propose_settlement(&admin, &merchant, &10_000_000);
+    let settlement_id = treasury.propose_settlement(&admin, &merchant, &10_000_000, &0_u64);
 
     let token = TestTokenContractClient::new(&env, &token_id);
     token.mint(&treasury_id, &10_000_000);
@@ -184,7 +184,7 @@ fn settlement_rejected_when_compliance_paused_and_unable_to_pass() {
     // While paused, allow/block operations are disabled, so merchant cannot be made passing.
     compliance.pause(&admin);
 
-    let settlement_id = treasury.propose_settlement(&admin, &merchant, &10_000_000);
+    let settlement_id = treasury.propose_settlement(&admin, &merchant, &10_000_000, &0_u64);
 
     let token = TestTokenContractClient::new(&env, &token_id);
     token.mint(&treasury_id, &10_000_000);
@@ -215,7 +215,7 @@ fn settlement_rejected_when_merchant_blocked() {
     // and overrides any existing allow status.
     compliance.block_address(&admin, &merchant, &None);
 
-    let settlement_id = treasury.propose_settlement(&admin, &merchant, &10_000_000);
+    let settlement_id = treasury.propose_settlement(&admin, &merchant, &10_000_000, &0_u64);
 
     let token = TestTokenContractClient::new(&env, &token_id);
     token.mint(&treasury_id, &10_000_000);
@@ -244,7 +244,7 @@ fn blocked_merchant_rejected_even_when_already_settled() {
     // Allow merchant, create and execute a settlement successfully.
     compliance.allow_address(&admin, &merchant);
 
-    let settlement_id = treasury.propose_settlement(&admin, &merchant, &10_000_000);
+    let settlement_id = treasury.propose_settlement(&admin, &merchant, &10_000_000, &0_u64);
 
     let token = TestTokenContractClient::new(&env, &token_id);
     token.mint(&treasury_id, &10_000_000);
@@ -265,7 +265,7 @@ fn blocked_merchant_rejected_even_when_already_settled() {
     // Now block the merchant and create a *new* settlement.
     compliance.block_address(&admin, &merchant, &None);
 
-    let settlement_id_2 = treasury.propose_settlement(&admin, &merchant, &5_000_000);
+    let settlement_id_2 = treasury.propose_settlement(&admin, &merchant, &5_000_000, &0_u64);
     // Mint additional tokens
     token.mint(&treasury_id, &5_000_000);
 
@@ -291,7 +291,7 @@ fn execute_settlement_fails_when_merchant_blocked_mid_flight() {
 
     // Merchant is allowed at proposal time.
     compliance.allow_address(&admin, &merchant);
-    let settlement_id = treasury.propose_settlement(&admin, &merchant, &10_000_000);
+    let settlement_id = treasury.propose_settlement(&admin, &merchant, &10_000_000, &0_u64);
 
     let token = TestTokenContractClient::new(&env, &token_id);
     token.mint(&treasury_id, &10_000_000);
@@ -350,7 +350,7 @@ fn execute_settlement_fails_when_merchant_blocked_after_full_approval() {
     token.mint(&treasury_id, &10_000_000);
 
     // Propose settlement (admin weight = 1 < threshold 2 → still Pending)
-    let settlement_id = treasury.propose_settlement(&admin, &merchant, &10_000_000);
+    let settlement_id = treasury.propose_settlement(&admin, &merchant, &10_000_000, &0_u64);
 
     // Approve settlement via workflow (weight 1 + 1 = 2 ≥ 2 → meets threshold)
     treasury.approve_settlement(&workflow_id, &settlement_id);
@@ -404,7 +404,7 @@ fn execute_settlement_succeeds_when_merchant_allowed_after_full_approval() {
     token.mint(&treasury_id, &10_000_000);
 
     // Propose settlement
-    let settlement_id = treasury.propose_settlement(&admin, &merchant, &10_000_000);
+    let settlement_id = treasury.propose_settlement(&admin, &merchant, &10_000_000, &0_u64);
 
     // Approve via workflow (meets threshold)
     treasury.approve_settlement(&workflow_id, &settlement_id);

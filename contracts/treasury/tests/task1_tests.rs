@@ -35,7 +35,7 @@ fn cancel_pending_settlement_removes_it_from_pending() {
     let (client, admin, _) = setup(&env, 1);
     let merchant = Address::generate(&env);
 
-    let sid = client.propose_settlement(&admin, &merchant, &10_000_000);
+    let sid = client.propose_settlement(&admin, &merchant, &10_000_000, &0_u64);
     client.cancel_settlement(&admin, &sid);
 
     assert_eq!(client.get_pending_settlements().len(), 0);
@@ -49,7 +49,7 @@ fn execute_after_cancel_panics() {
     let merchant = Address::generate(&env);
     let token_id = env.register_contract(None, FakeToken);
 
-    let sid = client.propose_settlement(&admin, &merchant, &10_000_000);
+    let sid = client.propose_settlement(&admin, &merchant, &10_000_000, &0_u64);
     client.cancel_settlement(&admin, &sid);
     client.execute_settlement(&admin, &sid, &token_id);
 }
@@ -61,7 +61,7 @@ fn approve_after_cancel_panics() {
     let (client, admin, _) = setup(&env, 2);
     let merchant = Address::generate(&env);
 
-    let sid = client.propose_settlement(&admin, &merchant, &10_000_000);
+    let sid = client.propose_settlement(&admin, &merchant, &10_000_000, &0_u64);
     client.cancel_settlement(&admin, &sid);
     client.approve_settlement(&admin, &sid);
 }
@@ -73,7 +73,7 @@ fn double_cancel_panics() {
     let (client, admin, _) = setup(&env, 1);
     let merchant = Address::generate(&env);
 
-    let sid = client.propose_settlement(&admin, &merchant, &10_000_000);
+    let sid = client.propose_settlement(&admin, &merchant, &10_000_000, &0_u64);
     client.cancel_settlement(&admin, &sid);
     client.cancel_settlement(&admin, &sid);
 }
@@ -96,7 +96,7 @@ fn event_order_propose_approve_cancel() {
     let merchant = Address::generate(&env);
     client.set_signer(&admin, &backup, &1);
 
-    let sid = client.propose_settlement(&admin, &merchant, &5_000_000);
+    let sid = client.propose_settlement(&admin, &merchant, &5_000_000, &0_u64);
     let proposed_symbol = event_symbol(&env, &env.events().all().last().unwrap().1);
     client.approve_settlement(&backup, &sid);
     let approved_symbol = event_symbol(&env, &env.events().all().last().unwrap().1);
@@ -115,7 +115,7 @@ fn event_order_propose_then_execute() {
     let merchant = Address::generate(&env);
     let token_id = env.register_contract(None, FakeToken);
 
-    let sid = client.propose_settlement(&admin, &merchant, &1_000);
+    let sid = client.propose_settlement(&admin, &merchant, &1_000, &0_u64);
     let proposed_symbol = event_symbol(&env, &env.events().all().last().unwrap().1);
     client.execute_settlement(&admin, &sid, &token_id);
     let executed_symbol = event_symbol(&env, &env.events().all().last().unwrap().1);
@@ -134,7 +134,7 @@ fn rotated_in_signer_can_propose() {
     let merchant = Address::generate(&env);
 
     client.set_signer(&admin, &new_signer, &1);
-    let sid = client.propose_settlement(&new_signer, &merchant, &1_000);
+    let sid = client.propose_settlement(&new_signer, &merchant, &1_000, &0_u64);
     assert_eq!(sid, 1);
 }
 
@@ -148,7 +148,7 @@ fn rotated_out_signer_cannot_propose() {
 
     client.set_signer(&admin, &old_signer, &1);
     client.set_signer(&admin, &old_signer, &0); // rotate out
-    client.propose_settlement(&old_signer, &merchant, &1_000);
+    client.propose_settlement(&old_signer, &merchant, &1_000, &0_u64);
 }
 
 #[test]
@@ -160,7 +160,7 @@ fn rotated_out_signer_cannot_approve() {
     let merchant = Address::generate(&env);
 
     client.set_signer(&admin, &signer, &1);
-    let sid = client.propose_settlement(&admin, &merchant, &1_000);
+    let sid = client.propose_settlement(&admin, &merchant, &1_000, &0_u64);
     client.set_signer(&admin, &signer, &0);
     client.approve_settlement(&signer, &sid);
 }
@@ -173,7 +173,7 @@ fn rotation_after_approval_preserves_weight_snapshot() {
     let merchant = Address::generate(&env);
 
     client.set_signer(&admin, &signer_b, &1);
-    let sid = client.propose_settlement(&admin, &merchant, &1_000);
+    let sid = client.propose_settlement(&admin, &merchant, &1_000, &0_u64);
     client.approve_settlement(&signer_b, &sid);
 
     // rotate signer_b out after approval
@@ -191,7 +191,7 @@ fn new_signer_can_approve_after_rotation() {
     let merchant = Address::generate(&env);
 
     client.set_signer(&admin, &new_signer, &1);
-    let sid = client.propose_settlement(&admin, &merchant, &1_000);
+    let sid = client.propose_settlement(&admin, &merchant, &1_000, &0_u64);
     let settlement = client.approve_settlement(&new_signer, &sid);
 
     assert_eq!(settlement.approval_weight, 2);

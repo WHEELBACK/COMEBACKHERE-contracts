@@ -27,7 +27,7 @@ fn approvals_accumulate_until_threshold() {
     let (env, admin, backup, contract_id) = setup_multisig();
     let client = TreasuryContractClient::new(&env, &contract_id);
     let merchant = Address::generate(&env);
-    let settlement_id = client.propose_settlement(&admin, &merchant, &10_000_000);
+    let settlement_id = client.propose_settlement(&admin, &merchant, &10_000_000, &0_u64);
     let settlement = client.approve_settlement(&backup, &settlement_id);
     assert_eq!(settlement.status, SettlementStatus::Pending);
     assert_eq!(settlement.approvals.len(), 2);
@@ -40,7 +40,7 @@ fn partial_approval_accumulates() {
     let (env, admin, backup, contract_id) = setup_multisig();
     let client = TreasuryContractClient::new(&env, &contract_id);
     let merchant = Address::generate(&env);
-    let settlement_id = client.propose_settlement(&admin, &merchant, &10_000_000);
+    let settlement_id = client.propose_settlement(&admin, &merchant, &10_000_000, &0_u64);
     let settlement = client.approve_partial_settlement(&backup, &settlement_id, &5_000_000);
     assert_eq!(settlement.status, SettlementStatus::Pending);
     assert_eq!(settlement.approvals.len(), 2);
@@ -90,7 +90,7 @@ fn remove_signer_does_not_retroactively_invalidate_settlement_approval() {
     let merchant = Address::generate(&env);
 
     client.set_signer(&admin, &backup, &1);
-    let settlement_id = client.propose_settlement(&admin, &merchant, &10_000_000);
+    let settlement_id = client.propose_settlement(&admin, &merchant, &10_000_000, &0_u64);
     client.approve_settlement(&backup, &settlement_id);
 
     client.remove_signer(&admin, &backup);
@@ -115,7 +115,7 @@ fn signer_weight_change_after_approval_does_not_affect_snapshot() {
     let backup = Address::generate(&env);
     let merchant = Address::generate(&env);
     client.set_signer(&admin, &backup, &1);
-    let sid = client.propose_settlement(&admin, &merchant, &10_000_000);
+    let sid = client.propose_settlement(&admin, &merchant, &10_000_000, &0_u64);
     client.approve_settlement(&backup, &sid);
     // Now reduce backup weight to 0 — snapshotted weight should remain 2
     client.set_signer(&admin, &backup, &0);
@@ -164,7 +164,7 @@ fn guarded_function_succeeds_after_unpause() {
     client.set_signer(&admin, &signer, &1);
 
     // Create a settlement before pausing
-    let settlement_id = client.propose_settlement(&signer, &merchant, &10_000_000);
+    let settlement_id = client.propose_settlement(&signer, &merchant, &10_000_000, &0_u64);
     assert_eq!(settlement_id, 1);
 
     // Pause, then unpause
@@ -172,7 +172,7 @@ fn guarded_function_succeeds_after_unpause() {
     client.unpause(&admin);
 
     // Verify settlement operations work after unpause
-    let settlement_id2 = client.propose_settlement(&signer, &merchant, &20_000_000);
+    let settlement_id2 = client.propose_settlement(&signer, &merchant, &20_000_000, &0_u64);
     assert_eq!(settlement_id2, 2);
 }
 
@@ -189,7 +189,7 @@ fn dispute_can_be_raised_against_settlement() {
     client.initialize(&admin, &2, &soroban_sdk::Vec::new(&env));
     client.set_signer(&admin, &signer, &1);
 
-    let settlement_id = client.propose_settlement(&signer, &merchant, &10_000_000);
+    let settlement_id = client.propose_settlement(&signer, &merchant, &10_000_000, &0_u64);
 
     let dispute_id =
         client.raise_dispute(&claimant, &settlement_id, &merchant, &5_000_000, &u64::MAX);
@@ -209,7 +209,7 @@ fn dispute_resolved_in_favor_of_claimant() {
     client.initialize(&admin, &2, &soroban_sdk::Vec::new(&env));
     client.set_signer(&admin, &signer, &1);
 
-    let settlement_id = client.propose_settlement(&signer, &merchant, &10_000_000);
+    let settlement_id = client.propose_settlement(&signer, &merchant, &10_000_000, &0_u64);
     let dispute_id =
         client.raise_dispute(&claimant, &settlement_id, &merchant, &5_000_000, &u64::MAX);
 
@@ -229,7 +229,7 @@ fn dispute_resolved_in_favor_of_counterparty() {
     client.initialize(&admin, &2, &soroban_sdk::Vec::new(&env));
     client.set_signer(&admin, &signer, &1);
 
-    let settlement_id = client.propose_settlement(&signer, &merchant, &10_000_000);
+    let settlement_id = client.propose_settlement(&signer, &merchant, &10_000_000, &0_u64);
     let dispute_id =
         client.raise_dispute(&claimant, &settlement_id, &merchant, &5_000_000, &u64::MAX);
 
@@ -248,7 +248,7 @@ fn pause_and_unpause_emit_events() {
     client.pause(&admin);
     client.unpause(&admin);
     // after unpause, proposals work again
-    let settlement_id = client.propose_settlement(&admin, &merchant, &1_000);
+    let settlement_id = client.propose_settlement(&admin, &merchant, &1_000, &0_u64);
     assert_eq!(settlement_id, 1);
 }
 

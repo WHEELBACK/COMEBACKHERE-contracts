@@ -144,7 +144,7 @@ fn release_escrow_then_execute_settlement_happy_path_ordering() {
 
     let settlement_id = fx
         .treasury
-        .propose_settlement(&fx.admin, &fx.merchant, &amount);
+        .propose_settlement(&fx.admin, &fx.merchant, &amount, &0_u64);
     fx.treasury
         .execute_settlement(&fx.admin, &settlement_id, &fx.token_id);
 
@@ -193,7 +193,7 @@ fn settlement_proposed_before_release_still_executes_correctly_after() {
 
     let settlement_id = fx
         .treasury
-        .propose_settlement(&fx.admin, &fx.merchant, &amount);
+        .propose_settlement(&fx.admin, &fx.merchant, &amount, &0_u64);
 
     fx.invoice.release_escrow(&fx.admin, &inv_id);
     assert_eq!(
