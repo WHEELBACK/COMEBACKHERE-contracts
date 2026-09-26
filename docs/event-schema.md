@@ -99,6 +99,8 @@ Source: `contracts/compliance/src/lib.rs` (single-file contract; no submodules).
 | `compliance_paused` | `(Symbol,)` | `Address` (admin) | `pause` |
 | `compliance_unpaused` | `(Symbol,)` | `Address` (admin) | `unpause` |
 | `operator_set` | `(Symbol,)` | `Address` (operator) | `set_operator` |
+| `tier_limit_set` | `(Symbol,)` | `(u32, i128)` — `(tier, limit)` | `set_tier_limit` |
+| `jurisdiction_set` | `(Symbol,)` | `(Address, Bytes)` — `(address, code)` | `set_jurisdiction` |
 
 None of these events carry the address in a second topic — indexers must decode the
 data payload (or, for the tuple-payload events, its first element) to key by address.
