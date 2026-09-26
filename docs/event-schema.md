@@ -127,6 +127,19 @@ Source: `contracts/settlement-workflow/src/lib.rs`.
 |---|---|---|---|
 | `workflow_initialized` | `(Symbol,)` | `(Address, Address)` — `(compliance_id, treasury_id)` | `initialize` |
 | `settlement_workflow_executed` | `(Symbol, settlement_id: u64)` | `(Address, Address)` — `(merchant, token_contract)` | `execute_with_compliance`, `execute_with_compliance_batch` (per settlement actually executed) |
+| `emergency_pause_configured` | `(Symbol,)` | `(Address, Vec<Address>)` — `(admin, targets)` | `initialize_emergency_pause` |
+| `emergency_pause_completed` | `(Symbol,)` | `(Address, Vec<Address>)` — `(admin, paused)` | `emergency_pause_all` |
+| `emergency_pause_resumed` | `(Symbol,)` | `Vec<Address>` — `(resumed)` | `resume_all` |
+
+### Emergency pause coordination (#73)
+
+`emergency_pause_completed` is emitted **only after every target has confirmed
+the pause**, and `emergency_pause_resumed` only after every target has confirmed
+the unpause. Neither event is ever emitted for a partial sweep: a target that
+refuses fails the whole call, which reverts the sweep, so the absence of
+`emergency_pause_completed` is itself the signal that nothing was paused. An
+off-chain monitor should treat `get_emergency_paused_at()` returning a timestamp
+as authoritative for the same reason — it is written last, after the fan-out.
 
 `settlement_workflow_executed` exists specifically so indexers can distinguish
 compliance-gated execution from a direct `Treasury::execute_settlement` call, which

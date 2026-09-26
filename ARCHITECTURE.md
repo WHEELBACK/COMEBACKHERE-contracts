@@ -192,6 +192,25 @@ Each contract defines error codes via a `#[contracterror]` enum. New variants **
 
 > **Note:** `ComplianceError` enum exists separately with code `AlreadyInitialized = 1` for historical compatibility. New error variants should be added to `ContractError`.
 
+### Settlement Workflow Contract (`WorkflowError` — range 1..=10)
+
+Coordination errors raised by the workflow contract itself, distinct from the
+`TreasuryError` values its settlement path returns (borrowed from `multisig`
+because that crate was already a dependency).
+
+| Code | Name | Description |
+|---|---|---|
+| 1 | `Unauthorized` | Caller is not the configured emergency-pause admin |
+| 2 | `NotConfigured` | `initialize_emergency_pause` has not been called, so there is no target set |
+| 3 | `PauseTargetFailed` | A target refused to pause; the whole sweep is rolled back, so nothing is left paused (#73) |
+| 4 | `UnpauseTargetFailed` | A target refused to unpause; the whole sweep is rolled back, so nothing is left resumed (#73) |
+| 5 | `NoPauseTargets` | An empty target set was supplied |
+| 6 | `TooManyPauseTargets` | More than `MAX_PAUSE_TARGETS` (8) targets |
+| 7 | `DuplicatePauseTarget` | The same address appears twice in the target set |
+| 8 | `SelfPauseTarget` | The workflow contract itself was supplied as a target |
+| 9 | `EmergencyPauseActive` | The target set cannot be repointed while an emergency pause is open |
+| 10 | `NotEmergencyPaused` | `resume_all` was called with no emergency pause active |
+
 ---
 
 ## Shared Crates — Types, Not Storage
@@ -228,6 +247,15 @@ SettlementWorkflow
   ├── Compliance::is_allowed(merchant)      → compliance gate; if false, returns Err(ComplianceCheckFailed)
   └── Treasury::execute_settlement(...)     → called ONLY if the gate passes; transfers tokens to merchant
 
+SettlementWorkflow (emergency pause coordination, #73)
+  └── {Invoice,Treasury,Compliance}::pause(admin)
+       → fanned out over the configured target set in order, passing this
+         contract's own address as `admin`. All-or-nothing: the first target that
+         does not return Ok aborts the whole call with PauseTargetFailed, and
+         returning Err reverts the targets already paused. The orchestrator's
+         only authority over the rest of the protocol is "stop it" — the client
+         trait declares pause/unpause and nothing else.
+
 Treasury::execute_settlement
   └── Token::transfer(treasury → merchant)  → SEP-41 token transfer
 
@@ -238,6 +266,9 @@ Invoice::process_refund                      → verify payment state, then
 Invoice (cross-contract calls: Token only, on the refund payout path)
 Treasury (standalone — no outbound cross-contract calls except Token)
 Compliance (standalone — no outbound cross-contract calls)
+SettlementWorkflow (cross-contract calls: Compliance::is_allowed and
+  Treasury::execute_settlement on the settlement path, plus pause/unpause on the
+  emergency-pause path)
 ```
 
 ### Cross-Contract Compliance Call Failure Modes

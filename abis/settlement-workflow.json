@@ -1,8 +1,18 @@
 {
   "functions": [
+    "emergency_pause_all",
     "execute_with_compliance",
     "execute_with_compliance_batch",
-    "initialize"
+    "get_emergency_pause_admin",
+    "get_emergency_pause_targets",
+    "get_emergency_paused_at",
+    "initialize",
+    "initialize_emergency_pause",
+    "resume_all"
   ],
-  "events": []
+  "events": [
+    "emergency_pause_completed",
+    "emergency_pause_configured",
+    "emergency_pause_resumed"
+  ]
 }

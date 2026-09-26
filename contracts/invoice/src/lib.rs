@@ -16,7 +16,7 @@ pub use events::{
     EscrowReleasedEvent, InvoiceAmountUpdatedEvent, InvoiceExpiryExtendedEvent,
     RefundProcessedEvent,
 };
-use invoice::StatusTransition;
+pub use invoice::StatusTransition;
 pub use invoice::{
     BatchInvoiceParams, DataKey, Invoice, InvoiceError, InvoiceStatus, MaybeAddress, MaybeBytes,
     MAX_BATCH_EXPIRE, MAX_BATCH_SIZE,

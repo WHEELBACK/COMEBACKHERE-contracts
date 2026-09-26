@@ -2,8 +2,9 @@
 //!
 //! The orchestrator's key space is small but load-bearing: `ComplianceId` and
 //! `TreasuryId` pin which instances the compliance gate trusts, so a collision
-//! there would route settlements through an unpinned contract. See
-//! `docs/STORAGE_VERSIONING.md`.
+//! there would route settlements through an unpinned contract, and
+//! `EmergencyPauseAdmin` / `EmergencyPauseTargets` pin who may stop the protocol
+//! and which contracts that covers (#73). See `docs/STORAGE_VERSIONING.md`.
 
 use settlement_workflow::DataKey;
 use soroban_sdk::{xdr::ToXdr, Env};
@@ -35,5 +36,14 @@ fn every_variant_serializes_uniquely() {
         ),
         ("ComplianceId", xdr(&env, DataKey::ComplianceId)),
         ("TreasuryId", xdr(&env, DataKey::TreasuryId)),
+        (
+            "EmergencyPauseAdmin",
+            xdr(&env, DataKey::EmergencyPauseAdmin),
+        ),
+        (
+            "EmergencyPauseTargets",
+            xdr(&env, DataKey::EmergencyPauseTargets),
+        ),
+        ("EmergencyPausedAt", xdr(&env, DataKey::EmergencyPausedAt)),
     ]);
 }
