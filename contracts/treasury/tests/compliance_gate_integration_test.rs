@@ -182,7 +182,7 @@ fn settlement_rejected_when_compliance_paused_and_unable_to_pass() {
         setup();
 
     // While paused, allow/block operations are disabled, so merchant cannot be made passing.
-    compliance.pause(&admin);
+    compliance.pause(&admin, &soroban_sdk::symbol_short!("maint"));
 
     let settlement_id = treasury.propose_settlement(&admin, &merchant, &10_000_000);
 

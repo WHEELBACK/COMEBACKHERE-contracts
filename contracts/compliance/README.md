@@ -19,8 +19,12 @@ The Compliance contract manages an allowlist of addresses permitted to interact 
 | `transfer_admin` | `admin` | `admin: Address, new_admin: Address` | `Result<(), ContractError>` | `Unauthorized` |
 | `accept_admin` | `new_admin` | `new_admin: Address` | `Result<(), ContractError>` | `Unauthorized` |
 | `clear_address` | `admin` | `admin: Address, address: Address` | `Result<(), ContractError>` | `Unauthorized` |
-| `pause` | `admin` | `admin: Address` | `Result<(), ContractError>` | `Unauthorized` |
+| `pause` | `admin` | `admin: Address, reason: Symbol` | `Result<(), ContractError>` | `Unauthorized` |
 | `unpause` | `admin` | `admin: Address` | `Result<(), ContractError>` | `Unauthorized` |
+| `get_pause_reason` | None | — | `Option<Symbol>` | None |
+| `set_blocklist_root` | `admin` | `admin: Address, root: BytesN<32>` | `Result<(), ContractError>` | `Unauthorized` |
+| `get_blocklist_root` | None | — | `Option<BytesN<32>>` | None |
+| `is_blocked_with_proof` | None | `address: Address, proof: Vec<BytesN<32>>` | `bool` | None |
 
 ## CLI usage examples
 
@@ -167,3 +171,100 @@ blocks list *mutations*, not `is_allowed` reads.
 | `block_address`, `block_address_until`, `bulk_block_addresses`, `clear_address` | Yes (emergency remediation policy) |
 | `is_allowed`, `is_blocked`, `address_status`, `export_snapshot*` | Yes — reads are never gated by `Paused` |
 | `sweep_expired` | Yes — no `require_not_paused` call in its implementation |
+| `set_blocklist_root` | Yes (emergency remediation policy) |
+
+## Tier and allow-expiry interaction
+
+A tier (set by `allow_address_with_tier`) is metadata stored independently of
+allow status. Allow expiry and `sweep_expired` never clear it:
+
+| State | `is_allowed` | `get_address_tier` |
+|---|---|---|
+| Tiered, allow not yet expired | `true` | stored tier |
+| Tiered, allow expired (swept or not) | `false` | stored tier (unchanged) |
+| `allow_address_until` then `allow_address_with_tier` | `true` (allow becomes permanent) | stored tier |
+| Never tiered, allow expired | `false` | `0` |
+
+Integrators must gate on `is_allowed` first and only then read the tier; a
+non-zero tier alone does **not** mean the address is currently allowed. See
+`tests/tier_expiry_interaction_test.rs`.
+
+## Operator guide
+
+Daily workflows for the compliance admin. Every command below uses the same
+`$COMPLIANCE_CONTRACT` / `$ADMIN` / `$ADDRESS` / `$NETWORK` placeholders.
+
+### Roles
+
+| Role | Can | Cannot |
+|---|---|---|
+| Admin | Every mutation: allow, block, clear, expiry, tier, pause/unpause, sweep, blocklist root, `set_operator`, `transfer_admin` | Allow addresses while paused |
+| Operator (`set_operator`) | `address_status` | Any allow/block/pause mutation |
+| Anyone | `is_allowed`, `is_blocked`, `is_blocked_with_proof`, `get_*` getters | Any mutation |
+
+### Allow an address (permanently, with a tier, or until a timestamp)
+
+```sh
+stellar contract invoke --id $COMPLIANCE_CONTRACT --source $ADMIN --network $NETWORK \
+  -- allow_address --admin $ADMIN --address $ADDRESS
+
+stellar contract invoke --id $COMPLIANCE_CONTRACT --source $ADMIN --network $NETWORK \
+  -- allow_address_with_tier --admin $ADMIN --address $ADDRESS --tier 1
+
+# Expiry is a UNIX timestamp; the allow lapses once ledger time >= expires_at.
+stellar contract invoke --id $COMPLIANCE_CONTRACT --source $ADMIN --network $NETWORK \
+  -- allow_address_until --admin $ADMIN --address $ADDRESS --expires_at 1767225600
+```
+
+Check the expiry with `get_allow_expiry --address $ADDRESS`.
+
+### Block an address
+
+```sh
+stellar contract invoke --id $COMPLIANCE_CONTRACT --source $ADMIN --network $NETWORK \
+  -- block_address --admin $ADMIN --address $ADDRESS --reason 6f666163
+
+# Temporary block, lifted automatically at the given timestamp.
+stellar contract invoke --id $COMPLIANCE_CONTRACT --source $ADMIN --network $NETWORK \
+  -- block_address_until --admin $ADMIN --address $ADDRESS --unblock_at 1767225600
+```
+
+A block always overrides an allow. `clear_address` removes the block.
+
+### Sweep expired allows
+
+Lapsed allows already fail `is_allowed`; `sweep_expired` removes their storage
+entries. Run it periodically (e.g. daily):
+
+```sh
+stellar contract invoke --id $COMPLIANCE_CONTRACT --source $ADMIN --network $NETWORK \
+  -- sweep_expired --admin $ADMIN
+```
+
+### Export a snapshot
+
+```sh
+stellar contract invoke --id $COMPLIANCE_CONTRACT --source $ADMIN --network $NETWORK \
+  -- export_snapshot_page --admin $ADMIN --start 0 --limit 100
+```
+
+Advance `--start` by `--limit` until an empty page is returned and archive the output.
+
+### Incident response
+
+1. **Block first.** Block the offending address(es) immediately. Blocking works
+   even while paused, so do not wait on step 2.
+2. **Pause if the list itself is at risk** (compromised key, bad bulk import),
+   with a reason code:
+   ```sh
+   stellar contract invoke --id $COMPLIANCE_CONTRACT --source $ADMIN --network $NETWORK \
+     -- pause --admin $ADMIN --reason incident
+   ```
+   Pausing stops new allows; `is_allowed` reads keep working. Use reason codes
+   such as `maint`, `incident` or `investig` (max 32 chars, `[a-zA-Z0-9_]`).
+3. **Verify the block took effect:** `is_allowed --address $ADDRESS` must return
+   `false` and `is_blocked --address $ADDRESS` must return `true`.
+4. **Remediate**, e.g. `clear_address` wrongly blocked addresses or rotate the
+   blocklist root with `set_blocklist_root`.
+5. **Unpause** with `unpause --admin $ADMIN` once resolved; `get_pause_reason`
+   then returns `None`.

@@ -38,7 +38,7 @@ fn setup() -> Ctx {
 fn entrypoints_documented_as_permitted_while_paused_are_not_blocked() {
     let Ctx { env, admin, client } = setup();
     let addr = Address::generate(&env);
-    client.pause(&admin);
+    client.pause(&admin, &soroban_sdk::symbol_short!("maint"));
 
     // block_address: "permitted while paused (emergency policy)".
     client.block_address(&admin, &addr, &None);
@@ -78,7 +78,7 @@ fn entrypoints_documented_as_permitted_while_paused_are_not_blocked() {
 fn entrypoints_documented_as_pause_gated_are_blocked() {
     let Ctx { env, admin, client } = setup();
     let addr = Address::generate(&env);
-    client.pause(&admin);
+    client.pause(&admin, &soroban_sdk::symbol_short!("maint"));
 
     assert_eq!(
         client.try_allow_address(&admin, &addr),
@@ -117,7 +117,7 @@ fn entrypoints_documented_as_pause_gated_are_blocked() {
 fn block_address_until_with_reason_bypasses_pause() {
     let Ctx { env, admin, client } = setup();
     let addr = Address::generate(&env);
-    client.pause(&admin);
+    client.pause(&admin, &soroban_sdk::symbol_short!("maint"));
 
     let reason = Bytes::from_slice(&env, b"sanctions-match");
     client.block_address_until(

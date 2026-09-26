@@ -44,7 +44,7 @@ fn pause_and_unpause_emit_events() {
     client.allow_address(&admin, &payer);
     assert!(client.is_allowed(&payer));
     // pause: state is set; subsequent allow is blocked (tested via unpause round-trip)
-    client.pause(&admin);
+    client.pause(&admin, &soroban_sdk::symbol_short!("maint"));
     client.unpause(&admin);
     // after unpause, allow_address works again
     let payer2 = Address::generate(&env);
@@ -62,7 +62,7 @@ fn block_and_clear_permitted_while_paused() {
     let client = ComplianceContractClient::new(&env, &id);
     client.initialize(&admin);
     client.allow_address(&admin, &payer);
-    client.pause(&admin);
+    client.pause(&admin, &soroban_sdk::symbol_short!("maint"));
     // block and clear must succeed even while paused (emergency policy)
     client.block_address(&admin, &payer, &None);
     assert!(!client.is_allowed(&payer));
@@ -86,7 +86,7 @@ fn allow_address_mutation_succeeds_after_unpause() {
     assert!(client.is_allowed(&address1));
 
     // Pause then unpause
-    client.pause(&admin);
+    client.pause(&admin, &soroban_sdk::symbol_short!("maint"));
     client.unpause(&admin);
 
     // Allow address2 should now work
@@ -109,7 +109,7 @@ fn block_address_mutation_succeeds_after_unpause() {
     assert!(client.is_allowed(&address));
 
     // Pause then unpause
-    client.pause(&admin);
+    client.pause(&admin, &soroban_sdk::symbol_short!("maint"));
     client.unpause(&admin);
 
     // Block address should now work
@@ -133,7 +133,7 @@ fn clear_address_mutation_succeeds_after_unpause() {
     assert!(!client.is_allowed(&address));
 
     // Pause then unpause
-    client.pause(&admin);
+    client.pause(&admin, &soroban_sdk::symbol_short!("maint"));
     client.unpause(&admin);
 
     // Clear address should now work
@@ -197,7 +197,7 @@ fn revoke_allow_returns_contract_paused_when_paused() {
     let id = env.register_contract(None, ComplianceContract);
     let client = ComplianceContractClient::new(&env, &id);
     client.initialize(&admin);
-    client.pause(&admin);
+    client.pause(&admin, &soroban_sdk::symbol_short!("maint"));
 
     let result = client.try_revoke_allow(&admin, &address);
     assert_eq!(result, Err(Ok(ContractError::ContractPaused)));
@@ -219,7 +219,7 @@ fn read_only_queries_not_blocked_by_pause() {
     client.block_address(&admin, &blocked_address, &None);
 
     // Pause the contract
-    client.pause(&admin);
+    client.pause(&admin, &soroban_sdk::symbol_short!("maint"));
 
     // Read-only queries should still work
     assert!(client.is_allowed(&allowed_address));
@@ -238,7 +238,7 @@ fn unpause_emits_event_and_restores_allow() {
     let id = env.register_contract(None, ComplianceContract);
     let client = ComplianceContractClient::new(&env, &id);
     client.initialize(&admin);
-    client.pause(&admin);
+    client.pause(&admin, &soroban_sdk::symbol_short!("maint"));
     client.unpause(&admin);
     client.allow_address(&admin, &payer);
     assert!(client.is_allowed(&payer));
@@ -570,7 +570,7 @@ fn allow_address_returns_contract_paused_when_paused() {
     let id = env.register_contract(None, ComplianceContract);
     let client = ComplianceContractClient::new(&env, &id);
     client.initialize(&admin);
-    client.pause(&admin);
+    client.pause(&admin, &soroban_sdk::symbol_short!("maint"));
 
     let result = client.try_allow_address(&admin, &address);
     assert_eq!(result, Err(Ok(ContractError::ContractPaused)));
@@ -745,7 +745,7 @@ fn export_snapshot_expired_temp_allow_shows_expired() {
 #[test]
 fn paused_contract_rejects_allow_address() {
     let (_env, admin, subject, client) = setup();
-    client.pause(&admin);
+    client.pause(&admin, &soroban_sdk::symbol_short!("maint"));
     let result = client.try_allow_address(&admin, &subject);
     assert_eq!(result, Err(Ok(ContractError::ContractPaused)));
 }
@@ -754,7 +754,7 @@ fn paused_contract_rejects_allow_address() {
 fn paused_contract_rejects_allow_address_until() {
     let (env, admin, subject, client) = setup();
     let expires_at = env.ledger().timestamp() + 1000;
-    client.pause(&admin);
+    client.pause(&admin, &soroban_sdk::symbol_short!("maint"));
     let result = client.try_allow_address_until(&admin, &subject, &expires_at);
     assert_eq!(result, Err(Ok(ContractError::ContractPaused)));
 }
@@ -764,7 +764,7 @@ fn unpause_restores_allow_address_and_allow_address_until() {
     let (env, admin, subject, client) = setup();
     let subject2 = Address::generate(&env);
     let expires_at = env.ledger().timestamp() + 1000;
-    client.pause(&admin);
+    client.pause(&admin, &soroban_sdk::symbol_short!("maint"));
     client.unpause(&admin);
     client.allow_address(&admin, &subject);
     assert!(client.is_allowed(&subject));
@@ -833,7 +833,7 @@ fn old_admin_pause_returns_unauthorized_after_transfer() {
     let new_admin = Address::generate(&env);
     client.transfer_admin(&admin, &new_admin);
     client.accept_admin(&new_admin);
-    let result = client.try_pause(&admin);
+    let result = client.try_pause(&admin, &soroban_sdk::symbol_short!("maint"));
     assert_eq!(result, Err(Ok(ContractError::Unauthorized)));
 }
 
