@@ -232,9 +232,24 @@ impl TreasuryContract {
             .get(&DataKey::Settlement(settlement_id))
             .ok_or(TreasuryError::SettlementNotFound)?;
         if settlement.status == SettlementStatus::OnHold {
-            return Err(TreasuryError::SettlementOnHold);
+            // Treat an expired hold as released — check whether the hold still
+            // applies before rejecting execution.
+            let hold_expired = env
+                .storage()
+                .persistent()
+                .get::<_, u64>(&DataKey::HoldExpiry(settlement_id))
+                .map(|expires_at| env.ledger().timestamp() >= expires_at)
+                .unwrap_or(false);
+            if !hold_expired {
+                return Err(TreasuryError::SettlementOnHold);
+            }
+            // Hold has lapsed — treat as Pending for execution purposes.
+            // The status remains OnHold in storage until explicitly released
+            // (lazy evaluation, consistent with compliance's AllowedUntil pattern).
         }
-        if settlement.status != SettlementStatus::Pending {
+        if settlement.status != SettlementStatus::Pending
+            && settlement.status != SettlementStatus::OnHold
+        {
             return Err(TreasuryError::AlreadyExecuted);
         }
         let threshold: u32 = env

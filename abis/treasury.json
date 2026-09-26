@@ -21,6 +21,7 @@
     "get_balance",
     "get_dispute",
     "get_hold_reason",
+    "get_hold_expiry",
     "get_merchant_payout_address",
     "get_pending_metrics",
     "get_pending_settlements",
