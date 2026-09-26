@@ -141,7 +141,8 @@ Source: `contracts/treasury/src/{lib,settlements,disputes,deposits,holds,signers
 | `settlement_partial_executed` | `(Symbol, settlement_id: u64)` | `Settlement` | `partially_execute_settlement` |
 | `settlement_cancelled` | `(Symbol, settlement_id: u64)` | `Settlement` | `cancel_settlement`, `batch_cancel_settlements` (per settlement) |
 | `settlement_force_cancelled` | `(Symbol, settlement_id: u64)` | `(Address, Settlement)` — `(admin, settlement)` | `force_cancel_settlement` (#457; admin-only emergency override, distinct from `settlement_cancelled`) |
-| `settlement_expired` | `(Symbol, settlement_id: u64)` | `Settlement` | `expire_settlement` |
+| `settlement_approval_revoked` | `(Symbol, settlement_id: u64)` | `(Address, Settlement)` — `(signer, settlement)`; `settlement` reflects the approvals and `approval_weight` after the revocation (#577) | `revoke_approval` |
+| `settlement_expired` | `(Symbol, settlement_id: u64)` | `Settlement` — the settlement in its final state, with `status == Expired` (#576) | `expire_settlement` |
 | `settlement_held` | `(Symbol, settlement_id: u64)` | `SettlementHoldReason` | `hold_settlement` |
 | `settlement_released` | `(Symbol, settlement_id: u64)` | `Settlement` | `release_hold` |
 | `merchant_payout_updated` | `(Symbol, merchant: Address)` | `Address` (new_payout_address) | `update_merchant_payout_address` |
