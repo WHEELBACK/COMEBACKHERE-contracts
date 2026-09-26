@@ -70,9 +70,9 @@ uniqueness tests are per-contract and why no global key registry is needed.
 
 | Contract | Key enum | Location | Variants |
 |---|---|---|---|
-| Invoice (escrow + refund records) | `invoice::DataKey` | `contracts/invoice/src/invoice.rs` | 13 |
-| Treasury (escrow, settlements, signers) | `multisig::DataKey` (re-exported as `treasury::DataKey`) | `crates/multisig/src/lib.rs` | 23 |
-| Compliance (allowlist/blocklist) | `compliance::DataKey` | `contracts/compliance/src/lib.rs` | 20 |
+| Invoice (escrow + refund records) | `invoice::DataKey` | `contracts/invoice/src/invoice.rs` | 14 |
+| Treasury (escrow, settlements, signers) | `multisig::DataKey` (re-exported as `treasury::DataKey`) | `crates/multisig/src/lib.rs` | 24 |
+| Compliance (allowlist/blocklist) | `compliance::DataKey` | `contracts/compliance/src/lib.rs` | 22 |
 | Settlement workflow (orchestrator) | `settlement_workflow::DataKey` | `contracts/settlement-workflow/src/lib.rs` | 3 |
 
 ### Issue #86 audit targets and where they live
