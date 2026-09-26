@@ -48,17 +48,42 @@ impl TreasuryContract {
     /// The signer is pruned from storage and excluded from `get_all_signers`.
     /// Existing settlement approval snapshots are not changed, so removing a
     /// signer does not retroactively invalidate in-flight approvals.
+    /// Errors: `QuorumBreak` if removal would reduce total weight below threshold.
     /// Emits: `signer_removed`.
     pub fn remove_signer(env: Env, admin: Address, signer: Address) -> Result<(), TreasuryError> {
         require_admin(&env, &admin);
-        env.storage()
+
+        let threshold: u32 = env.storage().instance().get(&DataKey::Threshold).unwrap_or(0);
+        let signer_weight: u32 = env
+            .storage()
             .instance()
-            .remove(&DataKey::Signer(signer.clone()));
+            .get(&DataKey::Signer(signer.clone()))
+            .unwrap_or(0);
+
         let list: Vec<Address> = env
             .storage()
             .instance()
             .get(&DataKey::SignerList)
             .unwrap_or_else(|| Vec::new(&env));
+
+        let mut total_weight: u32 = 0;
+        for s in list.iter() {
+            let w: u32 = env
+                .storage()
+                .instance()
+                .get(&DataKey::Signer(s.clone()))
+                .unwrap_or(0);
+            total_weight = total_weight.saturating_add(w);
+        }
+
+        let weight_after_removal = total_weight.saturating_sub(signer_weight);
+        if weight_after_removal < threshold {
+            return Err(TreasuryError::QuorumBreak);
+        }
+
+        env.storage()
+            .instance()
+            .remove(&DataKey::Signer(signer.clone()));
         let mut updated = Vec::new(&env);
         for s in list.iter() {
             if s != signer {

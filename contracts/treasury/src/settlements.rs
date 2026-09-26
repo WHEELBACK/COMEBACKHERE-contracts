@@ -6,7 +6,6 @@ use crate::{
 use multisig::{meets_threshold, record_approval, require_authorized_signer, signer_weight};
 use soroban_sdk::{contractimpl, token, Address, Env, Symbol, Vec};
 
-const SETTLEMENT_TTL: u64 = 7 * 24 * 60 * 60;
 
 /// Maximum number of settlement IDs accepted per batch call, consistent with
 /// the batch caps used elsewhere in the workspace (see #8/#21).
@@ -218,6 +217,32 @@ impl TreasuryContract {
     /// `Compliance::is_allowed` and is the recommended, compliance-checked entry point
     /// for executing a settlement (per ARCHITECTURE.md's description of
     /// SettlementWorkflow's role).
+    /// Executes multiple pending settlements in a single transaction.
+    /// Fails atomically: if any settlement cannot be executed, no settlements in the batch are executed.
+    /// Batch size is capped at 100 to stay within Soroban budget limits.
+    /// Panics: `ContractPaused`, `UnauthorizedSigner`.
+    /// Errors: `BatchTooLarge` or any error from execute_settlement.
+    /// Emits: one `settlement_executed` event per settlement executed.
+    pub fn batch_execute_settlements(
+        env: Env,
+        signer: Address,
+        settlement_data: Vec<(u64, Address)>,
+    ) -> Result<(), TreasuryError> {
+        const BATCH_MAX: usize = 100;
+        if settlement_data.len() > BATCH_MAX {
+            return Err(TreasuryError::BatchTooLarge);
+        }
+
+        require_not_paused(&env);
+        require_authorized_signer(&env, &signer);
+
+        for (settlement_id, token_contract) in settlement_data.iter() {
+            Self::execute_settlement(env.clone(), signer.clone(), settlement_id, token_contract)?;
+        }
+
+        Ok(())
+    }
+
     pub fn execute_settlement(
         env: Env,
         signer: Address,
@@ -548,7 +573,12 @@ impl TreasuryContract {
         if settlement.status != SettlementStatus::Pending {
             return Err(TreasuryError::AlreadyExecuted);
         }
-        if env.ledger().timestamp() <= settlement.proposed_at + SETTLEMENT_TTL {
+        let expiry_secs: u64 = env
+            .storage()
+            .instance()
+            .get(&DataKey::SettlementExpirySecs)
+            .unwrap_or(7u64 * 24 * 60 * 60);
+        if env.ledger().timestamp() <= settlement.proposed_at + expiry_secs {
             return Err(TreasuryError::TtlNotElapsed);
         }
         settlement.status = SettlementStatus::Expired;
