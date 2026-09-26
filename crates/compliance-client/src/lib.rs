@@ -1,7 +1,7 @@
 #![no_std]
 
 use multisig::TreasuryError;
-use soroban_sdk::{contractclient, Address, Env};
+use soroban_sdk::{contractclient, Address, Env, Vec};
 
 /// Cross-contract call surface this crate actually needs from the compliance
 /// contract. `#[contractclient]` on a bare trait (no `#[contract]`/
@@ -13,6 +13,7 @@ use soroban_sdk::{contractclient, Address, Env};
 #[contractclient(name = "ComplianceOnlyClient")]
 pub trait ComplianceInterface {
     fn is_allowed(env: Env, address: Address) -> bool;
+    fn bulk_check_addresses(env: Env, addresses: Vec<Address>) -> Vec<bool>;
 }
 
 /// Thin ergonomic wrapper over the compliance contract's `is_allowed` check.
@@ -37,6 +38,12 @@ impl<'a> ComplianceClient<'a> {
 
     pub fn is_allowed(&self, address: &Address) -> bool {
         self.inner.is_allowed(address)
+    }
+
+    /// Check many addresses in one cross-contract call. Results are in the same
+    /// order as `addresses`; bounds are those of the contract entrypoint.
+    pub fn bulk_check_addresses(&self, addresses: &Vec<Address>) -> Vec<bool> {
+        self.inner.bulk_check_addresses(addresses)
     }
 
     /// Convert a failed compliance check into the caller's domain error.
