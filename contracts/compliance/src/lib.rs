@@ -968,9 +968,11 @@ impl ComplianceContract {
 
     /// Returns `true` if `caller` is the stored admin. Does not require auth; callers
     /// use it to branch on privilege *after* an auth check has already run.
+    ///
+    /// Compares against `Some(admin)` rather than unwrapping: a missing admin entry
+    /// means nothing is privileged, which fails closed.
     fn is_admin(env: &Env, caller: &Address) -> bool {
-        let stored: Address = env.storage().instance().get(&DataKey::Admin).unwrap();
-        stored == *caller
+        env.storage().instance().get::<_, Address>(&DataKey::Admin) == Some(caller.clone())
     }
 
     /// Records `placer` as the address that placed the block on `address` (#604).
