@@ -648,6 +648,27 @@ impl ComplianceContract {
     ///
     /// # Events
     /// Publishes `("address_cleared",) → address`.
+    /// Remove the block flag and explicitly allow an address, clearing all related records.
+    ///
+    /// Clears the address to a clean state by removing:
+    /// - `Blocked` flag
+    /// - `BlockedUntil` expiry (if set)
+    /// - `BlockReason` (if set)
+    /// - `Tier` (if set)
+    /// - `AllowedUntil` expiry (if set)
+    ///
+    /// Sets `Allowed` to `true` for a fresh start. Permitted even while paused
+    /// (emergency policy).
+    ///
+    /// # Parameters
+    /// - `admin`: Current administrator. Must authorize this call.
+    /// - `address`: The address to clear.
+    ///
+    /// # Errors
+    /// - [`ContractError::Unauthorized`] if `admin` is not the stored administrator.
+    ///
+    /// # Events
+    /// Publishes `("address_cleared",) → address`.
     pub fn clear_address(env: Env, admin: Address, address: Address) -> Result<(), ContractError> {
         Self::require_admin(&env, &admin)?;
         let was_blocked: bool = env
@@ -666,9 +687,21 @@ impl ComplianceContract {
         env.storage()
             .persistent()
             .remove(&DataKey::BlockedUntil(address.clone()));
+        // Clear block reason
+        env.storage()
+            .persistent()
+            .remove(&DataKey::BlockReason(address.clone()));
         env.storage()
             .persistent()
             .set(&DataKey::Allowed(address.clone()), &true);
+        // Clear allow expiry
+        env.storage()
+            .persistent()
+            .remove(&DataKey::AllowedUntil(address.clone()));
+        // Clear tier
+        env.storage()
+            .persistent()
+            .remove(&DataKey::Tier(address.clone()));
         if was_blocked {
             let count: u64 = env
                 .storage()

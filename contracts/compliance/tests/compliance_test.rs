@@ -1267,3 +1267,80 @@ fn all_mutating_entrypoints_emit_events() {
     client.sweep_expired(&new_admin).unwrap();
     assert_eq!(last_event_symbol(&env), Symbol::new(&env, "address_allow_expired"));
 }
+
+#[test]
+fn clear_address_removes_all_related_records() {
+    let (env, admin, subject, client) = setup();
+    let now = env.ledger().timestamp();
+
+    // Set up address with all related records:
+    // - Tier
+    // - AllowedUntil (expiry)
+    // - Blocked status
+    // - BlockReason
+    // - BlockedUntil
+
+    client.allow_address_with_tier(&admin, &subject, &2).unwrap();
+    assert_eq!(client.get_address_tier(&subject), 2);
+
+    client.block_address(&admin, &subject, &Some(soroban_sdk::Bytes::from_slice(&env, b"fraud"))).unwrap();
+    assert!(client.is_blocked(&subject));
+    assert_eq!(client.get_block_reason(&subject), Some(soroban_sdk::Bytes::from_slice(&env, b"fraud")));
+
+    // Clear the address
+    client.clear_address(&admin, &subject).unwrap();
+
+    // Verify all records are cleared
+    assert!(!client.is_blocked(&subject));
+    assert!(client.is_allowed(&subject));
+    assert_eq!(client.get_block_reason(&subject), None);
+    assert_eq!(client.get_address_tier(&subject), 0); // default tier
+    assert_eq!(client.get_allow_expiry(&subject), None); // no expiry
+}
+
+#[test]
+fn clear_address_removes_tier() {
+    let (env, admin, subject, client) = setup();
+
+    // Set tier
+    client.allow_address_with_tier(&admin, &subject, &3).unwrap();
+    assert_eq!(client.get_address_tier(&subject), 3);
+
+    // Clear address
+    client.clear_address(&admin, &subject).unwrap();
+
+    // Tier should be reset to default (0)
+    assert_eq!(client.get_address_tier(&subject), 0);
+}
+
+#[test]
+fn clear_address_removes_expiry() {
+    let (env, admin, subject, client) = setup();
+    let now = env.ledger().timestamp();
+
+    // Set temporary allow with expiry
+    client.allow_address_until(&admin, &subject, &(now + 1000)).unwrap();
+    assert_eq!(client.get_allow_expiry(&subject), Some(now + 1000));
+
+    // Clear address
+    client.clear_address(&admin, &subject).unwrap();
+
+    // Expiry should be removed
+    assert_eq!(client.get_allow_expiry(&subject), None);
+}
+
+#[test]
+fn clear_address_removes_block_reason() {
+    let (env, admin, subject, client) = setup();
+    let reason = soroban_sdk::Bytes::from_slice(&env, b"sanctions");
+
+    // Block with reason
+    client.block_address(&admin, &subject, &Some(reason.clone())).unwrap();
+    assert_eq!(client.get_block_reason(&subject), Some(reason));
+
+    // Clear address
+    client.clear_address(&admin, &subject).unwrap();
+
+    // Reason should be removed
+    assert_eq!(client.get_block_reason(&subject), None);
+}
