@@ -112,3 +112,24 @@ dedicated follow-up implementation issue, to be reviewed against this document
 before any contract code is written — consistent with the issue's own
 instruction to "propose the approach in the PR description and get it
 reviewed before writing significant contract code."
+
+## Addendum: Merkle-root blocklist import (#608)
+
+Large sanctions lists are committed as a single Merkle root instead of one
+`block_address` call per entry.
+
+- **Leaves:** `sha256(address.to_xdr())`.
+- **Nodes:** `sha256(min(a, b) || max(a, b))` (sorted pair, compared bytewise),
+  so proofs are a plain list of sibling hashes with no index bits.
+- **Storage:** one `BytesN<32>` under `DataKey::BlocklistRoot` (instance).
+- **Rotation:** `set_blocklist_root(admin, root)` replaces the root outright;
+  proofs against the previous root stop verifying immediately. Admin-only, and
+  permitted while paused (same emergency policy as `block_address`). Emits
+  `("blocklist_root_set",) → root`.
+- **Checks:** `is_blocked_with_proof(address, proof)` returns `true` if the
+  address is individually blocked (`is_blocked`) **or** the proof verifies
+  against the root. An empty proof or missing root falls back to `is_blocked`.
+- **Interaction:** `is_allowed` is unchanged and does not consult the root, since
+  it takes no proof. Settlement flows that must honour the imported list call
+  `is_blocked_with_proof` with a proof supplied by the off-chain submitter
+  (built from the same published list the root was computed from).

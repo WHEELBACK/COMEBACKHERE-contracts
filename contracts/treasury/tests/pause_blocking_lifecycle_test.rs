@@ -490,7 +490,8 @@ fn scenario_compliance_paused_blocks_new_allow_so_gate_rejects() {
     );
 
     // Step 3 – PAUSE compliance *before* allowing the merchant
-    f.compliance.pause(&f.admin);
+    f.compliance
+        .pause(&f.admin, &soroban_sdk::symbol_short!("maint"));
 
     // Step 4 – allow_address must be blocked while paused
     let allow_err = f
@@ -578,7 +579,8 @@ fn scenario_compliance_paused_pre_allowed_merchant_can_still_execute() {
         .propose_settlement(&f.admin, &f.merchant, &10_000_000);
 
     // Pause compliance after allow
-    f.compliance.pause(&f.admin);
+    f.compliance
+        .pause(&f.admin, &soroban_sdk::symbol_short!("maint"));
 
     // is_allowed is a read — it still works while paused
     assert!(
@@ -620,7 +622,8 @@ fn scenario_compliance_paused_block_address_is_permitted() {
         .propose_settlement(&f.admin, &f.merchant, &10_000_000);
 
     // Pause compliance
-    f.compliance.pause(&f.admin);
+    f.compliance
+        .pause(&f.admin, &soroban_sdk::symbol_short!("maint"));
 
     // block_address is allowed even while paused (emergency policy)
     let block_result = f.compliance.try_block_address(&f.admin, &f.merchant, &None);

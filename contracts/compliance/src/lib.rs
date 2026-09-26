@@ -22,7 +22,8 @@
 #![no_std]
 
 use soroban_sdk::{
-    contract, contracterror, contractimpl, contracttype, Address, Bytes, Env, Symbol, Vec,
+    contract, contracterror, contractimpl, contracttype, xdr::ToXdr, Address, Bytes, BytesN, Env,
+    Symbol, Vec,
 };
 
 pub use compliance_errors::ComplianceError;
@@ -88,6 +89,10 @@ pub enum DataKey {
     /// Number of addresses in the paged index (instance). Bounded by
     /// `MAX_TRACKED_ADDRESSES`.
     AddrIndexCount,
+    /// Short reason code recorded by the active `pause` (instance). Removed on `unpause`.
+    PauseReason,
+    /// Merkle root of a bulk-imported blocklist (instance). See `set_blocklist_root`.
+    BlocklistRoot,
 }
 
 /// Coarse classification of an address's compliance state.
@@ -674,12 +679,73 @@ impl ComplianceContract {
         Ok(())
     }
 
-    pub fn pause(env: Env, admin: Address) -> Result<(), ContractError> {
+    /// Pause the contract, recording a short reason code (e.g. `maintenance`,
+    /// `incident`, `investigation`) readable via `get_pause_reason`.
+    ///
+    /// # Events
+    /// Publishes `("compliance_paused",) → (admin, reason)`.
+    pub fn pause(env: Env, admin: Address, reason: Symbol) -> Result<(), ContractError> {
         Self::require_admin(&env, &admin)?;
         env.storage().instance().set(&DataKey::Paused, &true);
+        env.storage().instance().set(&DataKey::PauseReason, &reason);
         env.events()
-            .publish((Symbol::new(&env, "compliance_paused"),), admin);
+            .publish((Symbol::new(&env, "compliance_paused"),), (admin, reason));
         Ok(())
+    }
+
+    /// Returns the reason code of the active pause, or `None` if not paused.
+    pub fn get_pause_reason(env: Env) -> Option<Symbol> {
+        env.storage().instance().get(&DataKey::PauseReason)
+    }
+
+    /// Commit (or rotate) the Merkle root of a bulk-imported blocklist. Replaces any
+    /// previous root; passing a new root is how a list update is rotated in.
+    /// Permitted while paused (emergency policy, same as `block_address`).
+    ///
+    /// Leaves are `sha256(address.to_xdr())`; internal nodes hash the sorted pair
+    /// `sha256(min(a, b) || max(a, b))`. See `docs/compliance-sanctions-design.md`.
+    ///
+    /// # Events
+    /// Publishes `("blocklist_root_set",) → root`.
+    pub fn set_blocklist_root(
+        env: Env,
+        admin: Address,
+        root: BytesN<32>,
+    ) -> Result<(), ContractError> {
+        Self::require_admin(&env, &admin)?;
+        env.storage().instance().set(&DataKey::BlocklistRoot, &root);
+        env.events()
+            .publish((Symbol::new(&env, "blocklist_root_set"),), root);
+        Ok(())
+    }
+
+    /// Returns the committed blocklist Merkle root, if any.
+    pub fn get_blocklist_root(env: Env) -> Option<BytesN<32>> {
+        env.storage().instance().get(&DataKey::BlocklistRoot)
+    }
+
+    /// Returns `true` if `address` is individually blocked (`is_blocked`) or `proof`
+    /// proves its membership in the committed blocklist Merkle root.
+    pub fn is_blocked_with_proof(env: Env, address: Address, proof: Vec<BytesN<32>>) -> bool {
+        if Self::is_blocked(env.clone(), address.clone()) {
+            return true;
+        }
+        let root: BytesN<32> = match env.storage().instance().get(&DataKey::BlocklistRoot) {
+            Some(r) => r,
+            None => return false,
+        };
+        let mut node: BytesN<32> = env.crypto().sha256(&address.to_xdr(&env)).into();
+        for sibling in proof.iter() {
+            let (a, b) = if node.to_array() <= sibling.to_array() {
+                (node, sibling)
+            } else {
+                (sibling, node)
+            };
+            let mut buf = Bytes::from_array(&env, &a.to_array());
+            buf.extend_from_array(&b.to_array());
+            node = env.crypto().sha256(&buf).into();
+        }
+        node == root
     }
 
     /// Resume normal operation after a pause.
@@ -695,6 +761,7 @@ impl ComplianceContract {
     pub fn unpause(env: Env, admin: Address) -> Result<(), ContractError> {
         Self::require_admin(&env, &admin)?;
         env.storage().instance().set(&DataKey::Paused, &false);
+        env.storage().instance().remove(&DataKey::PauseReason);
         env.events()
             .publish((Symbol::new(&env, "compliance_unpaused"),), admin);
         Ok(())
