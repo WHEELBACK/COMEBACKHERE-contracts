@@ -20,7 +20,7 @@ fn dispute_resolved_while_hold_active_releases_to_pending() {
     let sid = client.propose_settlement(&admin, &merchant, &10_000_000);
 
     // First, admin places a compliance hold
-    client.hold_settlement(&admin, &sid, &SettlementHoldReason::ComplianceReview);
+    client.hold_settlement(&admin, &sid, &SettlementHoldReason::ComplianceReview, &None);
     assert_eq!(client.get_settlement(&sid).status, SettlementStatus::OnHold);
 
     // Then a dispute is raised (raise_dispute won't change OnHold → OnHold, but records the dispute)
@@ -73,7 +73,7 @@ fn dispute_raised_after_hold_settlement_produces_consistent_state() {
     let sid = client.propose_settlement(&admin, &merchant, &10_000_000);
 
     // Admin puts the settlement on hold
-    client.hold_settlement(&admin, &sid, &SettlementHoldReason::FraudCheck);
+    client.hold_settlement(&admin, &sid, &SettlementHoldReason::FraudCheck, &None);
     assert_eq!(client.get_settlement(&sid).status, SettlementStatus::OnHold);
     assert_eq!(
         client.get_settlement(&sid).hold_reason,

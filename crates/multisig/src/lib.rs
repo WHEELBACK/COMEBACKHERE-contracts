@@ -288,6 +288,10 @@ pub enum DataKey {
     SignerChangeCount,
     /// Persistent storage for a timelocked signer/threshold-change proposal (#447).
     SignerChange(u64),
+    /// Optional UNIX timestamp after which a settlement hold automatically lapses (#592).
+    /// Stored separately from `Settlement` to avoid breaking the ABI snapshot.
+    /// Absent means the hold has no expiry.
+    HoldExpiry(u64),
 }
 
 /// Returns the approval weight assigned to `signer`, or `0` if not registered.

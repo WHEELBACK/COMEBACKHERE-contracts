@@ -971,7 +971,7 @@ fn clear_address_clears_blocked_and_allowed_flags() {
     client.block_address(
         &admin,
         &subject,
-        &Some(soroban_sdk::Bytes::from_slice(&_env, b"bad")),
+        &Some(compliance::BlockReason::Fraud),
     );
     assert!(!client.is_allowed(&subject));
 
@@ -1001,8 +1001,8 @@ fn clear_address_leaves_pre_existing_allowed_until_in_place() {
 
 #[test]
 fn clear_address_leaves_pre_existing_block_reason_in_place() {
-    let (env, admin, subject, client) = setup();
-    let reason = soroban_sdk::Bytes::from_slice(&env, b"fraud");
+    let (_env, admin, subject, client) = setup();
+    let reason = compliance::BlockReason::Fraud;
     client.block_address(&admin, &subject, &Some(reason.clone()));
 
     client.clear_address(&admin, &subject);

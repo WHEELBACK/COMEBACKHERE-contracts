@@ -18,12 +18,12 @@ fn hold_settlement_returns_already_on_hold_when_called_twice() {
 
     let sid = client.propose_settlement(&admin, &merchant, &10_000_000);
     assert_eq!(
-        client.try_hold_settlement(&admin, &sid, &SettlementHoldReason::AdminHold),
+        client.try_hold_settlement(&admin, &sid, &SettlementHoldReason::AdminHold, &None),
         Ok(Ok(()))
     );
 
     assert_eq!(
-        client.try_hold_settlement(&admin, &sid, &SettlementHoldReason::FraudCheck),
+        client.try_hold_settlement(&admin, &sid, &SettlementHoldReason::FraudCheck, &None),
         Err(Ok(TreasuryError::AlreadyOnHold))
     );
 }
@@ -38,7 +38,7 @@ fn hold_settlement_still_returns_already_executed_for_other_non_pending_statuses
     client.cancel_settlement(&admin, &sid);
 
     assert_eq!(
-        client.try_hold_settlement(&admin, &sid, &SettlementHoldReason::AdminHold),
+        client.try_hold_settlement(&admin, &sid, &SettlementHoldReason::AdminHold, &None),
         Err(Ok(TreasuryError::AlreadyExecuted))
     );
 }
@@ -55,7 +55,7 @@ fn get_hold_reason_returns_reason_while_on_hold() {
     assert_eq!(client.get_hold_reason(&sid), SettlementHoldReason::None);
 
     // Hold with a reason
-    client.hold_settlement(&admin, &sid, &SettlementHoldReason::ComplianceReview);
+    client.hold_settlement(&admin, &sid, &SettlementHoldReason::ComplianceReview, &None);
 
     // Reason is retrievable while on hold
     assert_eq!(
@@ -73,7 +73,7 @@ fn get_hold_reason_resets_to_none_after_release() {
     let sid = client.propose_settlement(&admin, &merchant, &10_000_000);
 
     // Hold with a reason
-    client.hold_settlement(&admin, &sid, &SettlementHoldReason::FraudCheck);
+    client.hold_settlement(&admin, &sid, &SettlementHoldReason::FraudCheck, &None);
     assert_eq!(
         client.get_hold_reason(&sid),
         SettlementHoldReason::FraudCheck
