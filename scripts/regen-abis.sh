@@ -34,9 +34,14 @@ extract_functions() {
 }
 
 extract_events() {
-  { grep -rh 'Symbol::new(env, ' "$1" || true; } \
+  # `Symbol::new(&env, "name")` and `Symbol::new(env, "name")` are both emitted in
+  # this codebase depending on whether the surrounding fn takes `Env` by value or
+  # borrows it, so both spellings must be matched — anchoring on `env, ` alone
+  # silently produced empty event lists for treasury / compliance /
+  # settlement-workflow.
+  { grep -rhE 'Symbol::new\(&?env, ' "$1" || true; } \
     | { grep -v '#\[' || true; } \
-    | sed 's/.*Symbol::new(env, "\([^"]*\)").*/\1/' \
+    | sed 's/.*Symbol::new(\(&\)\?env, "\([^"]*\)").*/\2/' \
     | LC_ALL=C sort -u
 }
 

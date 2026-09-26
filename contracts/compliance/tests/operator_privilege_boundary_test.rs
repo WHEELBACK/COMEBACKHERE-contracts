@@ -29,6 +29,23 @@ fn operator_can_call_address_status() {
 }
 
 #[test]
+fn operator_can_place_a_day_to_day_block() {
+    let (env, admin, subject, client) = setup();
+    let operator = Address::generate(&env);
+
+    // Allow subject first
+    client.allow_address(&admin, &subject);
+
+    // Set operator
+    client.set_operator(&admin, &operator);
+
+    // The operator places a day-to-day block (#604) and is recorded as its placer.
+    client.block_address(&operator, &subject, &None);
+    assert!(!client.is_allowed(&subject));
+    assert_eq!(client.get_block_placer(&subject), Some(operator));
+}
+
+#[test]
 fn operator_rejected_from_allow_address() {
     let (env, admin, subject, client) = setup();
     let operator = Address::generate(&env);
@@ -42,7 +59,7 @@ fn operator_rejected_from_allow_address() {
 }
 
 #[test]
-fn operator_rejected_from_block_address() {
+fn operator_cannot_clear_an_admin_placed_block() {
     let (env, admin, subject, client) = setup();
     let operator = Address::generate(&env);
 
@@ -52,25 +69,18 @@ fn operator_rejected_from_block_address() {
     // Set operator
     client.set_operator(&admin, &operator);
 
-    // Operator should NOT be able to call block_address
-    let result = client.try_block_address(&operator, &subject, &None);
-    assert_eq!(result, Err(Ok(ContractError::Unauthorized)));
-}
+    // The admin places the block (e.g. a sanctions block).
+    client.block_address(&admin, &subject, &None);
+    assert_eq!(client.get_block_placer(&subject), Some(admin.clone()));
 
-#[test]
-fn operator_rejected_from_clear_address() {
-    let (env, admin, subject, client) = setup();
-    let operator = Address::generate(&env);
-
-    // Allow subject first
-    client.allow_address(&admin, &subject);
-
-    // Set operator
-    client.set_operator(&admin, &operator);
-
-    // Operator should NOT be able to call clear_address
+    // The operator must not be able to reverse it (#604).
     let result = client.try_clear_address(&operator, &subject);
-    assert_eq!(result, Err(Ok(ContractError::Unauthorized)));
+    assert_eq!(
+        result,
+        Err(Ok(ContractError::OperatorCannotClearAdminBlock))
+    );
+    assert!(client.is_blocked(&subject));
+    assert!(!client.is_allowed(&subject));
 }
 
 #[test]
@@ -115,16 +125,20 @@ fn operator_privilege_correctly_distinguished_in_multiple_operations() {
     let result2 = client.try_address_status(&operator, &subject2);
     assert!(result2.is_ok());
 
-    // Operator cannot perform admin operations (block, allow, clear)
-    assert!(client
-        .try_block_address(&operator, &subject1, &None)
-        .is_err());
+    // Operator may not grant access (allow), and may only reverse its own blocks:
+    // neither subject has an operator-placed block, so the clear is refused.
     assert!(client.try_allow_address(&operator, &subject2).is_err());
     assert!(client.try_clear_address(&operator, &subject1).is_err());
 
     // Admin can still perform all operations
     client.block_address(&admin, &subject1, &None);
     assert!(!client.is_allowed(&subject1));
+
+    // Still refused for the operator: the block is the admin's, not the operator's.
+    assert_eq!(
+        client.try_clear_address(&operator, &subject1),
+        Err(Ok(ContractError::OperatorCannotClearAdminBlock))
+    );
 
     client.clear_address(&admin, &subject1);
     assert!(client.is_allowed(&subject1));

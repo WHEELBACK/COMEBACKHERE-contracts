@@ -115,11 +115,37 @@ Source: `contracts/settlement-workflow/src/lib.rs`.
 | Event | Topics | Data type | Emitted by |
 |---|---|---|---|
 | `workflow_initialized` | `(Symbol,)` | `(Address, Address)` — `(compliance_id, treasury_id)` | `initialize` |
-| `settlement_workflow_executed` | `(Symbol, settlement_id: u64)` | `(Address, Address)` — `(merchant, token_contract)` | `execute_with_compliance`, `execute_with_compliance_batch` (per settlement actually executed) |
+| `settlement_workflow_paused` | `(Symbol,)` | `Address` (admin) | `pause` |
+| `settlement_workflow_unpaused` | `(Symbol,)` | `Address` (admin) | `unpause` |
+| `settlement_workflow_executed` | `(Symbol, settlement_id: u64)` | `(Address, Address, i128)` — `(merchant, token_contract, amount)` | `execute_with_compliance`, `execute_with_compliance_batch` (per settlement actually executed) |
+| `workflow_batch_completed` | `(Symbol,)` | `(u32, u32)` — `(requested, executed)` | `execute_with_compliance_batch` (exactly one, always) |
+
+`settlement_workflow_paused` / `settlement_workflow_unpaused` mirror treasury's
+`treasury_paused` / `treasury_unpaused` pair: while the workflow is paused, both
+`execute_with_compliance` and `execute_with_compliance_batch` are rejected with
+`ContractPaused`, so no settlement reaches the treasury through this contract.
+Pause state is readable via `is_paused`.
 
 `settlement_workflow_executed` exists specifically so indexers can distinguish
 compliance-gated execution from a direct `Treasury::execute_settlement` call, which
 emits its own `settlement_executed` event (below) with no knowledge of the gate.
+The `amount` element is the settlement amount that moved, so the outcome, the
+recipient, and the amount are readable from this one event without correlating
+against `settlement_executed`.
+
+`workflow_batch_completed` carries the batch outcome: `requested` is the number of
+settlement IDs submitted and `executed` is how many were actually executed. A batch
+where `requested != executed` means some IDs were skipped (non-existent,
+already-executed, or threshold-failed), which is otherwise only discoverable by
+diffing the per-item events. It is published even when nothing executed, so a
+fully-skipped batch is still observable.
+
+**Failures emit no event.** A compliance-blocked merchant fails the whole
+invocation, and Soroban discards events from a failed invocation, so there is
+deliberately no "compliance blocked" event to subscribe to — an alert on
+`settlement_workflow_executed` not arriving is not a signal by itself. Alert on the
+failed transaction itself, which carries `ComplianceCheckFailed` (or `ContractPaused`
+while the workflow is halted).
 
 ---
 

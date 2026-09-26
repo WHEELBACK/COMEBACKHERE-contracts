@@ -2,7 +2,17 @@
   "functions": [
     "execute_with_compliance",
     "execute_with_compliance_batch",
-    "initialize"
+    "get_admin",
+    "initialize",
+    "is_paused",
+    "pause",
+    "unpause"
   ],
-  "events": []
+  "events": [
+    "settlement_workflow_executed",
+    "settlement_workflow_paused",
+    "settlement_workflow_unpaused",
+    "workflow_batch_completed",
+    "workflow_initialized"
+  ]
 }

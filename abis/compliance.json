@@ -15,7 +15,9 @@
     "export_snapshot_page",
     "get_address_tier",
     "get_allow_expiry",
+    "get_block_placer",
     "get_block_reason",
+    "get_operator",
     "get_schema_version",
     "initialize",
     "is_allowed",
@@ -27,5 +29,18 @@
     "transfer_admin",
     "unpause"
   ],
-  "events": []
+  "events": [
+    "address_allow_expired",
+    "address_allowed",
+    "address_allowed_until",
+    "address_blocked",
+    "address_blocked_until",
+    "address_cleared",
+    "address_revoked",
+    "admin_transfer_initiated",
+    "admin_transferred",
+    "compliance_paused",
+    "compliance_unpaused",
+    "operator_set"
+  ]
 }
