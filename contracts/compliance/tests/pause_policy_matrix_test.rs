@@ -12,8 +12,8 @@
 //! it in `lib.rs`. If an entrypoint's gating changes without this table (and
 //! the doc comment it mirrors) being updated to match, this test fails.
 
-use compliance::{ComplianceContract, ComplianceContractClient, ContractError};
-use soroban_sdk::{testutils::Address as _, Address, Bytes, Env};
+use compliance::{BlockReason, ComplianceContract, ComplianceContractClient, ContractError};
+use soroban_sdk::{testutils::Address as _, Address, Env};
 
 struct Ctx {
     env: Env,
@@ -119,7 +119,7 @@ fn block_address_until_with_reason_bypasses_pause() {
     let addr = Address::generate(&env);
     client.pause(&admin);
 
-    let reason = Bytes::from_slice(&env, b"sanctions-match");
+    let reason = BlockReason::Sanctions;
     client.block_address_until(
         &admin,
         &addr,

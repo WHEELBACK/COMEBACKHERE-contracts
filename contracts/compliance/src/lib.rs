@@ -22,7 +22,7 @@
 #![no_std]
 
 use soroban_sdk::{
-    contract, contracterror, contractimpl, contracttype, Address, Bytes, Env, Symbol, Vec,
+    contract, contracterror, contractimpl, contracttype, Address, Env, Symbol, Vec,
 };
 
 pub use compliance_errors::ComplianceError;
@@ -137,6 +137,31 @@ pub enum ContractError {
     /// A bulk allow/block call was made before [`BULK_OP_COOLDOWN_SECS`] elapsed since the
     /// caller's previous bulk call (see #454).
     BulkOperationCooldown = 6,
+}
+
+/// Standardised reason codes recorded when an address is blocked (#594).
+///
+/// Replaces the previous free-form `Bytes` reason so that downstream systems
+/// (compliance dashboards, support tooling, reporting pipelines) can filter
+/// and route block events reliably without parsing arbitrary byte strings.
+///
+/// Variants are **append-only** and must never be renumbered; the enum-ordering
+/// CI check (`scripts/check-enum-ordering.sh`) enforces this. New variants must
+/// be added at the end.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum BlockReason {
+    /// Address matched a recognised sanctions list (e.g. OFAC SDN).
+    Sanctions,
+    /// Address is under active fraud investigation.
+    Fraud,
+    /// Address requires manual compliance review before further activity.
+    ManualReview,
+    /// Block ordered by court order or equivalent regulatory instrument.
+    CourtOrder,
+    /// Block reason is known but does not fit another variant; prefer a
+    /// specific variant where possible.
+    Other,
 }
 
 /// Upper bound on the number of distinct addresses tracked in the paged address
@@ -415,7 +440,7 @@ impl ComplianceContract {
         env: Env,
         admin: Address,
         address: Address,
-        reason: Option<Bytes>,
+        reason: Option<BlockReason>,
     ) -> Result<(), ContractError> {
         Self::require_admin(&env, &admin)?;
         env.storage()
@@ -438,7 +463,7 @@ impl ComplianceContract {
         admin: Address,
         address: Address,
         unblock_at: u64,
-        reason: Option<Bytes>,
+        reason: Option<BlockReason>,
     ) -> Result<(), ContractError> {
         Self::require_admin(&env, &admin)?;
         env.storage()
@@ -461,7 +486,7 @@ impl ComplianceContract {
     }
 
     /// Returns the stored block reason for an address, if any.
-    pub fn get_block_reason(env: Env, address: Address) -> Option<Bytes> {
+    pub fn get_block_reason(env: Env, address: Address) -> Option<BlockReason> {
         env.storage()
             .persistent()
             .get(&DataKey::BlockReason(address))
