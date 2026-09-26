@@ -88,6 +88,10 @@ pub enum DataKey {
     /// Number of addresses in the paged index (instance). Bounded by
     /// `MAX_TRACKED_ADDRESSES`.
     AddrIndexCount,
+    /// Maximum settlement amount (in stroops) allowed for a given tier.
+    /// Keyed by tier number; settable only by admin. Maps tiers to their
+    /// transaction limits for KYC-level enforcement.
+    TierLimit(u32),
 }
 
 /// Coarse classification of an address's compliance state.
@@ -380,6 +384,44 @@ impl ComplianceContract {
             .persistent()
             .get(&DataKey::Tier(address))
             .unwrap_or(0u32)
+    }
+
+    /// Set the maximum settlement limit for a given tier.
+    ///
+    /// Only the admin may call this. Tiers are integer identifiers (0, 1, 2, etc.);
+    /// tier 0 is the basic KYC tier. Each tier can have its own limit to enforce
+    /// transaction caps based on compliance level.
+    ///
+    /// # Parameters
+    /// - `admin`: Current administrator. Must authorize this call.
+    /// - `tier`: The tier number to set a limit for.
+    /// - `limit`: The maximum settlement amount (in stroops) for this tier.
+    ///
+    /// # Errors
+    /// - [`ContractError::Unauthorized`] if `admin` is not the stored administrator.
+    ///
+    /// # Events
+    /// Publishes `("tier_limit_set",) → (tier, limit)`.
+    pub fn set_tier_limit(
+        env: Env,
+        admin: Address,
+        tier: u32,
+        limit: i128,
+    ) -> Result<(), ContractError> {
+        Self::require_admin(&env, &admin)?;
+        env.storage()
+            .instance()
+            .set(&DataKey::TierLimit(tier), &limit);
+        env.events()
+            .publish((Symbol::new(&env, "tier_limit_set"),), (tier, limit));
+        Ok(())
+    }
+
+    /// Returns the maximum settlement limit for a given tier, or `None` if unset.
+    pub fn get_tier_limit(env: Env, tier: u32) -> Option<i128> {
+        env.storage()
+            .instance()
+            .get(&DataKey::TierLimit(tier))
     }
 
     /// Block a batch of addresses (admin-only).

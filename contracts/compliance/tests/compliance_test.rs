@@ -1114,3 +1114,47 @@ fn sweep_expired_returns_unauthorized_for_non_admin() {
     let result = client.try_sweep_expired(&non_admin);
     assert_eq!(result, Err(Ok(ContractError::Unauthorized)));
 }
+
+#[test]
+fn set_and_get_tier_limit() {
+    let (_env, admin, _subject, client) = setup();
+    // Initially, tier limits are not set
+    assert_eq!(client.get_tier_limit(&0), None);
+    assert_eq!(client.get_tier_limit(&1), None);
+
+    // Set limit for tier 0 (basic KYC)
+    client.set_tier_limit(&admin, &0, &1_000_000).unwrap();
+    assert_eq!(client.get_tier_limit(&0), Some(1_000_000));
+
+    // Set limit for tier 1 (enhanced KYC)
+    client.set_tier_limit(&admin, &1, &10_000_000).unwrap();
+    assert_eq!(client.get_tier_limit(&1), Some(10_000_000));
+
+    // Verify tier 0 limit is unchanged
+    assert_eq!(client.get_tier_limit(&0), Some(1_000_000));
+}
+
+#[test]
+fn set_tier_limit_emits_event() {
+    let (env, admin, _subject, client) = setup();
+    client.set_tier_limit(&admin, &0, &1_000_000).unwrap();
+
+    let events = env.events().all();
+    let last_event = events.last().unwrap();
+    let event_symbol = Symbol::from_val(&env, &last_event.1.get_unchecked(0));
+    assert_eq!(event_symbol, Symbol::new(&env, "tier_limit_set"));
+}
+
+#[test]
+fn set_tier_limit_unauthorized_for_non_admin() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let admin = Address::generate(&env);
+    let non_admin = Address::generate(&env);
+    let id = env.register_contract(None, ComplianceContract);
+    let client = ComplianceContractClient::new(&env, &id);
+    client.initialize(&admin);
+
+    let result = client.try_set_tier_limit(&non_admin, &0, &1_000_000);
+    assert_eq!(result, Err(Ok(ContractError::Unauthorized)));
+}
