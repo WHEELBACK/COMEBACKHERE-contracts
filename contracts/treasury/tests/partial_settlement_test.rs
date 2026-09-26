@@ -12,7 +12,7 @@ fn setup(env: &Env, total: i128) -> (TreasuryContractClient<'_>, Address, Addres
     let token_id = env.register_stellar_asset_contract(admin.clone());
     soroban_sdk::token::StellarAssetClient::new(env, &token_id).mint(&contract_id, &total);
 
-    let sid = client.propose_settlement(&admin, &merchant, &total);
+    let sid = client.propose_settlement(&admin, &merchant, &total, &0_u64);
     (client, admin, token_id, sid)
 }
 
@@ -50,7 +50,7 @@ fn partially_execute_without_sufficient_approvals_panics() {
     client.initialize(&admin, &10, &soroban_sdk::Vec::new(&env)); // threshold=10, admin weight=1
     let token_id = env.register_stellar_asset_contract(admin.clone());
     soroban_sdk::token::StellarAssetClient::new(&env, &token_id).mint(&contract_id, &1_000_000);
-    let sid = client.propose_settlement(&admin, &merchant, &1_000_000);
+    let sid = client.propose_settlement(&admin, &merchant, &1_000_000, &0_u64);
     client.partially_execute_settlement(&admin, &sid, &500_000, &token_id);
 }
 
@@ -132,7 +132,7 @@ fn partial_settlement_full_sequence() {
     let token_id = env.register_stellar_asset_contract(admin.clone());
     soroban_sdk::token::StellarAssetClient::new(&env, &token_id).mint(&contract_id, &total);
 
-    let sid = client.propose_settlement(&admin, &merchant, &total);
+    let sid = client.propose_settlement(&admin, &merchant, &total, &0_u64);
 
     client.partially_execute_settlement(&admin, &sid, &partial_amount, &token_id);
 

@@ -41,7 +41,7 @@ impl PauseAwareSettlementWorkflow {
         let inv = invoice.get_invoice(&invoice_num);
         let treasury = TreasuryContractClient::new(&env, &treasury_id);
         let signer = env.current_contract_address();
-        Ok(treasury.propose_settlement(&signer, &inv.merchant, &inv.amount_usdc))
+        Ok(treasury.propose_settlement(&signer, &inv.merchant, &inv.amount_usdc, &0_u64))
     }
 }
 

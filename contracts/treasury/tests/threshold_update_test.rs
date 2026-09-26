@@ -21,7 +21,7 @@ fn admin_can_update_threshold() {
     // admin(1) + backup(4) = total weight 5; threshold 5 is reachable
     client.update_threshold(&admin, &5);
 
-    let sid = client.propose_settlement(&admin, &merchant, &1_000_000);
+    let sid = client.propose_settlement(&admin, &merchant, &1_000_000, &0_u64);
     let s = client.approve_settlement(&backup, &sid);
     assert_eq!(s.approvals.len(), 2);
 }
@@ -59,7 +59,7 @@ fn threshold_update_takes_effect_for_future_executions() {
     client.update_threshold(&admin, &1);
 
     let merchant = Address::generate(&env);
-    let sid = client.propose_settlement(&admin, &merchant, &1_000_000);
+    let sid = client.propose_settlement(&admin, &merchant, &1_000_000, &0_u64);
     let token_id = env.register_stellar_asset_contract(admin.clone());
     soroban_sdk::token::StellarAssetClient::new(&env, &token_id)
         .mint(&env.register_contract(None, TreasuryContract), &1_000_000);

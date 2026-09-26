@@ -114,7 +114,7 @@ fn execute_settlement_uses_merchant_payout_override() {
     treasury_client.update_merchant_payout_address(&merchant, &payout_override);
 
     // Propose and execute settlement
-    let settlement_id = treasury_client.propose_settlement(&admin, &merchant, &10_000_000);
+    let settlement_id = treasury_client.propose_settlement(&admin, &merchant, &10_000_000, &0_u64);
     treasury_client.execute_settlement(&admin, &settlement_id, &token_id);
 
     // Verify tokens were sent to payout override, not merchant
@@ -182,7 +182,7 @@ fn reentrant_payout_address_change_does_not_redirect_mid_settlement() {
     treasury_client.update_merchant_payout_address(&merchant, &original_payout);
 
     // Propose settlement
-    let settlement_id = treasury_client.propose_settlement(&admin, &merchant, &10_000_000);
+    let settlement_id = treasury_client.propose_settlement(&admin, &merchant, &10_000_000, &0_u64);
 
     // Execute settlement — the malicious token's transfer attempts to re-enter
     // the treasury to change the payout address mid-flight. Soroban's host

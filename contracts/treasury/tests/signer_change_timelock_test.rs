@@ -291,7 +291,7 @@ fn update_threshold_change_applies_new_threshold() {
     // The settlement below with only admin approving (weight=1) should NOT execute
     // because the threshold is now 3.
     let merchant = Address::generate(&env);
-    let sid = client.propose_settlement(&admin, &merchant, &1_000);
+    let sid = client.propose_settlement(&admin, &merchant, &1_000, &0_u64);
     let settlement = client.approve_settlement(&admin, &sid);
     // approval_weight is 1 (only admin), threshold is 3 → not yet executed.
     assert_eq!(settlement.approval_weight, 1);

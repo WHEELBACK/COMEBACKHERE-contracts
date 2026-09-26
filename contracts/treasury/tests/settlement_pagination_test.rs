@@ -13,7 +13,7 @@ fn setup_with_settlements(env: &Env, n: u64) -> (TreasuryContractClient<'_>, Add
     client.initialize(&admin, &100, &soroban_sdk::Vec::new(env));
     for _ in 0..n {
         let merchant = Address::generate(env);
-        client.propose_settlement(&admin, &merchant, &1_000_000);
+        client.propose_settlement(&admin, &merchant, &1_000_000, &0_u64);
     }
     (client, admin)
 }
@@ -33,7 +33,7 @@ fn setup_with_interspersed_executions<'a>(
     let mut sid = 0u64;
     for &executed in pattern {
         let merchant = Address::generate(env);
-        sid = client.propose_settlement(&admin, &merchant, &1_000_000);
+        sid = client.propose_settlement(&admin, &merchant, &1_000_000, &0_u64);
         if executed {
             client.execute_settlement(&admin, &sid, &token_id);
         }

@@ -17,7 +17,7 @@ fn dispute_resolved_while_hold_active_releases_to_pending() {
     let merchant = Address::generate(&env);
     let claimant = Address::generate(&env);
 
-    let sid = client.propose_settlement(&admin, &merchant, &10_000_000);
+    let sid = client.propose_settlement(&admin, &merchant, &10_000_000, &0_u64);
 
     // First, admin places a compliance hold
     client.hold_settlement(&admin, &sid, &SettlementHoldReason::ComplianceReview);
@@ -44,7 +44,7 @@ fn second_dispute_keeps_hold_after_first_resolved() {
     let claimant_a = Address::generate(&env);
     let claimant_b = Address::generate(&env);
 
-    let sid = client.propose_settlement(&admin, &merchant, &10_000_000);
+    let sid = client.propose_settlement(&admin, &merchant, &10_000_000, &0_u64);
 
     // Two disputes raised against the same settlement
     let did_a = client.raise_dispute(&claimant_a, &sid, &merchant, &5_000_000, &500);
@@ -70,7 +70,7 @@ fn dispute_raised_after_hold_settlement_produces_consistent_state() {
     let merchant = Address::generate(&env);
     let claimant = Address::generate(&env);
 
-    let sid = client.propose_settlement(&admin, &merchant, &10_000_000);
+    let sid = client.propose_settlement(&admin, &merchant, &10_000_000, &0_u64);
 
     // Admin puts the settlement on hold
     client.hold_settlement(&admin, &sid, &SettlementHoldReason::FraudCheck);
@@ -109,7 +109,7 @@ fn execute_settlement_rejected_while_dispute_active() {
     // Add token to allowlist to avoid TokenNotAllowed error
     client.add_allowed_token(&admin, &token_id);
 
-    let sid = client.propose_settlement(&admin, &merchant, &10_000_000);
+    let sid = client.propose_settlement(&admin, &merchant, &10_000_000, &0_u64);
 
     // Raise a dispute — settlement goes OnHold
     client.raise_dispute(&claimant, &sid, &merchant, &5_000_000, &500);

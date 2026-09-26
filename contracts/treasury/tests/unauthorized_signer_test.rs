@@ -21,7 +21,7 @@ fn unauthorized_signer_cannot_propose_settlement() {
     let merchant = Address::generate(&env);
 
     // This should panic with "UnauthorizedSigner" because unauthorized has weight 0
-    client.propose_settlement(&unauthorized, &merchant, &10_000_000);
+    client.propose_settlement(&unauthorized, &merchant, &10_000_000, &0_u64);
 }
 
 #[test]
@@ -32,7 +32,7 @@ fn unauthorized_signer_cannot_approve_settlement() {
 
     // Create a settlement with the admin (who is authorized)
     let merchant = Address::generate(&env);
-    let settlement_id = client.propose_settlement(&admin, &merchant, &10_000_000);
+    let settlement_id = client.propose_settlement(&admin, &merchant, &10_000_000, &0_u64);
 
     // Try to approve with an unauthorized signer
     let unauthorized = Address::generate(&env);
@@ -49,7 +49,7 @@ fn unauthorized_signer_cannot_approve_partial_settlement() {
 
     // Create a settlement with the admin
     let merchant = Address::generate(&env);
-    let settlement_id = client.propose_settlement(&admin, &merchant, &10_000_000);
+    let settlement_id = client.propose_settlement(&admin, &merchant, &10_000_000, &0_u64);
 
     // Try to approve partial settlement with an unauthorized signer
     let unauthorized = Address::generate(&env);
@@ -66,7 +66,7 @@ fn unauthorized_signer_cannot_execute_settlement() {
 
     // Create and approve a settlement
     let merchant = Address::generate(&env);
-    let settlement_id = client.propose_settlement(&admin, &merchant, &10_000_000);
+    let settlement_id = client.propose_settlement(&admin, &merchant, &10_000_000, &0_u64);
 
     // Try to execute with an unauthorized signer
     let unauthorized = Address::generate(&env);
@@ -84,7 +84,7 @@ fn unauthorized_signer_cannot_cancel_settlement() {
 
     // Create a settlement
     let merchant = Address::generate(&env);
-    let settlement_id = client.propose_settlement(&admin, &merchant, &10_000_000);
+    let settlement_id = client.propose_settlement(&admin, &merchant, &10_000_000, &0_u64);
 
     // Try to cancel with an unauthorized signer
     let unauthorized = Address::generate(&env);
@@ -101,7 +101,7 @@ fn unauthorized_signer_cannot_partially_execute_settlement() {
 
     // Create a settlement
     let merchant = Address::generate(&env);
-    let settlement_id = client.propose_settlement(&admin, &merchant, &10_000_000);
+    let settlement_id = client.propose_settlement(&admin, &merchant, &10_000_000, &0_u64);
 
     // Try to partially execute with an unauthorized signer
     let unauthorized = Address::generate(&env);
@@ -120,7 +120,7 @@ fn unauthorized_signer_cannot_vote_on_dispute_resolution() {
     // Create a settlement and raise a dispute
     let merchant = Address::generate(&env);
     let claimant = Address::generate(&env);
-    let settlement_id = client.propose_settlement(&admin, &merchant, &10_000_000);
+    let settlement_id = client.propose_settlement(&admin, &merchant, &10_000_000, &0_u64);
     let dispute_id =
         client.raise_dispute(&claimant, &settlement_id, &merchant, &5_000_000, &u64::MAX);
 
@@ -176,13 +176,13 @@ fn signer_with_zero_weight_is_unauthorized() {
 
     // Verify they can propose when authorized
     let merchant = Address::generate(&env);
-    let _settlement_id = client.propose_settlement(&former_signer, &merchant, &10_000_000);
+    let _settlement_id = client.propose_settlement(&former_signer, &merchant, &10_000_000, &0_u64);
 
     // Now remove their authorization by setting weight to 0
     client.set_signer(&admin, &former_signer, &0);
 
     // This should now panic with "UnauthorizedSigner"
-    client.propose_settlement(&former_signer, &merchant, &20_000_000);
+    client.propose_settlement(&former_signer, &merchant, &20_000_000, &0_u64);
 }
 
 #[test]
@@ -196,7 +196,7 @@ fn authorized_signer_can_perform_operations() {
 
     // Verify authorized signer can propose settlement
     let merchant = Address::generate(&env);
-    let settlement_id = client.propose_settlement(&authorized_signer, &merchant, &10_000_000);
+    let settlement_id = client.propose_settlement(&authorized_signer, &merchant, &10_000_000, &0_u64);
     assert_eq!(settlement_id, 1);
 
     // Verify authorized signer can approve settlement
@@ -221,7 +221,7 @@ fn unauthorized_signer_cannot_propose_partial_settlement() {
     let merchant = Address::generate(&env);
 
     // This should panic with "UnauthorizedSigner"
-    client.propose_partial_settlement(&unauthorized, &merchant, &5_000_000);
+    client.propose_partial_settlement(&unauthorized, &merchant, &5_000_000, &0_u64);
 }
 
 #[test]
@@ -232,7 +232,7 @@ fn admin_is_automatically_authorized_signer() {
     // Admin should be able to propose settlements without explicit set_signer call
     // because initialize sets admin as a signer with weight 1
     let merchant = Address::generate(&env);
-    let settlement_id = client.propose_settlement(&admin, &merchant, &10_000_000);
+    let settlement_id = client.propose_settlement(&admin, &merchant, &10_000_000, &0_u64);
     assert_eq!(settlement_id, 1);
 }
 
@@ -246,7 +246,7 @@ fn guard_table_propose_settlement_rejects_unauthorized() {
     let env = Env::default();
     let (client, _admin, _) = setup_treasury(&env, 2);
     let merchant = Address::generate(&env);
-    client.propose_settlement(&Address::generate(&env), &merchant, &1_000_000);
+    client.propose_settlement(&Address::generate(&env), &merchant, &1_000_000, &0_u64);
 }
 
 #[test]
@@ -255,7 +255,7 @@ fn guard_table_approve_settlement_rejects_unauthorized() {
     let env = Env::default();
     let (client, admin, _contract_id) = setup_treasury(&env, 2);
     let merchant = Address::generate(&env);
-    let settlement_id = client.propose_settlement(&admin, &merchant, &10_000_000);
+    let settlement_id = client.propose_settlement(&admin, &merchant, &10_000_000, &0_u64);
     let unauthorized = Address::generate(&env);
     client.approve_settlement(&unauthorized, &settlement_id);
 }
@@ -268,7 +268,7 @@ fn guard_table_execute_settlement_rejects_unauthorized() {
     let merchant = Address::generate(&env);
     let unauthorized = Address::generate(&env);
     let token_contract = Address::generate(&env);
-    let settlement_id = client.propose_settlement(&admin, &merchant, &10_000_000);
+    let settlement_id = client.propose_settlement(&admin, &merchant, &10_000_000, &0_u64);
     client.execute_settlement(&unauthorized, &settlement_id, &token_contract);
 }
 
