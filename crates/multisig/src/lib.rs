@@ -395,9 +395,9 @@ pub fn approval_expiry(env: &Env, signer: &Address, ttl_seconds: u64) -> Approva
     let expires_at = if ttl_seconds == 0 {
         0
     } else {
-        approved_at
-            .checked_add(ttl_seconds)
-            .unwrap_or_else(|| soroban_sdk::panic_with_error!(env, TreasuryError::ArithmeticOverflow))
+        approved_at.checked_add(ttl_seconds).unwrap_or_else(|| {
+            soroban_sdk::panic_with_error!(env, TreasuryError::ArithmeticOverflow)
+        })
     };
     ApprovalExpiry {
         signer: signer.clone(),
