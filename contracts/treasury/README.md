@@ -12,6 +12,7 @@ The Treasury contract manages funds and settlements using a multi-signature appr
 | `propose_partial_settlement` | `signer` | `signer: Address, merchant_address: Address, amount: i128` | `u64` | `ContractPaused`, `UnauthorizedSigner`, `InvalidAmount` |
 | `approve_settlement` | `signer` | `signer: Address, settlement_id: u64` | `Settlement` | `ContractPaused`, `UnauthorizedSigner`, `SettlementNotFound`, `AlreadyExecuted` |
 | `approve_partial_settlement` | `signer` | `signer: Address, settlement_id: u64, partial_amount: i128` | `Settlement` | `ContractPaused`, `UnauthorizedSigner`, `SettlementNotFound`, `AlreadyExecuted`, `InvalidAmount` |
+| `batch_approve_settlements` | `signer` | `signer: Address, ids: Vec<u64>` | `Vec<Settlement>` | `ContractPaused`, `UnauthorizedSigner`, `BatchTooLarge`, `WeightOverflow` |
 | `execute_settlement` | `signer` | `signer: Address, settlement_id: u64, token_contract: Address` | `()` | `ContractPaused`, `UnauthorizedSigner`, `SettlementNotFound`, `SettlementOnHold`, `AlreadyExecuted`, `ThresholdNotConfigured`, `ThresholdNotMet`, `InvalidTokenContract`, `TokenNotAllowed` |
 | `partially_execute_settlement` | `signer` | `signer: Address, settlement_id: u64, partial_amount: i128, token_contract: Address` | `()` | `ContractPaused`, `UnauthorizedSigner`, `SettlementNotFound`, `AlreadyExecuted`, `ThresholdNotConfigured`, `ThresholdNotMet`, `InvalidTokenContract`, `InvalidAmount` |
 | `cancel_settlement` | `signer` | `signer: Address, settlement_id: u64` | `()` | `ContractPaused`, `UnauthorizedSigner`, `SettlementNotFound`, `SettlementNotCancellable` |
@@ -41,6 +42,28 @@ The Treasury contract manages funds and settlements using a multi-signature appr
 | `get_merchant_payout_address` | None | `merchant: Address` | `Option<Address>` | None |
 | `hold_settlement` | `admin` | `admin: Address, settlement_id: u64, reason: SettlementHoldReason` | `()` | `Unauthorized`, `SettlementNotFound`, `AlreadyExecuted` |
 | `release_hold` | `admin` | `admin: Address, settlement_id: u64` | `()` | `Unauthorized`, `SettlementNotFound`, `NotOnHold` |
+
+## `batch_approve_settlements` skip semantics
+
+`batch_approve_settlements` accepts a list of settlement IDs and approves each
+`Pending` one in a single transaction. IDs that cannot be approved are **silently
+skipped** rather than aborting the batch — a single bad ID never rolls back the
+approvals already recorded for valid IDs.
+
+The following ID categories are skipped without error:
+
+| Category | Settlement status | Notes |
+|----------|------------------|-------|
+| Unknown ID | *(no record exists)* | The ID was never proposed or has been pruned. |
+| Already executed | `Executed` or `PartiallyExecuted` | The settlement has been paid out. |
+| Expired | `Expired` | The settlement TTL elapsed before it was executed. |
+| Cancelled | `Cancelled` | An admin or signer cancelled the settlement. |
+| On hold | `OnHold` | Blocked by an open dispute; cannot be approved until released. |
+
+**Integrator guidance**: integrators can safely resubmit a partially-failed or
+stale batch. The returned `Vec<Settlement>` contains exactly the settlements that
+were approved in *this* call; previously-approved IDs in the same signer's list
+are deduplicated (no double-count of weight) and produce no error.
 
 ## CLI usage examples
 

@@ -133,6 +133,9 @@ pub struct Settlement {
     pub status: SettlementStatus,
     pub hold_reason: SettlementHoldReason,
     pub proposed_at: u64,
+    /// The intended token for this settlement, captured at proposal time.
+    /// `MaybeAddress::None` means no specific token was specified at proposal time.
+    pub token: MaybeAddress,
 }
 
 #[contracttype]
@@ -248,6 +251,18 @@ pub struct ApprovalExpiry {
     pub expires_at: u64,
 }
 
+/// Nullable `Address` wrapper compatible with `#[contracttype]`.
+///
+/// `Option<Address>` is not supported by the Soroban contract-type macro, so
+/// this enum serves as a manual `Option` for address fields. `None` signals
+/// absence; `Some(addr)` wraps a concrete address.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum MaybeAddress {
+    None,
+    Some(Address),
+}
+
 /// Storage keys for all treasury contract state.
 ///
 /// Used as keys for Soroban instance and persistent storage. Variants must not
@@ -288,6 +303,8 @@ pub enum DataKey {
     SignerChangeCount,
     /// Persistent storage for a timelocked signer/threshold-change proposal (#447).
     SignerChange(u64),
+    /// Last ledger timestamp at which a signer contributed an approval (#587).
+    SignerLastActive(Address),
 }
 
 /// Returns the approval weight assigned to `signer`, or `0` if not registered.
@@ -350,7 +367,8 @@ pub fn require_authorized_signer(env: &Env, signer: &Address) {
 
 /// Adds `signer`'s weight to `weight` and appends `signer` to `approvals`, unless `signer` has
 /// already approved (in which case this is a no-op). Captures the dedup-then-accumulate pattern
-/// used for settlement, dispute, and rotation approvals.
+/// used for settlement, dispute, and rotation approvals. Also records the current ledger timestamp
+/// as the signer's last-active time under `DataKey::SignerLastActive(signer)` (#587).
 ///
 /// # Examples
 ///
@@ -387,6 +405,12 @@ pub fn record_approval(
             .unwrap_or_else(|| soroban_sdk::panic_with_error!(env, TreasuryError::WeightOverflow));
         approvals.push_back(signer.clone());
     }
+    // Always update last-active timestamp, even for duplicate calls, so the
+    // timestamp reflects the most recent approval attempt by this signer.
+    let now = env.ledger().timestamp();
+    env.storage()
+        .instance()
+        .set(&DataKey::SignerLastActive(signer.clone()), &now);
 }
 
 /// Builds expiry metadata for a newly collected approval.
