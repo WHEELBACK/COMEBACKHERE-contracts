@@ -72,7 +72,8 @@ impl TreasuryContract {
     }
 
     /// Transitions a `Raised` dispute to `Expired` after its deadline and releases the
-    /// associated settlement from `OnHold` back to `Pending`.
+    /// associated settlement from `OnHold` back to `Pending` once no other open disputes
+    /// remain against it (mirrors the behaviour of `resolve_dispute`).
     /// Errors: `DisputeNotFound`, `DisputeAlreadyResolved`, `DisputeNotExpired`.
     /// Panics: `Unauthorized`.
     /// Emits: `dispute_expired`.
@@ -90,24 +91,15 @@ impl TreasuryContract {
             return Err(TreasuryError::DisputeNotExpired);
         }
         dispute.status = DisputeStatus::Expired;
+        let settlement_id = dispute.settlement_id;
         env.storage()
             .persistent()
             .set(&DataKey::Dispute(dispute_id), &dispute);
-        if let Some(mut settlement) = env
-            .storage()
-            .persistent()
-            .get::<DataKey, Settlement>(&DataKey::Settlement(dispute.settlement_id))
-        {
-            if settlement.status == SettlementStatus::OnHold {
-                settlement.status = SettlementStatus::Pending;
-                settlement.hold_reason = SettlementHoldReason::None;
-                env.storage()
-                    .persistent()
-                    .set(&DataKey::Settlement(dispute.settlement_id), &settlement);
-            }
-        }
         env.events()
             .publish((Symbol::new(&env, "dispute_expired"), dispute_id), dispute);
+        // Use the shared helper so the hold is only released once all open
+        // disputes referencing this settlement have been resolved or expired.
+        release_settlement_hold_if_no_open_disputes(&env, settlement_id);
         Ok(())
     }
 
