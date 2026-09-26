@@ -17,6 +17,17 @@
 //! (e.g. swapping the order of the Blocked/Allowed checks) will produce a
 //! disagreement here even though it would not show up in a test that just adds
 //! more examples of the same code path.
+//!
+//! # What this does and does not pin
+//!
+//! It pins the **answer** for every combination of state and timestamp. It does
+//! not pin the **order** the storage is read in, and must not be "fixed" to:
+//! #612 deliberately reads `Allowed` before `Blocked`, because an address that
+//! is not allowed is `false` under the precedence regardless of its block flag,
+//! and skipping the block read is what makes `bulk_check_addresses` affordable.
+//! See the README's "Read order in `is_allowed`" section and
+//! `tests/bulk_check_budget_test.rs`. Reordering the reads without changing the
+//! answers is expected and must stay green here; changing an answer must not be.
 
 use compliance::{ComplianceContract, ComplianceContractClient};
 use soroban_sdk::{
