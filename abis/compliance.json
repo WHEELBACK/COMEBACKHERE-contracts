@@ -15,6 +15,7 @@
     "export_snapshot_page",
     "get_address_tier",
     "get_allow_expiry",
+    "get_block_placer",
     "get_block_reason",
     "get_operator",
     "get_schema_version",

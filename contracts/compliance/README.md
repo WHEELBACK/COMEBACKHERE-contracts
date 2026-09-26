@@ -10,7 +10,7 @@ The Compliance contract manages an allowlist of addresses permitted to interact 
 | `is_allowed` | None | `address: Address` | `bool` | None |
 | `is_blocked` | None | `address: Address` | `bool` | None |
 | `allow_address` | `admin` | `admin: Address, address: Address` | `Result<(), ContractError>` | `Unauthorized`, `ContractPaused` |
-| `block_address` | `admin` | `admin: Address, address: Address` | `Result<(), ContractError>` | `Unauthorized` |
+| `block_address` | `admin` or `operator` | `caller: Address, address: Address, reason: Option<Bytes>` | `Result<(), ContractError>` | `Unauthorized`, `AddressIndexFull` |
 | `allow_address_until` | `admin` | `admin: Address, address: Address, expires_at: u64` | `Result<(), ContractError>` | `Unauthorized`, `ContractPaused` |
 | `allow_address_with_tier` | `admin` | `admin: Address, address: Address, tier: u32` | `Result<(), ContractError>` | `Unauthorized`, `ContractPaused` |
 | `get_address_tier` | None | `address: Address` | `u32` | None |
@@ -18,7 +18,7 @@ The Compliance contract manages an allowlist of addresses permitted to interact 
 | `get_jurisdiction` | None | `address: Address` | `Option<Symbol>` | None |
 | `transfer_admin` | `admin` | `admin: Address, new_admin: Address` | `Result<(), ContractError>` | `Unauthorized` |
 | `accept_admin` | `new_admin` | `new_admin: Address` | `Result<(), ContractError>` | `Unauthorized` |
-| `clear_address` | `admin` | `admin: Address, address: Address` | `Result<(), ContractError>` | `Unauthorized` |
+| `clear_address` | `admin`, or `operator` for an operator-placed block | `caller: Address, address: Address` | `Result<(), ContractError>` | `Unauthorized`, `OperatorCannotClearAdminBlock` |
 | `pause` | `admin` | `admin: Address` | `Result<(), ContractError>` | `Unauthorized` |
 | `unpause` | `admin` | `admin: Address` | `Result<(), ContractError>` | `Unauthorized` |
 
@@ -147,6 +147,24 @@ and `export_snapshot*` classify this case as `AddressState::Blocked` (their
 returns `false`. Callers relying on `AddressState` alone cannot distinguish
 "actually on the blocklist" from "was simply never allowed" — use
 `is_blocked` directly when that distinction matters.
+
+### Who may clear a block, and who placed it
+
+Every block records the address that placed it (`DataKey::BlockedBy`), readable via
+`get_block_placer`:
+
+- An **admin** may clear any block, including operator-placed ones.
+- An **operator** may only clear a block it placed itself. A block placed by the
+  admin — the sanctions case — returns `OperatorCannotClearAdminBlock`, which is a
+  distinct error from `Unauthorized` so a caller can tell "you may not reverse admin
+  blocks" apart from "you are not an operator".
+- A block with no recorded placer predates provenance tracking and is treated as
+  admin-placed, so the check fails closed.
+- Clearing drops the provenance; a later block records its own placer.
+
+`block_address` / `block_address_until` are callable by the admin or the operator —
+the operator places day-to-day blocks — and record which it was. `bulk_block_addresses`
+stays admin-only, so its blocks are admin-placed and not operator-clearable.
 
 ### Which entrypoints work while the contract is paused
 

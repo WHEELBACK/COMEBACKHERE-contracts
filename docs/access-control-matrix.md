@@ -133,15 +133,16 @@ entrypoint calls them.
 | `allow_address` | `Self::require_admin(&env, &admin)?` + `require_not_paused` | Admin-only |
 | `allow_address_with_tier` | `Self::require_admin(&env, &admin)?` + `require_not_paused` | Admin-only |
 | `get_address_tier` | none | Permissionless (read-only) |
-| `bulk_block_addresses` | `Self::require_admin(&env, &admin)?` — **no** `require_not_paused` call | Admin-only (see discrepancy below) |
-| `block_address` | `Self::require_admin(&env, &admin)?` — no pause check (documented: "permitted while paused") | Admin-only |
-| `block_address_until` | `Self::require_admin(&env, &admin)?` — no pause check | Admin-only |
+| `bulk_block_addresses` | `Self::require_admin(&env, &admin)?` — **no** `require_not_paused` call. Records the admin as each block's placer (#604). | Admin-only (see discrepancy below) |
+| `block_address` | `Self::require_admin_or_operator(&env, &caller)?` — no pause check (documented: "permitted while paused"). Records the caller in `DataKey::BlockedBy` (#604). | Admin or operator |
+| `block_address_until` | `Self::require_admin_or_operator(&env, &caller)?` — no pause check. Records the caller in `DataKey::BlockedBy` (#604). | Admin or operator |
 | `get_block_reason` | none | Permissionless (read-only) |
+| `get_block_placer` | none | Permissionless (read-only) |
 | `get_schema_version` | none | Permissionless (read-only) |
 | `allow_address_until` | `Self::require_admin(&env, &admin)?` + `require_not_paused` | Admin-only |
 | `transfer_admin` | `Self::require_admin(&env, &admin)?` | Admin-only |
 | `accept_admin` | `new_admin.require_auth()`; checked against stored `PendingAdmin` | Self-auth (role) |
-| `clear_address` | `Self::require_admin(&env, &admin)?` — no pause check (documented: "permitted while paused") | Admin-only |
+| `clear_address` | `Self::require_admin_or_operator(&env, &caller)?` — no pause check (documented: "permitted while paused"). An operator caller must additionally pass `require_operator_placed_block`, which refuses unless `DataKey::BlockedBy[address] == caller`; an admin caller clears any block (#604). | Admin, or operator for an operator-placed block only |
 | `revoke_allow` | `Self::require_admin(&env, &admin)?` + `require_not_paused` | Admin-only |
 | `pause` | `Self::require_admin(&env, &admin)?` | Admin-only |
 | `unpause` | `Self::require_admin(&env, &admin)?` | Admin-only |

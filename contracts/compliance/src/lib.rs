@@ -88,6 +88,12 @@ pub enum DataKey {
     /// Number of addresses in the paged index (instance). Bounded by
     /// `MAX_TRACKED_ADDRESSES`.
     AddrIndexCount,
+    /// The address that placed the current block on an address, recorded by
+    /// `block_address` / `block_address_until` / `bulk_block_addresses` (#604).
+    /// `clear_address` uses it to keep an operator from reversing a block placed
+    /// by the admin. Removed when the block is cleared. Absent for blocks placed
+    /// before this key existed, which are treated as admin-placed (fail closed).
+    BlockedBy(Address),
 }
 
 /// Coarse classification of an address's compliance state.
@@ -124,7 +130,7 @@ pub struct AddressStatus {
 /// Primary error type for the compliance contract.
 ///
 /// Variants must only be appended at the end (highest numeric value) to preserve
-/// on-chain backwards compatibility. Range: 1..=6 (see `ARCHITECTURE.md`).
+/// on-chain backwards compatibility. Range: 1..=7 (see `ARCHITECTURE.md`).
 #[contracterror]
 #[derive(Copy, Clone, Debug, PartialEq)]
 #[repr(u32)]
@@ -137,6 +143,14 @@ pub enum ContractError {
     /// A bulk allow/block call was made before [`BULK_OP_COOLDOWN_SECS`] elapsed since the
     /// caller's previous bulk call (see #454).
     BulkOperationCooldown = 6,
+    /// An operator tried to clear a block that the admin placed (#604).
+    ///
+    /// Sanctions-style blocks are placed by the admin for serious reasons, and an
+    /// operator handling day-to-day compliance must not be able to reverse them.
+    /// The admin retains full control: an admin caller clears any block, including
+    /// operator-placed ones. Appended rather than reusing `Unauthorized` so a caller
+    /// can tell "you may not clear admin blocks" apart from "you are not an operator".
+    OperatorCannotClearAdminBlock = 7,
 }
 
 /// Upper bound on the number of distinct addresses tracked in the paged address
@@ -402,6 +416,9 @@ impl ComplianceContract {
             env.storage()
                 .persistent()
                 .set(&DataKey::Blocked(address.clone()), &true);
+            // Admin-placed by construction: `bulk_block_addresses` is admin-only, so
+            // no operator may clear these afterwards (#604).
+            Self::record_block_placer(&env, &address, &admin);
             Self::track_address(&env, &address)?;
             env.events()
                 .publish((Symbol::new(&env, "address_blocked"),), address);
@@ -411,16 +428,35 @@ impl ComplianceContract {
 
     // Emergency policy: block_address and clear_address are permitted while paused
     // so the admin can remediate compromised addresses without unpausing first.
+    //
+    // Callable by the admin or the operator: the operator places day-to-day
+    // blocks, and `clear_address` uses the recorded placer to keep those reversible
+    // by the operator that placed them while leaving admin-placed blocks
+    // admin-only (#604).
+    ///
+    /// # Parameters
+    /// - `caller`: The admin, or the operator for a day-to-day block. Must authorize.
+    /// - `address`: The address to block.
+    /// - `reason`: Optional human-readable reason stored alongside the block.
+    ///
+    /// # Errors
+    /// - [`ContractError::Unauthorized`] if `caller` is neither admin nor operator.
+    /// - [`ContractError::AddressIndexFull`] if tracking a new address would exceed
+    ///   [`MAX_TRACKED_ADDRESSES`].
+    ///
+    /// # Events
+    /// Publishes `("address_blocked",) → address`.
     pub fn block_address(
         env: Env,
-        admin: Address,
+        caller: Address,
         address: Address,
         reason: Option<Bytes>,
     ) -> Result<(), ContractError> {
-        Self::require_admin(&env, &admin)?;
+        Self::require_admin_or_operator(&env, &caller)?;
         env.storage()
             .persistent()
             .set(&DataKey::Blocked(address.clone()), &true);
+        Self::record_block_placer(&env, &address, &caller);
         if let Some(r) = reason {
             env.storage()
                 .persistent()
@@ -433,20 +469,24 @@ impl ComplianceContract {
     }
 
     /// Block an address until a specific ledger timestamp. Permitted while paused (emergency policy).
+    ///
+    /// Callable by the admin or the operator, and records `caller` as the block's
+    /// placer under the same rules as [`block_address`](Self::block_address) (#604).
     pub fn block_address_until(
         env: Env,
-        admin: Address,
+        caller: Address,
         address: Address,
         unblock_at: u64,
         reason: Option<Bytes>,
     ) -> Result<(), ContractError> {
-        Self::require_admin(&env, &admin)?;
+        Self::require_admin_or_operator(&env, &caller)?;
         env.storage()
             .persistent()
             .set(&DataKey::Blocked(address.clone()), &true);
         env.storage()
             .persistent()
             .set(&DataKey::BlockedUntil(address.clone()), &unblock_at);
+        Self::record_block_placer(&env, &address, &caller);
         if let Some(r) = reason {
             env.storage()
                 .persistent()
@@ -458,6 +498,16 @@ impl ComplianceContract {
             (address, unblock_at),
         );
         Ok(())
+    }
+
+    /// Returns the address that placed the current block on `address`, or `None` if
+    /// the address is not blocked or the block predates provenance tracking (#604).
+    ///
+    /// Exposed so indexers, auditors, and operator tooling can tell an
+    /// operator-placed block apart from an admin-placed (e.g. sanctions) block
+    /// without having to infer it from transaction history.
+    pub fn get_block_placer(env: Env, address: Address) -> Option<Address> {
+        env.storage().persistent().get(&DataKey::BlockedBy(address))
     }
 
     /// Returns the stored block reason for an address, if any.
@@ -597,17 +647,29 @@ impl ComplianceContract {
     /// `AllowedUntil` expiry; call [`allow_address`](Self::allow_address) for a
     /// permanent, expiry-free allow.
     ///
+    /// The admin may clear any block, including operator-placed ones. An operator may
+    /// only clear a block it placed itself: a block placed by the admin — the
+    /// sanctions case — is reversed by the admin only (#604). A block with no recorded
+    /// placer predates provenance tracking and is treated as admin-placed, so the
+    /// check fails closed.
+    ///
     /// # Parameters
-    /// - `admin`: Current administrator. Must authorize this call.
+    /// - `caller`: The admin, or the operator clearing a block it placed. Must authorize.
     /// - `address`: The address to clear.
     ///
     /// # Errors
-    /// - [`ContractError::Unauthorized`] if `admin` is not the stored administrator.
+    /// - [`ContractError::Unauthorized`] if `caller` is neither admin nor operator, or
+    ///   if an operator tries to clear a block it did not place.
+    /// - [`ContractError::OperatorCannotClearAdminBlock`] if an operator tries to clear
+    ///   an admin-placed block.
     ///
     /// # Events
     /// Publishes `("address_cleared",) → address`.
-    pub fn clear_address(env: Env, admin: Address, address: Address) -> Result<(), ContractError> {
-        Self::require_admin(&env, &admin)?;
+    pub fn clear_address(env: Env, caller: Address, address: Address) -> Result<(), ContractError> {
+        Self::require_admin_or_operator(&env, &caller)?;
+        if !Self::is_admin(&env, &caller) {
+            Self::require_operator_placed_block(&env, &caller, &address)?;
+        }
         let was_blocked: bool = env
             .storage()
             .persistent()
@@ -624,6 +686,11 @@ impl ComplianceContract {
         env.storage()
             .persistent()
             .remove(&DataKey::BlockedUntil(address.clone()));
+        // Drop the provenance along with the block: a later block records its own
+        // placer, and a stale one would misattribute it.
+        env.storage()
+            .persistent()
+            .remove(&DataKey::BlockedBy(address.clone()));
         env.storage()
             .persistent()
             .set(&DataKey::Allowed(address.clone()), &true);
@@ -897,6 +964,65 @@ impl ComplianceContract {
             return Err(ContractError::Unauthorized);
         }
         Ok(())
+    }
+
+    /// Returns `true` if `caller` is the stored admin. Does not require auth; callers
+    /// use it to branch on privilege *after* an auth check has already run.
+    fn is_admin(env: &Env, caller: &Address) -> bool {
+        let stored: Address = env.storage().instance().get(&DataKey::Admin).unwrap();
+        stored == *caller
+    }
+
+    /// Records `placer` as the address that placed the block on `address` (#604).
+    fn record_block_placer(env: &Env, address: &Address, placer: &Address) {
+        env.storage()
+            .persistent()
+            .set(&DataKey::BlockedBy(address.clone()), placer);
+    }
+
+    /// Enforces that `caller` may reverse the block on `address` (#604).
+    ///
+    /// An operator may only clear a block it placed itself. Anything else is refused:
+    /// a block placed by the admin returns the dedicated
+    /// [`ContractError::OperatorCannotClearAdminBlock`], and a block with no recorded
+    /// placer (placed before provenance tracking existed) is treated as admin-placed,
+    /// so this check fails closed rather than granting an operator a blanket unblock.
+    fn require_operator_placed_block(
+        env: &Env,
+        caller: &Address,
+        address: &Address,
+    ) -> Result<(), ContractError> {
+        match Self::block_placer(env, address) {
+            // The operator placed this block itself: it may undo its own action.
+            Some(placer) if &placer == caller => Ok(()),
+            // Attributed to some other caller — the admin, in the case this guards.
+            Some(_) => Err(ContractError::OperatorCannotClearAdminBlock),
+            // No provenance: either the address is not blocked at all, or the block
+            // predates provenance tracking. Both are refused.
+            None => Err(ContractError::Unauthorized),
+        }
+    }
+
+    /// Returns the recorded block placer, or `None` when there is no active block.
+    /// Falls back to the stored admin for blocks placed before provenance tracking,
+    /// so a legacy block is attributed to the role that could always clear it.
+    fn block_placer(env: &Env, address: &Address) -> Option<Address> {
+        let blocked: bool = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Blocked(address.clone()))
+            .unwrap_or(false);
+        if !blocked {
+            return None;
+        }
+        match env
+            .storage()
+            .persistent()
+            .get::<_, Address>(&DataKey::BlockedBy(address.clone()))
+        {
+            Some(placer) => Some(placer),
+            None => env.storage().instance().get(&DataKey::Admin),
+        }
     }
 
     fn require_admin_or_operator(env: &Env, caller: &Address) -> Result<(), ContractError> {
