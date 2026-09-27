@@ -1,8 +1,14 @@
 use crate::invoice::{DataKey, InvoiceError, MaybeBytes, MAX_HASH_BYTES, USDC_FACTOR};
-use soroban_sdk::{Address, Env};
+use soroban_sdk::{Address, Env, Symbol, Vec};
 
 /// Maximum allowed expiry duration: 5 years in seconds.
 pub const MAX_EXPIRY_SECONDS: u64 = 5 * 365 * 24 * 60 * 60;
+
+/// Maximum number of merchant-defined tags allowed per invoice.
+pub const MAX_TAGS: u32 = 5;
+
+/// Maximum length (in characters) of a single merchant-defined tag.
+pub const MAX_TAG_LENGTH: u32 = 16;
 
 pub fn require_not_paused(env: &Env) -> Result<(), InvoiceError> {
     let paused: bool = env
@@ -64,6 +70,20 @@ pub fn require_valid_payment_link_hash(hash: &MaybeBytes) -> Result<(), InvoiceE
     if let MaybeBytes::Some(bytes) = hash {
         if bytes.len() != 32 {
             return Err(InvoiceError::InvalidPaymentLinkHash);
+        }
+    }
+    Ok(())
+}
+
+/// Enforce the hard caps on merchant-defined tags: at most MAX_TAGS tags,
+/// each at most MAX_TAG_LENGTH characters. Tags are informational only.
+pub fn require_valid_tags(tags: &Vec<Symbol>) -> Result<(), InvoiceError> {
+    if tags.len() > MAX_TAGS {
+        return Err(InvoiceError::TooManyTags);
+    }
+    for tag in tags.iter() {
+        if tag.len() > MAX_TAG_LENGTH {
+            return Err(InvoiceError::TagTooLong);
         }
     }
     Ok(())

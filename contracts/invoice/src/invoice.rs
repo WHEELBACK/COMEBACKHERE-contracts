@@ -1,4 +1,4 @@
-use soroban_sdk::{contracttype, Address, Bytes, BytesN};
+use soroban_sdk::{contracttype, Address, Bytes, BytesN, Symbol, Vec};
 
 pub use invoice_errors::InvoiceError;
 
@@ -14,6 +14,12 @@ pub const MAX_BATCH_EXPIRE: u32 = 100;
 
 /// Maximum bytes accepted for optional invoice hash fields.
 pub const MAX_HASH_BYTES: u32 = 64;
+
+/// Maximum number of merchant-defined tags accepted per invoice.
+pub const MAX_TAGS: u32 = 5;
+
+/// Maximum length (in characters) accepted for each merchant-defined tag.
+pub const MAX_TAG_LENGTH: u32 = 16;
 
 /// Lifecycle status of an invoice.
 ///
@@ -96,6 +102,10 @@ pub struct Invoice {
     /// Optional token contract address for multi-currency invoices.
     /// `None` means the invoice is denominated in the default (USDC).
     pub token_address: MaybeAddress,
+    /// Merchant-defined informational tags for off-chain categorisation
+    /// (project, department, campaign, ...). Bounded by `MAX_TAGS` and
+    /// `MAX_TAG_LENGTH`; never affects lifecycle or authorisation logic.
+    pub tags: Vec<Symbol>,
 }
 
 /// Parameters for a single invoice within a batch_create_invoice call.
