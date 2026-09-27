@@ -23,6 +23,17 @@ The Invoice contract manages the lifecycle of merchant invoices, from creation t
 | `pause`              | `admin`       | `admin: Address`                                                                                                                                                 | `Result<(), InvoiceError>`            | `Unauthorized`                                                                                            |
 | `unpause`            | `admin`       | `admin: Address`                                                                                                                                                 | `Result<(), InvoiceError>`            | `Unauthorized`                                                                                            |
 
+## Batch creation atomicity
+
+`batch_create_invoice` is **all-or-nothing**. Every entry in the batch is
+validated up front — amounts, precision, due dates, merchant authorization,
+nonce uniqueness, and batch caps — before any invoice is persisted. If any
+entry fails validation, the call returns the corresponding typed
+`InvoiceError` and no state is written: the invoice count, pending index, and
+merchant index are left exactly as they were before the call. Integrators can
+therefore treat a failed batch as a no-op and retry the whole batch after
+correcting the offending entry.
+
 ## Merchant nonce lifecycle
 
 `merchant_nonce` is an idempotency key scoped to the merchant address. A value of
@@ -49,73 +60,6 @@ event topic as the stream key:
 | `escrow_released` | `Released` | `EscrowReleasedEvent { id, merchant, amount_usdc, released_at }` |
 
 Indexers should checkpoint the last processed ledger/event position, replay from
-that checkpoint after interruptions, and deduplicate by transaction and event
-position. The current invoice remains queryable on-chain; the event stream is the
-source for a complete chronological audit trail.
+that checkpoint after interruptions, and deduplicate by transac
 
-## CLI usage examples
-
-Replace `$INVOICE_CONTRACT`, `$ADMIN`, `$MERCHANT`, `$PAYER`, and `$NETWORK` with your deployed values.
-
-### initialize
-
-```sh
-stellar contract invoke \
-  --id $INVOICE_CONTRACT \
-  --source $ADMIN \
-  --network $NETWORK \
-  -- initialize \
-  --admin $ADMIN
-```
-
-### create_invoice
-
-```sh
-stellar contract invoke \
-  --id $INVOICE_CONTRACT \
-  --source $MERCHANT \
-  --network $NETWORK \
-  -- create_invoice \
-  --merchant $MERCHANT \
-  --amount_usdc 10000000 \
-  --gross_usdc 10500000 \
-  --expires_in_seconds 86400 \
-  --metadata_hash null \
-  --payment_link_hash null \
-  --merchant_nonce 1
-```
-
-Returns the new invoice ID (`u64`).
-
-### mark_paid
-
-```sh
-stellar contract invoke \
-  --id $INVOICE_CONTRACT \
-  --source $ADMIN \
-  --network $NETWORK \
-  -- mark_paid \
-  --admin $ADMIN \
-  --id 0 \
-  --payer $PAYER
-```
-
-### release_escrow
-
-```sh
-stellar contract invoke \
-  --id $INVOICE_CONTRACT \
-  --source $ADMIN \
-  --network $NETWORK \
-  -- release_escrow \
-  --admin $ADMIN \
-  --id 0
-```
-
----
-
-## Amount validation fuzzing
-
-The `fuzz/amount_precision` cargo-fuzz target exercises arbitrary invoice amounts,
-precision values, expiry durations, and nonces. Run a bounded CI-friendly check
-with `cargo +nightly fuzz run amount_precision --fuzz-dir contracts/invoice/fuzz -- -runs=10000`.
+/* … truncated 1465 chars — edit only what you need near the top … */

@@ -13,7 +13,11 @@ use soroban_sdk::{contractimpl, Address, Env, Vec};
 #[contractimpl]
 impl InvoiceContract {
     /// Create multiple invoices atomically in a single invocation.
-    /// All validations run on every element before any storage is written.
+    ///
+    /// The batch is all-or-nothing: every entry is validated up front and no
+    /// storage is written until all entries pass. If any entry is invalid the
+    /// call returns a typed error and leaves the invoice count, pending index
+    /// and merchant index completely unchanged.
     /// Returns a Vec of assigned IDs in the same order as the input params.
     pub fn batch_create_invoice(
         env: Env,
@@ -46,30 +50,35 @@ impl InvoiceContract {
             }
         }
 
+        // Pre-compute the final count so overflow is detected before any write.
         let count: u64 = env
             .storage()
             .instance()
             .get(&DataKey::InvoiceCount)
             .unwrap_or(0);
-        count
+        let final_count = count
             .checked_add(params.len() as u64)
             .ok_or(InvoiceError::InvoiceCountOverflow)?;
 
-        let mut ids = Vec::new(&env);
+        // Pre-compute expiry timestamps so overflow is detected before any write.
+        let now = env.ledger().timestamp();
+        let mut expiries: Vec<u64> = Vec::new(&env);
         for p in params.iter() {
-            let count: u64 = env
-                .storage()
-                .instance()
-                .get(&DataKey::InvoiceCount)
-                .unwrap_or(0);
-            let id = count
-                .checked_add(1)
-                .ok_or(InvoiceError::InvoiceCountOverflow)?;
-            let expires_at = env
-                .ledger()
-                .timestamp()
+            let expires_at = now
                 .checked_add(p.expires_in_seconds)
                 .ok_or(InvoiceError::ExpiryOverflow)?;
+            expiries.push_back(expires_at);
+        }
+
+        // All entries validated: now persist the batch.
+        let mut ids = Vec::new(&env);
+        let mut next_id = count;
+        for (i, p) in params.iter().enumerate() {
+            next_id = next_id
+                .checked_add(1)
+                .ok_or(InvoiceError::InvoiceCountOverflow)?;
+            let id = next_id;
+            let expires_at = expiries.get(i as u32).unwrap();
             let invoice = Invoice {
                 id,
                 merchant: merchant.clone(),
@@ -87,7 +96,6 @@ impl InvoiceContract {
             env.storage()
                 .persistent()
                 .set(&DataKey::Invoice(id), &invoice);
-            env.storage().instance().set(&DataKey::InvoiceCount, &id);
 
             if p.merchant_nonce != 0 {
                 env.storage().persistent().set(
@@ -114,6 +122,12 @@ impl InvoiceContract {
             events::invoice_created(&env, id, &invoice);
             ids.push_back(id);
         }
+
+        // Commit the invoice count once, after all invoices are written.
+        env.storage()
+            .instance()
+            .set(&DataKey::InvoiceCount, &final_count);
+
         Ok(ids)
     }
 
