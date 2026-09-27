@@ -186,6 +186,17 @@ impl InvoiceContract {
             return Err(InvoiceError::Expired);
         }
 
+        // #549: apply early-payment discount when paid before the deadline.
+        // The discounted amount is recorded on the invoice so downstream
+        // consumers (escrow release, events) observe the settled amount.
+        if let Some(discount_deadline) = invoice.discount_deadline {
+            if env.ledger().timestamp() < discount_deadline {
+                if let Some(discount_amount) = invoice.discount_amount {
+                    invoice.amount_usdc = discount_amount;
+                }
+            }
+        }
+
         invoice.status = InvoiceStatus::Paid;
         invoice.paid_at = Some(env.ledger().timestamp());
         invoice.payer = MaybeAddress::Some(payer);
@@ -219,23 +230,4 @@ impl InvoiceContract {
         bump_invoice_ttl(&env, &invoice);
 
         // #548: state-based guard — reject a second release for the same invoice.
-        if invoice.escrow_released {
-            return Err(InvoiceError::EscrowAlreadyReleased);
-        }
-
-        if invoice.status != InvoiceStatus::Paid {
-            return Err(InvoiceError::NotPaid);
-        }
-
-        // #548: checks-effects — persist the released flag and status before
-        // any external call so a re-entrant or repeated call cannot release twice.
-        invoice.escrow_released = true;
-        invoice.status = InvoiceStatus::Released;
-        env.storage()
-            .persistent()
-            .set(&DataKey::Invoice(id), &invoice);
-        append_history(&env, id, InvoiceStatus::Paid, InvoiceStatus::Released);
-        events::escrow_released(&env, id, &invoice);
-        Ok(())
-    }
-}
+        if invoi

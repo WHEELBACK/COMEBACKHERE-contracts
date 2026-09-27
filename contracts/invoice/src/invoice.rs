@@ -113,6 +113,35 @@ pub struct Invoice {
     /// so a second `release_escrow` call observes `true` and returns a typed
     /// error without moving funds again.
     pub escrow_released: bool,
+    /// Discounted amount (in USDC stroops) the payer may settle for when paying
+    /// on or before `discount_deadline`. `0` means no early-payment discount is
+    /// configured. When set it must be strictly less than `amount_usdc`.
+    pub discount_amount: i128,
+    /// Ledger timestamp (seconds) before which `discount_amount` applies.
+    /// `0` means no early-payment discount is configured. When set it must be
+    /// strictly before `expires_at`.
+    pub discount_deadline: u64,
+}
+
+impl Invoice {
+    /// Returns `true` when an early-payment discount is configured for this
+    /// invoice (both the discounted amount and the deadline are set).
+    pub fn has_discount(&self) -> bool {
+        self.discount_amount > 0 && self.discount_deadline > 0
+    }
+
+    /// Returns the amount the payer must settle at `ledger_time`.
+    ///
+    /// If an early-payment discount is configured and `ledger_time` is on or
+    /// before `discount_deadline`, the discounted amount applies; otherwise the
+    /// full `amount_usdc` is required.
+    pub fn amount_due_at(&self, ledger_time: u64) -> i128 {
+        if self.has_discount() && ledger_time <= self.discount_deadline {
+            self.discount_amount
+        } else {
+            self.amount_usdc
+        }
+    }
 }
 
 /// Parameters for a single invoice within a batch_create_invoice call.
