@@ -15,6 +15,17 @@ pub const MAX_BATCH_EXPIRE: u32 = 100;
 /// Maximum bytes accepted for optional invoice hash fields.
 pub const MAX_HASH_BYTES: u32 = 64;
 
+/// Persistent TTL bump thresholds for active invoices, in ledgers.
+///
+/// Soroban persistent entries are archived once their TTL runs out. Active
+/// invoices that are read or updated regularly must not be archived, so every
+/// access to a non-terminal invoice extends its TTL. Thresholds follow
+/// `docs/storage-ttl-audit.md`: bump when the remaining TTL drops below
+/// `INVOICE_TTL_THRESHOLD` ledgers, extending it back to `INVOICE_TTL_EXTEND`.
+/// At ~5s per ledger this is roughly a 30-day threshold and a 60-day extension.
+pub const INVOICE_TTL_THRESHOLD: u32 = 518_400;
+pub const INVOICE_TTL_EXTEND: u32 = 1_036_800;
+
 /// Lifecycle status of an invoice.
 ///
 /// The typical happy path is: `Pending` → `Paid` → `Released`.
@@ -33,6 +44,21 @@ pub enum InvoiceStatus {
     Released,
     /// Refund has been approved by admin; terminal status for disputed invoices.
     Refunded,
+}
+
+impl InvoiceStatus {
+    /// Returns `true` for statuses that are terminal, i.e. the invoice will not
+    /// transition again. Terminal invoices are left alone by TTL bumps so their
+    /// storage can age out naturally.
+    pub fn is_terminal(&self) -> bool {
+        matches!(
+            self,
+            InvoiceStatus::Expired
+                | InvoiceStatus::Cancelled
+                | InvoiceStatus::Released
+                | InvoiceStatus::Refunded
+        )
+    }
 }
 
 // contracttype enum wrappers for optional complex types; Option<Address> and
