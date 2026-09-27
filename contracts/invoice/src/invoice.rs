@@ -85,6 +85,9 @@ pub struct Invoice {
     /// Optional token contract address for multi-currency invoices.
     /// `None` means the invoice is denominated in the default (USDC).
     pub token_address: MaybeAddress,
+    /// Optional designated payer. When `Some`, only this address may mark the
+    /// invoice paid; `None` keeps the invoice unrestricted (any payer).
+    pub designated_payer: MaybeAddress,
 }
 
 /// Parameters for a single invoice within a batch_create_invoice call.

@@ -134,6 +134,14 @@ impl InvoiceContract {
             return Err(InvoiceError::NotPending);
         }
 
+        // #533: when the invoice is restricted, only the designated payer may settle it
+        if let MaybeAddress::Some(designated) = &invoice.designated_payer {
+            if &payer != designated {
+                return Err(InvoiceError::WrongPayer);
+            }
+            payer.require_auth();
+        }
+
         if provided_metadata_hash != MaybeBytes::None
             && provided_metadata_hash != invoice.metadata_hash
         {
@@ -229,68 +237,6 @@ impl InvoiceContract {
     /// Return up to `limit` invoices starting at `start_id` (inclusive).
     /// Gaps (IDs with no stored invoice) are skipped.
     pub fn get_invoices_page(env: Env, start_id: u64, limit: u64) -> Vec<Invoice> {
-        let count: u64 = env
-            .storage()
-            .instance()
-            .get(&DataKey::InvoiceCount)
-            .unwrap_or(0);
-        let capped = if limit > MAX_PAGE_SIZE {
-            MAX_PAGE_SIZE
-        } else {
-            limit
-        };
-        let mut out = Vec::new(&env);
-        let mut id = start_id;
-        while id <= count && out.len() < capped {
-            if let Some(invoice) = env
-                .storage()
-                .persistent()
-                .get::<DataKey, Invoice>(&DataKey::Invoice(id))
-            {
-                out.push_back(invoice);
-            }
-            id += 1;
-        }
-        out
-    }
+   
 
-    /// Return up to `limit` invoices whose status matches `status`, starting at
-    /// `cursor` (inclusive). Gaps and non-matching invoices are skipped. The
-    /// returned page is capped at `MAX_PAGE_SIZE` and iteration is bounded by
-    /// the stored invoice count, so storage is never scanned unboundedly.
-    ///
-    /// The next cursor is `last_returned_id + 1`; pass `0` to start from the
-    /// beginning. An empty result means there are no further matches.
-    pub fn get_invoices_by_status(
-        env: Env,
-        status: InvoiceStatus,
-        cursor: u64,
-        limit: u64,
-    ) -> Vec<Invoice> {
-        let count: u64 = env
-            .storage()
-            .instance()
-            .get(&DataKey::InvoiceCount)
-            .unwrap_or(0);
-        let capped = if limit > MAX_PAGE_SIZE {
-            MAX_PAGE_SIZE
-        } else {
-            limit
-        };
-        let mut out = Vec::new(&env);
-        let mut id = cursor;
-        while id <= count && out.len() < capped {
-            if let Some(invoice) = env
-                .storage()
-                .persistent()
-                .get::<DataKey, Invoice>(&DataKey::Invoice(id))
-            {
-                if invoice.status == status {
-                    out.push_back(invoice);
-                }
-            }
-            id += 1;
-        }
-        out
-    }
-}
+/* … truncated 2005 chars — edit only what you need near the top … */
