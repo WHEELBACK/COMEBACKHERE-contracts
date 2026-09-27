@@ -36,7 +36,7 @@ impl InvoiceContract {
             }
             require_expiry_not_too_long(p.expires_in_seconds)?;
             if p.merchant_nonce != 0 {
-                let nonce_key = DataKey::MerchantNonce(merchant.clone(), p.merchant_nonce);
+                let nonce_key = DataKey::merchant_nonce(&merchant, p.merchant_nonce);
                 if env.storage().persistent().has(&nonce_key)
                     || batch_nonces.contains(p.merchant_nonce)
                 {
@@ -49,7 +49,7 @@ impl InvoiceContract {
         let count: u64 = env
             .storage()
             .instance()
-            .get(&DataKey::InvoiceCount)
+            .get(&DataKey::invoice_count())
             .unwrap_or(0);
         count
             .checked_add(params.len() as u64)
@@ -60,7 +60,7 @@ impl InvoiceContract {
             let count: u64 = env
                 .storage()
                 .instance()
-                .get(&DataKey::InvoiceCount)
+                .get(&DataKey::invoice_count())
                 .unwrap_or(0);
             let id = count
                 .checked_add(1)
@@ -86,24 +86,26 @@ impl InvoiceContract {
             };
             env.storage()
                 .persistent()
-                .set(&DataKey::Invoice(id), &invoice);
-            env.storage().instance().set(&DataKey::InvoiceCount, &id);
+                .set(&DataKey::invoice(id), &invoice);
+            env.storage()
+                .instance()
+                .set(&DataKey::invoice_count(), &id);
 
             if p.merchant_nonce != 0 {
                 env.storage().persistent().set(
-                    &DataKey::MerchantNonce(merchant.clone(), p.merchant_nonce),
+                    &DataKey::merchant_nonce(&merchant, p.merchant_nonce),
                     &true,
                 );
             }
 
-            let merchant_count_key = DataKey::MerchantInvoiceCount(merchant.clone());
+            let merchant_count_key = DataKey::merchant_invoice_count(&merchant);
             let merchant_count: u64 = env
                 .storage()
                 .persistent()
                 .get(&merchant_count_key)
                 .unwrap_or(0);
             env.storage().persistent().set(
-                &DataKey::MerchantInvoiceIndex(merchant.clone(), merchant_count),
+                &DataKey::merchant_invoice_index(&merchant, merchant_count),
                 &id,
             );
             env.storage()
@@ -133,7 +135,7 @@ impl InvoiceContract {
         let now = env.ledger().timestamp();
         let mut expired_count: u32 = 0;
         for id in ids.iter() {
-            let key = DataKey::Invoice(id);
+            let key = DataKey::invoice(id);
             if let Some(mut invoice) = env.storage().persistent().get::<DataKey, Invoice>(&key) {
                 if invoice.status == InvoiceStatus::Pending && now >= invoice.expires_at {
                     invoice.status = InvoiceStatus::Expired;
