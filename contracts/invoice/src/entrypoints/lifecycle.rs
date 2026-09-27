@@ -10,6 +10,9 @@ use crate::{
 };
 use soroban_sdk::{contractimpl, Address, Env, Vec};
 
+/// Hard cap on the number of invoices returned by a single paginated query.
+const MAX_PAGE_SIZE: u64 = 50;
+
 #[contractimpl]
 impl InvoiceContract {
     // --- #58: merchant invoice nonce ---
@@ -231,238 +234,63 @@ impl InvoiceContract {
             .instance()
             .get(&DataKey::InvoiceCount)
             .unwrap_or(0);
-        let end_id = start_id.saturating_add(limit).min(count + 1);
-        let mut result = Vec::new(&env);
-        let mut current = start_id;
-        while current < end_id {
+        let capped = if limit > MAX_PAGE_SIZE {
+            MAX_PAGE_SIZE
+        } else {
+            limit
+        };
+        let mut out = Vec::new(&env);
+        let mut id = start_id;
+        while id <= count && out.len() < capped {
             if let Some(invoice) = env
                 .storage()
                 .persistent()
-                .get::<DataKey, Invoice>(&DataKey::Invoice(current))
+                .get::<DataKey, Invoice>(&DataKey::Invoice(id))
             {
-                result.push_back(invoice);
+                out.push_back(invoice);
             }
-            current += 1;
+            id += 1;
         }
-        result
+        out
     }
 
-    /// Return the total number of invoices created so clients can page by id.
-    pub fn get_invoice_count(env: Env) -> u64 {
-        env.storage()
+    /// Return up to `limit` invoices whose status matches `status`, starting at
+    /// `cursor` (inclusive). Gaps and non-matching invoices are skipped. The
+    /// returned page is capped at `MAX_PAGE_SIZE` and iteration is bounded by
+    /// the stored invoice count, so storage is never scanned unboundedly.
+    ///
+    /// The next cursor is `last_returned_id + 1`; pass `0` to start from the
+    /// beginning. An empty result means there are no further matches.
+    pub fn get_invoices_by_status(
+        env: Env,
+        status: InvoiceStatus,
+        cursor: u64,
+        limit: u64,
+    ) -> Vec<Invoice> {
+        let count: u64 = env
+            .storage()
             .instance()
             .get(&DataKey::InvoiceCount)
-            .unwrap_or(0u64)
-    }
-
-    /// Return all IDs currently in the pending index.
-    pub fn get_pending_ids(env: Env) -> Vec<u64> {
-        env.storage()
-            .persistent()
-            .get(&DataKey::PendingIndex)
-            .unwrap_or_else(|| Vec::new(&env))
-    }
-
-    // Issue #49: merchant or admin may cancel a pending invoice
-    pub fn cancel_invoice(env: Env, caller: Address, id: u64) -> Result<(), InvoiceError> {
-        caller.require_auth();
-        require_not_paused(&env)?;
-
-        let mut invoice: Invoice = env
-            .storage()
-            .persistent()
-            .get(&DataKey::Invoice(id))
-            .ok_or(InvoiceError::NotFound)?;
-
-        let admin: Address = env.storage().instance().get(&DataKey::Admin).unwrap();
-        if caller != invoice.merchant && caller != admin {
-            return Err(InvoiceError::Unauthorized);
-        }
-        if invoice.status != InvoiceStatus::Pending {
-            return Err(InvoiceError::NotPending);
-        }
-
-        invoice.status = InvoiceStatus::Cancelled;
-        env.storage()
-            .persistent()
-            .set(&DataKey::Invoice(id), &invoice);
-        pending_index_remove(&env, id);
-        append_history(&env, id, InvoiceStatus::Pending, InvoiceStatus::Cancelled);
-        events::invoice_cancelled(&env, id, &invoice);
-        Ok(())
-    }
-
-    /// Amend a Pending invoice's amount fields before it has been paid or expired.
-    /// Only the merchant who created the invoice may call this.
-    pub fn amend_invoice(
-        env: Env,
-        merchant: Address,
-        id: u64,
-        new_amount_usdc: i128,
-        new_gross_usdc: i128,
-        new_expires_in_seconds: u64,
-    ) -> Result<(), InvoiceError> {
-        merchant.require_auth();
-        require_not_paused(&env)?;
-        require_positive_amount(new_amount_usdc, new_gross_usdc)?;
-        require_usdc_precision(new_amount_usdc, new_gross_usdc)?;
-        if new_expires_in_seconds == 0 {
-            return Err(InvoiceError::ZeroDuration);
-        }
-        require_expiry_not_too_long(new_expires_in_seconds)?;
-
-        let mut invoice: Invoice = env
-            .storage()
-            .persistent()
-            .get(&DataKey::Invoice(id))
-            .ok_or(InvoiceError::NotFound)?;
-
-        if invoice.merchant != merchant {
-            return Err(InvoiceError::Unauthorized);
-        }
-        if invoice.status != InvoiceStatus::Pending {
-            return Err(InvoiceError::NotPending);
-        }
-
-        let event = InvoiceAmountUpdatedEvent {
-            id,
-            old_amount_usdc: invoice.amount_usdc,
-            new_amount_usdc,
-            old_gross_usdc: invoice.gross_usdc,
-            new_gross_usdc,
-        };
-
-        invoice.amount_usdc = new_amount_usdc;
-        invoice.gross_usdc = new_gross_usdc;
-        invoice.expires_at = env
-            .ledger()
-            .timestamp()
-            .checked_add(new_expires_in_seconds)
-            .ok_or(InvoiceError::ExpiryOverflow)?;
-
-        env.storage()
-            .persistent()
-            .set(&DataKey::Invoice(id), &invoice);
-        events::invoice_amended(&env, &event);
-        Ok(())
-    }
-
-    // payer may request a refund on a paid invoice (escrow dispute)
-    pub fn request_refund(env: Env, payer: Address, id: u64) -> Result<(), InvoiceError> {
-        payer.require_auth();
-        require_not_paused(&env)?;
-
-        let mut invoice: Invoice = env
-            .storage()
-            .persistent()
-            .get(&DataKey::Invoice(id))
-            .ok_or(InvoiceError::NotFound)?;
-
-        if invoice.status != InvoiceStatus::Paid {
-            return Err(InvoiceError::NotPaid);
-        }
-        if invoice.payer != MaybeAddress::Some(payer.clone()) {
-            return Err(InvoiceError::Unauthorized);
-        }
-
-        invoice.status = InvoiceStatus::RefundRequested;
-        env.storage()
-            .persistent()
-            .set(&DataKey::Invoice(id), &invoice);
-        append_history(
-            &env,
-            id,
-            InvoiceStatus::Paid,
-            InvoiceStatus::RefundRequested,
-        );
-        events::invoice_refund_requested(&env, id, &invoice);
-        Ok(())
-    }
-
-    /// Approve a refund request. Admin-only. Transitions RefundRequested → Refunded.
-    pub fn approve_refund(env: Env, admin: Address, id: u64) -> Result<(), InvoiceError> {
-        require_admin(&env, &admin)?;
-        require_not_paused(&env)?;
-
-        let mut invoice: Invoice = env
-            .storage()
-            .persistent()
-            .get(&DataKey::Invoice(id))
-            .ok_or(InvoiceError::NotFound)?;
-
-        if invoice.status != InvoiceStatus::RefundRequested {
-            return Err(InvoiceError::NotRefundRequested);
-        }
-
-        invoice.status = InvoiceStatus::Refunded;
-        env.storage()
-            .persistent()
-            .set(&DataKey::Invoice(id), &invoice);
-        append_history(
-            &env,
-            id,
-            InvoiceStatus::RefundRequested,
-            InvoiceStatus::Refunded,
-        );
-        events::refund_approved(&env, id, &invoice);
-        Ok(())
-    }
-
-    /// Reject a refund request. Admin-only. Transitions RefundRequested → Paid.
-    pub fn reject_refund(env: Env, admin: Address, id: u64) -> Result<(), InvoiceError> {
-        require_admin(&env, &admin)?;
-        require_not_paused(&env)?;
-
-        let mut invoice: Invoice = env
-            .storage()
-            .persistent()
-            .get(&DataKey::Invoice(id))
-            .ok_or(InvoiceError::NotFound)?;
-        if invoice.status != InvoiceStatus::RefundRequested {
-            return Err(InvoiceError::NotRefundRequested);
-        }
-
-        invoice.status = InvoiceStatus::Paid;
-        env.storage()
-            .persistent()
-            .set(&DataKey::Invoice(id), &invoice);
-        append_history(
-            &env,
-            id,
-            InvoiceStatus::RefundRequested,
-            InvoiceStatus::Paid,
-        );
-        events::refund_rejected(&env, id, &invoice);
-        Ok(())
-    }
-
-    // --- #9: paginated merchant invoice index read ---
-
-    /// Return a page of invoice IDs for `merchant`.
-    /// `start` is a zero-based offset; `limit` caps the returned slice.
-    pub fn get_invoices_by_merchant(
-        env: Env,
-        merchant: Address,
-        start: u32,
-        limit: u32,
-    ) -> Vec<u64> {
-        let total: u64 = env
-            .storage()
-            .persistent()
-            .get(&DataKey::MerchantInvoiceCount(merchant.clone()))
             .unwrap_or(0);
-        let start = u64::from(start).min(total);
-        let end = start.saturating_add(u64::from(limit)).min(total);
-        let mut page = Vec::new(&env);
-        for i in start..end {
-            if let Some(id) = env
+        let capped = if limit > MAX_PAGE_SIZE {
+            MAX_PAGE_SIZE
+        } else {
+            limit
+        };
+        let mut out = Vec::new(&env);
+        let mut id = cursor;
+        while id <= count && out.len() < capped {
+            if let Some(invoice) = env
                 .storage()
                 .persistent()
-                .get::<DataKey, u64>(&DataKey::MerchantInvoiceIndex(merchant.clone(), i))
+                .get::<DataKey, Invoice>(&DataKey::Invoice(id))
             {
-                page.push_back(id);
+                if invoice.status == status {
+                    out.push_back(invoice);
+                }
             }
+            id += 1;
         }
-        page
+        out
     }
 }

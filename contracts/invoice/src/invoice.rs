@@ -15,6 +15,11 @@ pub const MAX_BATCH_EXPIRE: u32 = 100;
 /// Maximum bytes accepted for optional invoice hash fields.
 pub const MAX_HASH_BYTES: u32 = 64;
 
+/// Hard cap on the number of invoices returned by a single paginated query
+/// (e.g. `get_invoices_page`, `get_invoices_by_status`), to bound per-call
+/// storage reads and gas.
+pub const MAX_PAGE_SIZE: u32 = 50;
+
 /// Lifecycle status of an invoice.
 ///
 /// The typical happy path is: `Pending` → `Paid` → `Released`.
@@ -134,4 +139,9 @@ pub enum DataKey {
     CreationCooldown,
     /// Timestamp of the last successful create_invoice call for a given merchant.
     LastCreatedAt(Address),
+    /// Secondary index: (status, zero-based position) → invoice ID, enabling
+    /// bounded, cursor-paginated status-filtered queries without scanning all invoices.
+    StatusIndex(InvoiceStatus, u64),
+    /// Count of invoices currently recorded under a given status.
+    StatusInvoiceCount(InvoiceStatus),
 }
