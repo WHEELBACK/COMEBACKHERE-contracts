@@ -149,6 +149,75 @@ impl TreasuryContract {
             .unwrap_or(0);
         (limit, window_secs)
     }
+
+    /// Configures the rolling 24-hour withdrawal cap (admin-only). `limit <= 0` disables the
+    /// daily cap. The window is anchored to the ledger timestamp of the first withdrawal in
+    /// the current window and resets once `window_secs` have elapsed. Applies to both
+    /// `withdraw` and `withdraw_all` — see `deposits.rs`.
+    /// Emits: `withdrawal_daily_limit_set`.
+    pub fn set_withdrawal_daily_limit(env: Env, admin: Address, limit: i128, window_secs: u64) {
+        require_admin(&env, &admin);
+        env.storage()
+            .instance()
+            .set(&DataKey::WithdrawalDailyLimit, &limit);
+        env.storage()
+            .instance()
+            .set(&DataKey::WithdrawalDailyWindowSecs, &window_secs);
+        env.events().publish(
+            (Symbol::new(&env, "withdrawal_daily_limit_set"),),
+            (limit, window_secs),
+        );
+    }
+
+    /// Returns the currently configured daily `(limit, window_secs)`. `limit <= 0` means uncapped.
+    pub fn get_withdrawal_daily_limit(env: Env) -> (i128, u64) {
+        let limit: i128 = env
+            .storage()
+            .instance()
+            .get(&DataKey::WithdrawalDailyLimit)
+            .unwrap_or(0);
+        let window_secs: u64 = env
+            .storage()
+            .instance()
+            .get(&DataKey::WithdrawalDailyWindowSecs)
+            .unwrap_or(0);
+        (limit, window_secs)
+    }
+
+    /// Read-only view of the current rolling window usage: `(used, limit, window_secs,
+    /// window_start)`. `used` is the total withdrawn in the active window; `window_start` is
+    /// the ledger timestamp at which the current window began (0 when no window is active).
+    /// When `limit <= 0` the cap is disabled and `used` is reported as 0.
+    pub fn get_withdrawal_window_usage(env: Env) -> (i128, i128, u64, u64) {
+        let limit: i128 = env
+            .storage()
+            .instance()
+            .get(&DataKey::WithdrawalDailyLimit)
+            .unwrap_or(0);
+        let window_secs: u64 = env
+            .storage()
+            .instance()
+            .get(&DataKey::WithdrawalDailyWindowSecs)
+            .unwrap_or(0);
+        let window_start: u64 = env
+            .storage()
+            .instance()
+            .get(&DataKey::WithdrawalWindowStart)
+            .unwrap_or(0);
+        let used: i128 = env
+            .storage()
+            .instance()
+            .get(&DataKey::WithdrawalWindowUsed)
+            .unwrap_or(0);
+        if limit <= 0 || window_secs == 0 {
+            return (0, limit, window_secs, 0);
+        }
+        let now = env.ledger().timestamp();
+        if window_start == 0 || now.saturating_sub(window_start) >= window_secs {
+            return (0, limit, window_secs, 0);
+        }
+        (used, limit, window_secs, window_start)
+    }
 }
 
 /// Maximum number of tokens allowed in the allowlist to prevent unbounded storage growth.

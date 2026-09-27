@@ -66,6 +66,7 @@ impl TreasuryContract {
         if balance < amount {
             return Err(TreasuryError::InsufficientBalance);
         }
+        enforce_withdrawal_limit(&env, &to, amount);
         balance = balance
             .checked_sub(amount)
             .ok_or(TreasuryError::ArithmeticOverflow)?;
@@ -121,6 +122,36 @@ impl TreasuryContract {
         env.events()
             .publish((Symbol::new(&env, "treasury_drained"),), recipient);
         Ok(())
+    }
+
+    /// Read-only view of the current rolling-window withdrawal usage for `addr`.
+    /// Returns `(used, window_start)` where `used` is the amount already withdrawn
+    /// in the active window and `window_start` is the ledger timestamp at which
+    /// that window began. When no window is active (or the configured window has
+    /// elapsed), returns `(0, 0)`. No authentication required.
+    pub fn get_withdrawal_window_usage(env: Env, addr: Address) -> (i128, u64) {
+        let window_secs: u64 = env
+            .storage()
+            .instance()
+            .get(&DataKey::WithdrawalWindowSecs)
+            .unwrap_or(0);
+        let window_start: u64 = env
+            .storage()
+            .instance()
+            .get(&DataKey::WithdrawalWindowStart(addr.clone()))
+            .unwrap_or(0);
+        let used: i128 = env
+            .storage()
+            .instance()
+            .get(&DataKey::WithdrawnInWindow(addr.clone()))
+            .unwrap_or(0);
+        let now = env.ledger().timestamp();
+        let window_elapsed = window_secs == 0 || now.saturating_sub(window_start) >= window_secs;
+        if window_elapsed {
+            (0, 0)
+        } else {
+            (used, window_start)
+        }
     }
 }
 
