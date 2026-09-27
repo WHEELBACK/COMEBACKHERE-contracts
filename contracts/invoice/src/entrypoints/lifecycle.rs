@@ -10,6 +10,20 @@ use crate::{
 };
 use soroban_sdk::{contractimpl, Address, Env, Vec};
 
+/// #543: increment the stored counter for `status` by one.
+fn status_count_inc(env: &Env, status: &InvoiceStatus) {
+    let key = DataKey::StatusCount(status.clone());
+    let count: u64 = env.storage().instance().get(&key).unwrap_or(0);
+    env.storage().instance().set(&key, &(count + 1));
+}
+
+/// #543: decrement the stored counter for `status` by one (saturating at 0).
+fn status_count_dec(env: &Env, status: &InvoiceStatus) {
+    let key = DataKey::StatusCount(status.clone());
+    let count: u64 = env.storage().instance().get(&key).unwrap_or(0);
+    env.storage().instance().set(&key, &count.saturating_sub(1));
+}
+
 #[contractimpl]
 impl InvoiceContract {
     // --- #58: merchant invoice nonce ---
@@ -106,6 +120,8 @@ impl InvoiceContract {
             .set(&merchant_count_key, &(merchant_count + 1));
 
         pending_index_add(&env, id);
+        // #543: a new invoice starts Pending
+        status_count_inc(&env, &InvoiceStatus::Pending);
         events::invoice_created(&env, id, &invoice);
         Ok(id)
     }
@@ -164,6 +180,9 @@ impl InvoiceContract {
             .persistent()
             .set(&DataKey::Invoice(id), &invoice);
         pending_index_remove(&env, id);
+        // #543: Pending -> Paid
+        status_count_dec(&env, &InvoiceStatus::Pending);
+        status_count_inc(&env, &InvoiceStatus::Paid);
         append_history(&env, id, InvoiceStatus::Pending, InvoiceStatus::Paid);
         events::invoice_paid(&env, id, &invoice);
         Ok(())
@@ -234,8 +253,7 @@ impl InvoiceContract {
             .checked_add(additional_seconds)
             .ok_or(InvoiceError::ExpiryOverflow)?;
 
-        // #542: reuse the creation-time cap. The remaining lifetime measured
-        // from now must stay within the allowed maximum.
+        // #542: enforce the same maximum lifetime cap as creation.
         let remaining = new_expires_at.saturating_sub(now);
         require_expiry_not_too_long(remaining)?;
 
@@ -247,40 +265,36 @@ impl InvoiceContract {
         Ok(())
     }
 
-    pub fn get_invoice(env: Env, id: u64) -> Result<Invoice, InvoiceError> {
-        env.storage()
-            .persistent()
-            .get(&DataKey::Invoice(id))
-            .ok_or(InvoiceError::NotFound)
-    }
-
-    pub fn get_invoice_status(env: Env, id: u64) -> Result<InvoiceStatus, InvoiceError> {
-        let invoice: Invoice = env
-            .storage()
-            .persistent()
-            .get(&DataKey::Invoice(id))
-            .ok_or(InvoiceError::NotFound)?;
-        Ok(invoice.status)
-    }
-
-    /// Return one status result per ID, preserving input order.
-    pub fn batch_get_invoice_status(
-        env: Env,
-        ids: Vec<u64>,
-    ) -> Vec<Result<InvoiceStatus, InvoiceError>> {
-        let mut statuses = Vec::new(&env);
-        for id in ids.iter() {
-            statuses.push_back(Self::get_invoice_status(env.clone(), id));
+    /// #543: return the number of invoices currently in each status.
+    ///
+    /// Reads only the maintained counters — no full scan of invoices.
+    pub fn get_status_counts(env: Env) -> StatusCounts {
+        StatusCounts {
+            pending: env
+                .storage()
+                .instance()
+                .get(&DataKey::StatusCount(InvoiceStatus::Pending))
+                .unwrap_or(0),
+            paid: env
+                .storage()
+                .instance()
+                .get(&DataKey::StatusCount(InvoiceStatus::Paid))
+                .unwrap_or(0),
+            expired: env
+                .storage()
+                .instance()
+                .get(&DataKey::StatusCount(InvoiceStatus::Expired))
+                .unwrap_or(0),
+            cancelled: env
+                .storage()
+                .instance()
+                .get(&DataKey::StatusCount(InvoiceStatus::Cancelled))
+                .unwrap_or(0),
+            refunded: env
+                .storage()
+                .instance()
+                .get(&DataKey::StatusCount(InvoiceStatus::Refunded))
+                .unwrap_or(0),
         }
-        statuses
     }
-
-    /// Return up to `limit` invoices starting at `start_id` (inclusive).
-    /// Gaps (IDs with no stored invoice) are skipped.
-    pub fn get_invoices_page(env: Env, start_id: u64, limit: u64) -> Vec<Invoice> {
-        let count: u64 = env
-            .storage()
-            .instance()
-            .get(&DataKey::InvoiceCo
-
-/* … truncated 7703 chars — edit only what you need near the top … */
+}

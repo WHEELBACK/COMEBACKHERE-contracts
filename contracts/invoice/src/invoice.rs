@@ -104,6 +104,22 @@ pub struct StatusTransition {
     pub timestamp: u64,
 }
 
+/// Per-status invoice counters maintained incrementally on every transition.
+///
+/// Dashboards read these via `get_status_counts` instead of scanning every
+/// invoice. Each field tracks the number of invoices currently in the
+/// corresponding status; transitions decrement the source counter and
+/// increment the destination counter so the totals stay in sync with reality.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct StatusCounts {
+    pub pending: u64,
+    pub paid: u64,
+    pub expired: u64,
+    pub cancelled: u64,
+    pub refunded: u64,
+}
+
 /// Storage keys for invoice contract state.
 ///
 /// Used as keys for Soroban instance and persistent storage lookups. Variants
@@ -134,4 +150,6 @@ pub enum DataKey {
     CreationCooldown,
     /// Timestamp of the last successful create_invoice call for a given merchant.
     LastCreatedAt(Address),
+    /// Incrementally maintained per-status invoice counters.
+    StatusCounts,
 }
