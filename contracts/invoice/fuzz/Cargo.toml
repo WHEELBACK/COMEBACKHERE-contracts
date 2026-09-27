@@ -27,3 +27,10 @@ path = "fuzz_targets/amount_precision.rs"
 test = false
 doc = false
 bench = false
+
+[[bin]]
+name = "pending_index"
+path = "fuzz_targets/pending_index.rs"
+test = false
+doc = false
+bench = false
