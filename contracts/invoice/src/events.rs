@@ -164,12 +164,28 @@ pub fn template_generated(env: &Env, event: &TemplateGeneratedEvent) {
     );
 }
 
+/// Emitted when a pending invoice is transferred to a new merchant address.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct InvoiceTransferredEvent {
+    pub id: u64,
+    pub old_merchant: Address,
+    pub new_merchant: Address,
+}
+
+pub fn invoice_transferred(env: &Env, event: &InvoiceTransferredEvent) {
+    env.events().publish(
+        (Symbol::new(env, "invoice_transferred"), event.id),
+        event.clone(),
+    );
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
-        invoice_expiry_extended, template_created, template_disabled, template_generated,
-        InvoiceExpiryExtendedEvent, TemplateCreatedEvent, TemplateDisabledEvent,
-        TemplateGeneratedEvent,
+        invoice_expiry_extended, invoice_transferred, template_created, template_disabled,
+        template_generated, InvoiceExpiryExtendedEvent, InvoiceTransferredEvent,
+        TemplateCreatedEvent, TemplateDisabledEvent, TemplateGeneratedEvent,
     };
     use soroban_sdk::{contract, testutils::Address as _, testutils::Events, Address, Env, Symbol, TryFromVal};
 
@@ -195,6 +211,30 @@ mod tests {
         assert_eq!(
             Symbol::try_from_val(&env, &topics.get_unchecked(0)).unwrap(),
             Symbol::new(&env, "invoice_expiry_extended")
+        );
+    }
+
+    #[test]
+    fn invoice_transferred_emits_event() {
+        let env = Env::default();
+        let contract_id = env.register(TestContract, ());
+        let old_merchant = Address::generate(&env);
+        let new_merchant = Address::generate(&env);
+        env.as_contract(&contract_id, || {
+            invoice_transferred(
+                &env,
+                &InvoiceTransferredEvent {
+                    id: 7,
+                    old_merchant: old_merchant.clone(),
+                    new_merchant: new_merchant.clone(),
+                },
+            );
+        });
+
+        let (_, topics, _) = env.events().all().last().unwrap();
+        assert_eq!(
+            Symbol::try_from_val(&env, &topics.get_unchecked(0)).unwrap(),
+            Symbol::new(&env, "invoice_transferred")
         );
     }
 

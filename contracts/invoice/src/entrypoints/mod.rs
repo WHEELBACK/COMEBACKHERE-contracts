@@ -6,3 +6,4 @@ mod admin;
 mod batch;
 mod lifecycle;
 mod template;
+mod transfer;
