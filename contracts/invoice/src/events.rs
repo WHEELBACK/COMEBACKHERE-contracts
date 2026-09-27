@@ -35,6 +35,24 @@ pub struct InvoiceExpiryExtendedEvent {
     pub new_expires_at: u64,
 }
 
+/// Bounded reason code recorded when an invoice is cancelled.
+#[contracttype]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum CancelReason {
+    Duplicate = 0,
+    PricingMistake = 1,
+    CustomerRequest = 2,
+    Other = 3,
+}
+
+/// Payload emitted when an invoice is cancelled, including the reason code.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct InvoiceCancelledEvent {
+    pub id: u64,
+    pub reason: CancelReason,
+}
+
 pub fn invoice_created(env: &Env, id: u64, invoice: &Invoice) {
     env.events()
         .publish((Symbol::new(env, "invoice_created"), id), invoice.clone());
@@ -50,9 +68,10 @@ pub fn invoice_expired(env: &Env, id: u64, invoice: &Invoice) {
         .publish((Symbol::new(env, "invoice_expired"), id), invoice.clone());
 }
 
-pub fn invoice_cancelled(env: &Env, id: u64, invoice: &Invoice) {
+pub fn invoice_cancelled(env: &Env, id: u64, reason: CancelReason) {
+    let payload = InvoiceCancelledEvent { id, reason };
     env.events()
-        .publish((Symbol::new(env, "invoice_cancelled"), id), invoice.clone());
+        .publish((Symbol::new(env, "invoice_cancelled"), id), payload);
 }
 
 pub fn invoice_refund_requested(env: &Env, id: u64, invoice: &Invoice) {
@@ -119,7 +138,10 @@ pub fn invoice_expiry_extended(env: &Env, event: &InvoiceExpiryExtendedEvent) {
 
 #[cfg(test)]
 mod tests {
-    use super::{invoice_expiry_extended, InvoiceExpiryExtendedEvent};
+    use super::{
+        invoice_cancelled, invoice_expiry_extended, CancelReason, InvoiceCancelledEvent,
+        InvoiceExpiryExtendedEvent,
+    };
     use soroban_sdk::{contract, testutils::Events, Env, Symbol, TryFromVal};
 
     #[contract]
@@ -145,5 +167,23 @@ mod tests {
             Symbol::try_from_val(&env, &topics.get_unchecked(0)).unwrap(),
             Symbol::new(&env, "invoice_expiry_extended")
         );
+    }
+
+    #[test]
+    fn invoice_cancelled_emits_reason() {
+        let env = Env::default();
+        let contract_id = env.register(TestContract, ());
+        env.as_contract(&contract_id, || {
+            invoice_cancelled(&env, 7, CancelReason::CustomerRequest);
+        });
+
+        let (_, topics, data) = env.events().all().last().unwrap();
+        assert_eq!(
+            Symbol::try_from_val(&env, &topics.get_unchecked(0)).unwrap(),
+            Symbol::new(&env, "invoice_cancelled")
+        );
+        let payload = InvoiceCancelledEvent::try_from_val(&env, &data).unwrap();
+        assert_eq!(payload.id, 7);
+        assert_eq!(payload.reason, CancelReason::CustomerRequest);
     }
 }

@@ -35,6 +35,29 @@ pub enum InvoiceStatus {
     Refunded,
 }
 
+/// Bounded reason code recorded when an invoice is cancelled.
+///
+/// Kept as a small enum so values stay consistent and cheap to index. The
+/// variant is persisted on the invoice and included in the `invoice_cancelled`
+/// event so merchants, payers and support staff know why a cancellation
+/// happened. Variants must not be reordered or removed after deployment;
+/// append new variants at the end so existing on-chain data keyed by XDR
+/// discriminant continues to decode correctly.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum CancelReason {
+    /// A duplicate invoice was created for the same payment.
+    Duplicate,
+    /// The invoice amount or pricing was incorrect.
+    PricingError,
+    /// The customer requested the cancellation.
+    CustomerRequest,
+    /// The invoice expired or was superseded before payment.
+    Expired,
+    /// Any other reason not covered by the codes above.
+    Other,
+}
+
 // contracttype enum wrappers for optional complex types; Option<Address> and
 // Option<Bytes> are not supported by the contracttype macro in soroban-sdk v20.
 /// Nullable `Address` wrapper compatible with `#[contracttype]`.
@@ -80,6 +103,9 @@ pub struct Invoice {
     /// Optional token contract address for multi-currency invoices.
     /// `None` means the invoice is denominated in the default (USDC).
     pub token_address: MaybeAddress,
+    /// Reason code recorded when the invoice was cancelled.
+    /// `None` while the invoice has not been cancelled.
+    pub cancel_reason: Option<CancelReason>,
 }
 
 /// Parameters for a single invoice within a batch_create_invoice call.
