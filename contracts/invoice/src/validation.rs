@@ -49,6 +49,23 @@ pub fn require_expiry_not_too_long(expires_in_seconds: u64) -> Result<(), Invoic
     Ok(())
 }
 
+/// Reject an extension that would push the invoice expiry beyond the maximum
+/// allowed lifetime, reusing the same cap enforced at creation.
+///
+/// `current_expiry` is the invoice's existing expiry timestamp and
+/// `extension_seconds` is the additional duration being requested. The
+/// resulting lifetime is measured from `now` so that repeated extensions
+/// cannot cumulatively exceed MAX_EXPIRY_SECONDS.
+pub fn require_extension_not_too_long(
+    now: u64,
+    current_expiry: u64,
+    extension_seconds: u64,
+) -> Result<(), InvoiceError> {
+    let new_expiry = current_expiry.saturating_add(extension_seconds);
+    let remaining = new_expiry.saturating_sub(now);
+    require_expiry_not_too_long(remaining)
+}
+
 /// Reject optional invoice hash fields that exceed the storage/cost cap.
 pub fn require_hash_not_too_long(hash: &MaybeBytes) -> Result<(), InvoiceError> {
     if let MaybeBytes::Some(bytes) = hash {
