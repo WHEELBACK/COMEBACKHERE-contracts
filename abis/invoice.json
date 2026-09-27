@@ -14,6 +14,7 @@
     "get_invoice_count",
     "get_invoice_status",
     "get_invoices_by_merchant",
+    "get_invoices_by_merchant_page",
     "get_invoices_page",
     "get_pending_ids",
     "initialize",
