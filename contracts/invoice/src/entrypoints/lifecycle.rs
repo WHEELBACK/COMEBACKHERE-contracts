@@ -206,6 +206,49 @@ impl InvoiceContract {
         Ok(())
     }
 
+    // --- #534: amend_invoice must reject terminal invoice states ---
+
+    /// Amend the amount/details of a Pending invoice. Admin-only.
+    ///
+    /// The status guard runs before any storage write so that Paid, Expired,
+    /// Cancelled (and any other non-Pending) invoices are rejected with a typed
+    /// error and no `invoice_amended` event is emitted.
+    pub fn amend_invoice(
+        env: Env,
+        admin: Address,
+        id: u64,
+        new_amount_usdc: i128,
+        new_gross_usdc: i128,
+    ) -> Result<(), InvoiceError> {
+        require_admin(&env, &admin)?;
+        require_not_paused(&env)?;
+        require_positive_amount(new_amount_usdc, new_gross_usdc)?;
+        require_usdc_precision(new_amount_usdc, new_gross_usdc)?;
+
+        let mut invoice: Invoice = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Invoice(id))
+            .ok_or(InvoiceError::NotFound)?;
+
+        // #534: reject every terminal status before any storage write.
+        match invoice.status {
+            InvoiceStatus::Pending => {}
+            InvoiceStatus::Paid
+            | InvoiceStatus::Expired
+            | InvoiceStatus::Cancelled
+            | InvoiceStatus::Released => return Err(InvoiceError::NotPending),
+        }
+
+        invoice.amount_usdc = new_amount_usdc;
+        invoice.gross_usdc = new_gross_usdc;
+        env.storage()
+            .persistent()
+            .set(&DataKey::Invoice(id), &invoice);
+        events::invoice_amended(&env, id, &invoice);
+        Ok(())
+    }
+
     pub fn get_invoice(env: Env, id: u64) -> Result<Invoice, InvoiceError> {
         env.storage()
             .persistent()
@@ -229,14 +272,16 @@ impl InvoiceContract {
     ) -> Vec<Result<InvoiceStatus, InvoiceError>> {
         let mut statuses = Vec::new(&env);
         for id in ids.iter() {
-            statuses.push_back(Self::get_invoice_status(env.clone(), id));
+            let result = match env
+                .storage()
+                .persistent()
+                .get::<DataKey, Invoice>(&DataKey::Invoice(id))
+            {
+                Some(invoice) => Ok(invoice.status),
+                None => Err(InvoiceError::NotFound),
+            };
+            statuses.push_back(result);
         }
         statuses
     }
-
-    /// Return up to `limit` invoices starting at `start_id` (inclusive).
-    /// Gaps (IDs with no stored invoice) are skipped.
-    pub fn get_invoices_page(env: Env, start_id: u64, limit: u64) -> Vec<Invoice> {
-   
-
-/* … truncated 2005 chars — edit only what you need near the top … */
+}

@@ -119,7 +119,10 @@ pub fn invoice_expiry_extended(env: &Env, event: &InvoiceExpiryExtendedEvent) {
 
 #[cfg(test)]
 mod tests {
-    use super::{invoice_expiry_extended, InvoiceExpiryExtendedEvent};
+    use super::{
+        invoice_amended, invoice_expiry_extended, InvoiceAmountUpdatedEvent,
+        InvoiceExpiryExtendedEvent,
+    };
     use soroban_sdk::{contract, testutils::Events, Env, Symbol, TryFromVal};
 
     #[contract]
@@ -144,6 +147,30 @@ mod tests {
         assert_eq!(
             Symbol::try_from_val(&env, &topics.get_unchecked(0)).unwrap(),
             Symbol::new(&env, "invoice_expiry_extended")
+        );
+    }
+
+    #[test]
+    fn invoice_amended_emits_event() {
+        let env = Env::default();
+        let contract_id = env.register(TestContract, ());
+        env.as_contract(&contract_id, || {
+            invoice_amended(
+                &env,
+                &InvoiceAmountUpdatedEvent {
+                    id: 7,
+                    old_amount_usdc: 100,
+                    new_amount_usdc: 200,
+                    old_gross_usdc: 110,
+                    new_gross_usdc: 220,
+                },
+            );
+        });
+
+        let (_, topics, _) = env.events().all().last().unwrap();
+        assert_eq!(
+            Symbol::try_from_val(&env, &topics.get_unchecked(0)).unwrap(),
+            Symbol::new(&env, "invoice_amended")
         );
     }
 }
