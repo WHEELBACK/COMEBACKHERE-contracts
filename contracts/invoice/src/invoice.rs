@@ -1,4 +1,4 @@
-use soroban_sdk::{contracttype, Address, Bytes};
+use soroban_sdk::{contracttype, Address, Bytes, BytesN};
 
 pub use invoice_errors::InvoiceError;
 
@@ -62,6 +62,19 @@ pub enum MaybeBytes {
     Some(Bytes),
 }
 
+/// Nullable `BytesN<32>` wrapper compatible with `#[contracttype]`.
+///
+/// `Option<BytesN<32>>` is not supported by the Soroban contract-type macro,
+/// so this enum serves as a manual `Option` for fixed 32-byte hash fields such
+/// as the off-chain metadata hash. `None` signals absence; `Some(hash)` wraps
+/// a concrete 32-byte hash.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum MaybeHash32 {
+    None,
+    Some(BytesN<32>),
+}
+
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Invoice {
@@ -75,6 +88,9 @@ pub struct Invoice {
     pub payer: MaybeAddress,
     pub metadata_hash: MaybeBytes,
     pub payment_link_hash: MaybeBytes,
+    /// Optional 32-byte hash anchoring an off-chain JSON document (line items,
+    /// tax info, etc.) so verifiers can prove the document is unchanged.
+    pub offchain_metadata_hash: MaybeHash32,
     /// Merchant-supplied nonce for storefront idempotency (0 = no nonce).
     pub merchant_nonce: u64,
     /// Optional token contract address for multi-currency invoices.
