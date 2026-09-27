@@ -117,10 +117,61 @@ pub fn invoice_expiry_extended(env: &Env, event: &InvoiceExpiryExtendedEvent) {
     );
 }
 
+/// Emitted when a recurring invoice template is created.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct TemplateCreatedEvent {
+    pub template_id: u64,
+    pub merchant: Address,
+    pub interval: u64,
+}
+
+/// Emitted when a recurring invoice template is disabled.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct TemplateDisabledEvent {
+    pub template_id: u64,
+    pub merchant: Address,
+}
+
+/// Emitted each time a new invoice is generated from a template.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct TemplateGeneratedEvent {
+    pub template_id: u64,
+    pub invoice_id: u64,
+    pub generated_at: u64,
+}
+
+pub fn template_created(env: &Env, event: &TemplateCreatedEvent) {
+    env.events().publish(
+        (Symbol::new(env, "template_created"), event.template_id),
+        event.clone(),
+    );
+}
+
+pub fn template_disabled(env: &Env, event: &TemplateDisabledEvent) {
+    env.events().publish(
+        (Symbol::new(env, "template_disabled"), event.template_id),
+        event.clone(),
+    );
+}
+
+pub fn template_generated(env: &Env, event: &TemplateGeneratedEvent) {
+    env.events().publish(
+        (Symbol::new(env, "template_generated"), event.template_id),
+        event.clone(),
+    );
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{invoice_expiry_extended, InvoiceExpiryExtendedEvent};
-    use soroban_sdk::{contract, testutils::Events, Env, Symbol, TryFromVal};
+    use super::{
+        invoice_expiry_extended, template_created, template_disabled, template_generated,
+        InvoiceExpiryExtendedEvent, TemplateCreatedEvent, TemplateDisabledEvent,
+        TemplateGeneratedEvent,
+    };
+    use soroban_sdk::{contract, testutils::Address as _, testutils::Events, Address, Env, Symbol, TryFromVal};
 
     #[contract]
     struct TestContract;
@@ -144,6 +195,55 @@ mod tests {
         assert_eq!(
             Symbol::try_from_val(&env, &topics.get_unchecked(0)).unwrap(),
             Symbol::new(&env, "invoice_expiry_extended")
+        );
+    }
+
+    #[test]
+    fn template_lifecycle_emits_events() {
+        let env = Env::default();
+        let contract_id = env.register(TestContract, ());
+        let merchant = Address::generate(&env);
+        env.as_contract(&contract_id, || {
+            template_created(
+                &env,
+                &TemplateCreatedEvent {
+                    template_id: 1,
+                    merchant: merchant.clone(),
+                    interval: 86_400,
+                },
+            );
+            template_generated(
+                &env,
+                &TemplateGeneratedEvent {
+                    template_id: 1,
+                    invoice_id: 10,
+                    generated_at: 1_000,
+                },
+            );
+            template_disabled(
+                &env,
+                &TemplateDisabledEvent {
+                    template_id: 1,
+                    merchant: merchant.clone(),
+                },
+            );
+        });
+
+        let events = env.events().all();
+        let (_, created_topics, _) = events.get(events.len() - 3).unwrap();
+        assert_eq!(
+            Symbol::try_from_val(&env, &created_topics.get_unchecked(0)).unwrap(),
+            Symbol::new(&env, "template_created")
+        );
+        let (_, generated_topics, _) = events.get(events.len() - 2).unwrap();
+        assert_eq!(
+            Symbol::try_from_val(&env, &generated_topics.get_unchecked(0)).unwrap(),
+            Symbol::new(&env, "template_generated")
+        );
+        let (_, disabled_topics, _) = events.get(events.len() - 1).unwrap();
+        assert_eq!(
+            Symbol::try_from_val(&env, &disabled_topics.get_unchecked(0)).unwrap(),
+            Symbol::new(&env, "template_disabled")
         );
     }
 }

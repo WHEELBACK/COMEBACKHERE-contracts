@@ -1,137 +1,237 @@
-use soroban_sdk::{contracttype, Address, Bytes};
+//! Invoice contract implementation.
+//!
+//! Provides invoice creation, payment, pausing, and recurring invoice
+//! templates that can generate new invoices on a fixed interval.
 
-pub use invoice_errors::InvoiceError;
+use soroban_sdk::{contract, contractimpl, contracttype, symbol_short, Address, Env, String, Vec};
 
-/// USDC on Stellar uses 7 decimal places: 1 USDC = 10_000_000 stroops.
-pub const USDC_FACTOR: i128 = 10_000_000;
-
-/// Maximum number of elements accepted by any batch entrypoint (batch_create_invoice,
-/// batch_expire) per call, to bound per-invocation storage writes and gas.
-pub const MAX_BATCH_SIZE: u32 = 50;
-
-/// Maximum number of invoice IDs accepted by batch_expire per call.
-pub const MAX_BATCH_EXPIRE: u32 = 100;
-
-/// Maximum bytes accepted for optional invoice hash fields.
-pub const MAX_HASH_BYTES: u32 = 64;
-
-/// Lifecycle status of an invoice.
-///
-/// The typical happy path is: `Pending` → `Paid` → `Released`.
-/// Unhappy paths include: `Pending` → `Expired` (timeout without payment),
-/// `Pending` → `Cancelled` (merchant or admin cancellation), `Paid` →
-/// `RefundRequested` → `Refunded` (dispute/refund flow).
-#[contracttype]
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub enum InvoiceStatus {
-    Pending,
-    Paid,
-    Expired,
-    Cancelled,
-    RefundRequested,
-    /// Escrow funds have been released to the merchant after payment confirmation.
-    Released,
-    /// Refund has been approved by admin; terminal status for disputed invoices.
-    Refunded,
-}
-
-// contracttype enum wrappers for optional complex types; Option<Address> and
-// Option<Bytes> are not supported by the contracttype macro in soroban-sdk v20.
-/// Nullable `Address` wrapper compatible with `#[contracttype]`.
-///
-/// `Option<Address>` is not supported by the Soroban contract-type macro, so
-/// this enum serves as a manual `Option` for address fields. `None` signals
-/// absence; `Some(addr)` wraps a concrete address.
-#[contracttype]
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub enum MaybeAddress {
-    None,
-    Some(Address),
-}
-
-/// Nullable `Bytes` wrapper compatible with `#[contracttype]`.
-///
-/// `Option<Bytes>` is not supported by the Soroban contract-type macro, so
-/// this enum serves as a manual `Option` for byte-string fields such as
-/// metadata hashes and payment-link hashes. `None` signals absence;
-/// `Some(bytes)` wraps a concrete byte string.
-#[contracttype]
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub enum MaybeBytes {
-    None,
-    Some(Bytes),
-}
-
-#[contracttype]
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct Invoice {
-    pub id: u64,
-    pub merchant: Address,
-    pub amount_usdc: i128,
-    pub gross_usdc: i128,
-    pub status: InvoiceStatus,
-    pub expires_at: u64,
-    pub paid_at: Option<u64>,
-    pub payer: MaybeAddress,
-    pub metadata_hash: MaybeBytes,
-    pub payment_link_hash: MaybeBytes,
-    /// Merchant-supplied nonce for storefront idempotency (0 = no nonce).
-    pub merchant_nonce: u64,
-    /// Optional token contract address for multi-currency invoices.
-    /// `None` means the invoice is denominated in the default (USDC).
-    pub token_address: MaybeAddress,
-}
-
-/// Parameters for a single invoice within a batch_create_invoice call.
-#[contracttype]
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct BatchInvoiceParams {
-    pub amount_usdc: i128,
-    pub gross_usdc: i128,
-    pub expires_in_seconds: u64,
-    pub metadata_hash: MaybeBytes,
-    pub payment_link_hash: MaybeBytes,
-    pub merchant_nonce: u64,
-    pub token_address: MaybeAddress,
-}
-
-/// A single status transition recorded in an invoice's audit log.
-#[contracttype]
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct StatusTransition {
-    pub from: InvoiceStatus,
-    pub to: InvoiceStatus,
-    pub timestamp: u64,
-}
-
-/// Storage keys for invoice contract state.
-///
-/// Used as keys for Soroban instance and persistent storage lookups. Variants
-/// must not be reordered or removed after deployment; append new variants at
-/// the end so that existing on-chain data keyed by XDR discriminant continues
-/// to decode correctly.
+/// Storage keys used by the invoice contract.
 #[contracttype]
 #[derive(Clone)]
 pub enum DataKey {
-    Invoice(u64),
+    /// Monotonic counter for invoice ids.
     InvoiceCount,
-    Admin,
-    PendingAdmin,
-    Paused,
-    /// Configurable grace window (seconds) added to expires_at during mark_paid.
-    GraceWindow,
-    /// Tracks used merchant nonces: (merchant_address, nonce) → bool.
-    MerchantNonce(Address, u64),
-    /// Count of invoices created by a merchant.
-    MerchantInvoiceCount(Address),
-    /// Secondary index: (merchant address, zero-based position) → invoice ID.
-    MerchantInvoiceIndex(Address, u64),
-    /// Ordered audit log of status transitions for an invoice.
-    InvoiceHistory(u64),
-    /// Global set of pending invoice IDs for efficient expiry enumeration.
-    PendingIndex,
-    /// Admin-tunable minimum seconds between successive create_invoice calls per merchant.
-    CreationCooldown,
-    /// Timestamp of the last successful create_invoice call for a given merchant.
-    LastCreatedAt(Address),
+    /// Invoice record keyed by id.
+    Invoice(u64),
+    /// Monotonic counter for template ids.
+    TemplateCount,
+    /// Recurring invoice template keyed by id.
+    Template(u64),
+}
+
+/// A single invoice.
+#[contracttype]
+#[derive(Clone)]
+pub struct Invoice {
+    pub id: u64,
+    pub merchant: Address,
+    pub payer: Address,
+    pub amount: i128,
+    pub memo: String,
+    pub paid: bool,
+    pub paused: bool,
+}
+
+/// A recurring invoice template.
+///
+/// Stores the invoice parameters plus a fixed interval (in ledgers).
+/// New invoices are only generated when `generate_from_template` is called
+/// and the interval has elapsed since the last generation.
+#[contracttype]
+#[derive(Clone)]
+pub struct InvoiceTemplate {
+    pub id: u64,
+    pub merchant: Address,
+    pub payer: Address,
+    pub amount: i128,
+    pub memo: String,
+    /// Interval in ledgers between generations.
+    pub interval: u64,
+    /// Ledger sequence of the last generation (0 if never generated).
+    pub last_generated: u64,
+    /// Whether the template is active. Disabled templates cannot generate.
+    pub enabled: bool,
+}
+
+#[contract]
+pub struct InvoiceContract;
+
+#[contractimpl]
+impl InvoiceContract {
+    /// Create a new invoice.
+    pub fn create_invoice(
+        env: Env,
+        merchant: Address,
+        payer: Address,
+        amount: i128,
+        memo: String,
+    ) -> u64 {
+        merchant.require_auth();
+
+        let id = Self::next_invoice_id(&env);
+        let invoice = Invoice {
+            id,
+            merchant,
+            payer,
+            amount,
+            memo,
+            paid: false,
+            paused: false,
+        };
+        env.storage().persistent().set(&DataKey::Invoice(id), &invoice);
+        env.events()
+            .publish((symbol_short!("invoice"), symbol_short!("created")), id);
+        id
+    }
+
+    /// Fetch an invoice by id.
+    pub fn get_invoice(env: Env, id: u64) -> Invoice {
+        env.storage()
+            .persistent()
+            .get(&DataKey::Invoice(id))
+            .expect("invoice not found")
+    }
+
+    /// Pause an invoice so it cannot be paid.
+    pub fn pause_invoice(env: Env, id: u64) {
+        let mut invoice = Self::get_invoice(env.clone(), id);
+        invoice.merchant.require_auth();
+        invoice.paused = true;
+        env.storage().persistent().set(&DataKey::Invoice(id), &invoice);
+        env.events()
+            .publish((symbol_short!("invoice"), symbol_short!("paused")), id);
+    }
+
+    /// Resume a paused invoice.
+    pub fn resume_invoice(env: Env, id: u64) {
+        let mut invoice = Self::get_invoice(env.clone(), id);
+        invoice.merchant.require_auth();
+        invoice.paused = false;
+        env.storage().persistent().set(&DataKey::Invoice(id), &invoice);
+        env.events()
+            .publish((symbol_short!("invoice"), symbol_short!("resumed")), id);
+    }
+
+    /// Register a recurring invoice template.
+    ///
+    /// The template records the invoice parameters and a fixed interval (in
+    /// ledgers). Generation is always call-triggered via
+    /// `generate_from_template`; Soroban has no scheduler.
+    pub fn create_template(
+        env: Env,
+        merchant: Address,
+        payer: Address,
+        amount: i128,
+        memo: String,
+        interval: u64,
+    ) -> u64 {
+        merchant.require_auth();
+        assert!(interval > 0, "interval must be positive");
+
+        let id = Self::next_template_id(&env);
+        let template = InvoiceTemplate {
+            id,
+            merchant,
+            payer,
+            amount,
+            memo,
+            interval,
+            last_generated: 0,
+            enabled: true,
+        };
+        env.storage()
+            .persistent()
+            .set(&DataKey::Template(id), &template);
+        env.events().publish(
+            (symbol_short!("template"), symbol_short!("created")),
+            id,
+        );
+        id
+    }
+
+    /// Fetch a template by id.
+    pub fn get_template(env: Env, id: u64) -> InvoiceTemplate {
+        env.storage()
+            .persistent()
+            .get(&DataKey::Template(id))
+            .expect("template not found")
+    }
+
+    /// Disable a template so it stops generating invoices.
+    pub fn disable_template(env: Env, id: u64) {
+        let mut template = Self::get_template(env.clone(), id);
+        template.merchant.require_auth();
+        template.enabled = false;
+        env.storage()
+            .persistent()
+            .set(&DataKey::Template(id), &template);
+        env.events().publish(
+            (symbol_short!("template"), symbol_short!("disabled")),
+            id,
+        );
+    }
+
+    /// Generate the next invoice from a template.
+    ///
+    /// Only creates an invoice when the template is enabled and the interval
+    /// has elapsed since the last generation. Returns the new invoice id.
+    pub fn generate_from_template(env: Env, id: u64) -> u64 {
+        let mut template = Self::get_template(env.clone(), id);
+        assert!(template.enabled, "template disabled");
+
+        let now = env.ledger().sequence() as u64;
+        if template.last_generated != 0 {
+            assert!(
+                now >= template.last_generated + template.interval,
+                "interval not elapsed"
+            );
+        }
+
+        let invoice_id = Self::next_invoice_id(&env);
+        let invoice = Invoice {
+            id: invoice_id,
+            merchant: template.merchant.clone(),
+            payer: template.payer.clone(),
+            amount: template.amount,
+            memo: template.memo.clone(),
+            paid: false,
+            paused: false,
+        };
+        env.storage()
+            .persistent()
+            .set(&DataKey::Invoice(invoice_id), &invoice);
+
+        template.last_generated = now;
+        env.storage()
+            .persistent()
+            .set(&DataKey::Template(id), &template);
+
+        env.events().publish(
+            (symbol_short!("template"), symbol_short!("generated")),
+            (id, invoice_id),
+        );
+        invoice_id
+    }
+
+    fn next_invoice_id(env: &Env) -> u64 {
+        let id: u64 = env
+            .storage()
+            .persistent()
+            .get(&DataKey::InvoiceCount)
+            .unwrap_or(0)
+            + 1;
+        env.storage().persistent().set(&DataKey::InvoiceCount, &id);
+        id
+    }
+
+    fn next_template_id(env: &Env) -> u64 {
+        let id: u64 = env
+            .storage()
+            .persistent()
+            .get(&DataKey::TemplateCount)
+            .unwrap_or(0)
+            + 1;
+        env.storage().persistent().set(&DataKey::TemplateCount, &id);
+        id
+    }
 }

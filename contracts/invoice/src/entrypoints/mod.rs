@@ -5,3 +5,4 @@
 mod admin;
 mod batch;
 mod lifecycle;
+mod template;
