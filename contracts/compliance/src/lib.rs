@@ -239,12 +239,18 @@ impl ComplianceContract {
         Ok(())
     }
 
-    pub fn bulk_check_addresses(env: Env, addresses: Vec<Address>) -> Vec<bool> {
+    pub fn bulk_check_addresses(
+        env: Env,
+        addresses: Vec<Address>,
+    ) -> Result<Vec<bool>, ContractError> {
+        if addresses.len() > MAX_BATCH_SIZE {
+            return Err(ContractError::BatchTooLarge);
+        }
         let mut results = Vec::new(&env);
         for address in addresses.iter() {
             results.push_back(Self::is_allowed(env.clone(), address));
         }
-        results
+        Ok(results)
     }
 
     pub fn is_allowed(env: Env, address: Address) -> bool {
