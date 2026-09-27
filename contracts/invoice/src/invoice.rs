@@ -106,6 +106,13 @@ pub struct Invoice {
     /// Optional token contract address for multi-currency invoices.
     /// `None` means the invoice is denominated in the default (USDC).
     pub token_address: MaybeAddress,
+    /// Set to `true` the first time `release_escrow` succeeds for this invoice.
+    ///
+    /// This is the state-based guard that prevents double escrow release: it is
+    /// written before any external token transfer (checks-effects-interactions),
+    /// so a second `release_escrow` call observes `true` and returns a typed
+    /// error without moving funds again.
+    pub escrow_released: bool,
 }
 
 /// Parameters for a single invoice within a batch_create_invoice call.

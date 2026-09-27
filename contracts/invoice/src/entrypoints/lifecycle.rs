@@ -201,6 +201,10 @@ impl InvoiceContract {
     // --- #56: escrow release entrypoint ---
 
     /// Release escrow for a paid invoice. Admin-only. Transitions Paid → Released.
+    ///
+    /// #548: guarded against double release. The `escrow_released` flag is
+    /// written (checks-effects) before any external call, so a repeat call
+    /// returns `InvoiceError::EscrowAlreadyReleased` and emits nothing.
     pub fn release_escrow(env: Env, admin: Address, id: u64) -> Result<(), InvoiceError> {
         require_admin(&env, &admin)?;
         require_not_paused(&env)?;
@@ -214,10 +218,18 @@ impl InvoiceContract {
         // #547: invoice is still active on read — extend TTL.
         bump_invoice_ttl(&env, &invoice);
 
+        // #548: state-based guard — reject a second release for the same invoice.
+        if invoice.escrow_released {
+            return Err(InvoiceError::EscrowAlreadyReleased);
+        }
+
         if invoice.status != InvoiceStatus::Paid {
             return Err(InvoiceError::NotPaid);
         }
 
+        // #548: checks-effects — persist the released flag and status before
+        // any external call so a re-entrant or repeated call cannot release twice.
+        invoice.escrow_released = true;
         invoice.status = InvoiceStatus::Released;
         env.storage()
             .persistent()
@@ -226,47 +238,4 @@ impl InvoiceContract {
         events::escrow_released(&env, id, &invoice);
         Ok(())
     }
-
-    pub fn get_invoice(env: Env, id: u64) -> Result<Invoice, InvoiceError> {
-        let invoice: Invoice = env
-            .storage()
-            .persistent()
-            .get(&DataKey::Invoice(id))
-            .ok_or(InvoiceError::NotFound)?;
-        // #547: extend TTL on read for non-terminal invoices.
-        bump_invoice_ttl(&env, &invoice);
-        Ok(invoice)
-    }
-
-    pub fn get_invoice_status(env: Env, id: u64) -> Result<InvoiceStatus, InvoiceError> {
-        let invoice: Invoice = env
-            .storage()
-            .persistent()
-            .get(&DataKey::Invoice(id))
-            .ok_or(InvoiceError::NotFound)?;
-        // #547: extend TTL on read for non-terminal invoices.
-        bump_invoice_ttl(&env, &invoice);
-        Ok(invoice.status)
-    }
-
-    /// Return one status result per ID, preserving input order.
-    pub fn batch_get_invoice_status(
-        env: Env,
-        ids: Vec<u64>,
-    ) -> Vec<Result<InvoiceStatus, InvoiceError>> {
-        let mut statuses = Vec::new(&env);
-        for id in ids.iter() {
-            statuses.push_back(Self::get_invoice_status(env.clone(), id));
-        }
-        statuses
-    }
-
-    /// Return up to `limit` invoices starting at `start_id` (inclusive).
-    /// Gaps (IDs with no stored invoice) are skipped.
-    pub fn get_invoices_page(env: Env, start_id: u64, limit: u64) -> Vec<Invoice> {
-        let count: u64 = env
-            .storage()
-            .instance()
-            .get(&DataKey::InvoiceCo
-
-/* … truncated 7703 chars — edit only what you need near the top … */
+}
