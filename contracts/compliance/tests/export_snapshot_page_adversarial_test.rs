@@ -6,6 +6,16 @@
 // combinations against that maximally-full index return cleanly rather than
 // panicking, reading out of bounds, or burning instructions disproportionate
 // to the requested page size.
+//
+// This file also covers the write-between-reads consistency guarantee (#605):
+// because the AddressIndex is append-only, a page already fetched is stable —
+// no entry can be inserted into a page whose slot range has already been
+// written. Addresses added after a page has been read appear at the end of
+// the index and will be present in subsequent page fetches that span their
+// insertion position. The consequence for exporters: a snapshot taken in
+// multiple page calls is consistent for all entries up to the count observed
+// on the first page call, and any entry added during the export appears in
+// the later pages that cover its index slot.
 
 use compliance::{
     AddressState, ComplianceContract, ComplianceContractClient, ContractError,
@@ -168,4 +178,160 @@ fn full_index_page_matches_insertion_order() {
         assert_eq!(addr, tracked[i]);
         assert_eq!(state, AddressState::Allowed);
     }
+}
+
+// ── Write-between-reads consistency tests (#605) ─────────────────────────────
+//
+// The AddressIndex is append-only: each `allow_address` / `bulk_allow_addresses`
+// call appends to the end and never modifies an existing slot. This means:
+//
+//   1. A page that has been fetched is permanently stable; no subsequent write
+//      can change the content of an already-returned page.
+//   2. Addresses added while an export is in progress appear at the tail of the
+//      index. If a second page fetch starts at a position beyond the new entry,
+//      the entry is visible; if the second fetch starts before it, the entry
+//      will be on a later page that the caller has not yet fetched.
+//   3. No address is ever skipped or duplicated due to concurrent writes: the
+//      only effect of a mid-export write is that the exporter may see more
+//      entries than existed at the start, never fewer.
+
+/// Addresses added *after* the first page has been read do not appear in
+/// that first page on re-read (pages are immutable once written), but they
+/// DO appear in a subsequent page fetch that covers their index slot.
+#[test]
+fn address_added_after_first_page_read_appears_in_later_page() {
+    let (env, admin, client) = setup();
+
+    // Seed two addresses so we have something on page 0.
+    let addr_a = Address::generate(&env);
+    let addr_b = Address::generate(&env);
+    client.allow_address(&admin, &addr_a);
+    client.allow_address(&admin, &addr_b);
+
+    // Read page 0 (start=0, limit=2) — captures only addr_a and addr_b.
+    let page0_before = client.export_snapshot_page(&admin, &0, &2);
+    assert_eq!(page0_before.len(), 2);
+
+    // Now add a third address — simulating a write between page reads.
+    let addr_c = Address::generate(&env);
+    client.allow_address(&admin, &addr_c);
+
+    // Re-reading page 0 with the same parameters must return the same two
+    // entries; addr_c must NOT appear here because it was appended after them.
+    let page0_after = client.export_snapshot_page(&admin, &0, &2);
+    assert_eq!(page0_after.len(), 2);
+    assert_eq!(page0_after.get(0).unwrap().0, addr_a);
+    assert_eq!(page0_after.get(1).unwrap().0, addr_b);
+
+    // Fetching the next page (start=2, limit=10) must include addr_c.
+    let page1 = client.export_snapshot_page(&admin, &2, &10);
+    assert_eq!(page1.len(), 1);
+    assert_eq!(page1.get(0).unwrap().0, addr_c);
+}
+
+/// When multiple addresses are added between page reads, all of them appear
+/// in the later pages that cover their index slots — none are dropped.
+#[test]
+fn multiple_addresses_added_between_page_reads_all_visible_in_later_pages() {
+    let (env, admin, client) = setup();
+
+    // Fill exactly one page worth of addresses (ADDR_INDEX_PAGE_SIZE = 25, but
+    // we use a small number here to keep the test fast and independent of the
+    // internal page size constant, which is not pub).
+    let page_size: u64 = 5;
+    let mut first_batch: std::vec::Vec<Address> = std::vec::Vec::new();
+    for _ in 0..page_size {
+        let addr = Address::generate(&env);
+        client.allow_address(&admin, &addr);
+        first_batch.push(addr);
+    }
+
+    // Read the first page — establishes a "snapshot" of the first 5 entries.
+    let page0 = client.export_snapshot_page(&admin, &0, &page_size);
+    assert_eq!(page0.len() as u64, page_size);
+    for (i, (addr, _state)) in page0.iter().enumerate() {
+        assert_eq!(addr, first_batch[i]);
+    }
+
+    // Simulate writes between page reads: add 3 more addresses.
+    let mut second_batch: std::vec::Vec<Address> = std::vec::Vec::new();
+    for _ in 0..3u32 {
+        let addr = Address::generate(&env);
+        client.allow_address(&admin, &addr);
+        second_batch.push(addr);
+    }
+
+    // Fetching the next page must see all 3 newly added addresses.
+    let page1 = client.export_snapshot_page(&admin, &page_size, &10);
+    assert_eq!(page1.len(), 3);
+    for (i, (addr, _state)) in page1.iter().enumerate() {
+        assert_eq!(addr, second_batch[i]);
+    }
+
+    // The first page remains unchanged after the writes.
+    let page0_reread = client.export_snapshot_page(&admin, &0, &page_size);
+    assert_eq!(page0_reread.len() as u64, page_size);
+    for (i, (addr, _state)) in page0_reread.iter().enumerate() {
+        assert_eq!(addr, first_batch[i]);
+    }
+}
+
+/// A full sequential scan started before a mid-export write covers all
+/// addresses that existed at any point during the scan: entries present at
+/// the start are on earlier pages, entries added mid-scan are on later pages,
+/// and no entry is duplicated or skipped.
+#[test]
+fn sequential_scan_with_mid_export_write_produces_no_duplicates_and_no_gaps() {
+    let (env, admin, client) = setup();
+
+    // Seed an initial set.
+    let initial_count: u64 = 4;
+    let mut all_expected: std::vec::Vec<Address> = std::vec::Vec::new();
+    for _ in 0..initial_count {
+        let addr = Address::generate(&env);
+        client.allow_address(&admin, &addr);
+        all_expected.push(addr);
+    }
+
+    // Read the first page (limit=2).
+    let limit: u64 = 2;
+    let page0 = client.export_snapshot_page(&admin, &0, &limit);
+    assert_eq!(page0.len() as u64, limit);
+
+    // Add a new address mid-scan.
+    let mid_addr = Address::generate(&env);
+    client.allow_address(&admin, &mid_addr);
+    all_expected.push(mid_addr);
+
+    // Collect the rest of the index page by page until we get an empty page.
+    let mut collected: std::vec::Vec<Address> = page0.iter().map(|(a, _)| a).collect();
+    let mut start: u64 = limit;
+    loop {
+        let page = client.export_snapshot_page(&admin, &start, &limit);
+        if page.len() == 0 {
+            break;
+        }
+        for (addr, _state) in page.iter() {
+            collected.push(addr);
+        }
+        start += limit;
+    }
+
+    // Every address in all_expected must appear exactly once.
+    for expected_addr in &all_expected {
+        let count = collected.iter().filter(|a| *a == expected_addr).count();
+        assert_eq!(
+            count, 1,
+            "address {:?} appeared {count} times; expected exactly once",
+            expected_addr
+        );
+    }
+    // No unexpected extras.
+    assert_eq!(
+        collected.len(),
+        all_expected.len(),
+        "collected {} entries but expected {}",
+        collected.len(),
+        all_expected.len()
+    );
 }

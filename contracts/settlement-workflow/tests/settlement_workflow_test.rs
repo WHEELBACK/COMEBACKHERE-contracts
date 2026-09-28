@@ -1,13 +1,13 @@
 #[path = "reentrancy_suite/malicious_compliance.rs"]
 mod malicious_compliance;
 
-use compliance::{ComplianceContract, ComplianceContractClient};
+use compliance::ComplianceContractClient;
 use settlement_workflow::{SettlementWorkflowContract, SettlementWorkflowContractClient};
 use soroban_sdk::{
     testutils::{Address as _, Events},
     token, Address, Env, FromVal, Symbol,
 };
-use treasury::{TreasuryContract, TreasuryContractClient, TreasuryError};
+use treasury::{TreasuryContractClient, TreasuryError};
 
 /// Generous CPU-instruction ceiling for the two-hop cross-contract call chain
 /// (Compliance::is_allowed → Treasury::execute_settlement). Native/test-host
@@ -46,41 +46,19 @@ fn setup_with_signer(
     Address,
 ) {
     let env = Env::default();
-    env.mock_all_auths();
-
-    let admin = Address::generate(&env);
-    let merchant = Address::generate(&env);
-
-    let compliance_id = env.register_contract(None, ComplianceContract);
-    let compliance = ComplianceContractClient::new(&env, &compliance_id);
-    compliance.initialize(&admin);
-
-    let treasury_id = env.register_contract(None, TreasuryContract);
-    let treasury = TreasuryContractClient::new(&env, &treasury_id);
-    treasury.initialize(&admin, &1, &soroban_sdk::Vec::new(&env));
-
-    let workflow_id = env.register_contract(None, SettlementWorkflowContract);
-    let workflow = SettlementWorkflowContractClient::new(&env, &workflow_id);
-    // Pin the trusted compliance/treasury instances and the admin once at init
-    // (#364, #621).
-    workflow.initialize(&admin, &compliance_id, &treasury_id);
-    // The workflow contract executes settlements as itself, so it must be an
-    // authorized Treasury signer.
-    if register_workflow_signer {
-        treasury.set_signer(&admin, &workflow_id, &1);
-    }
-
-    let token_id = env.register_stellar_asset_contract(admin.clone());
+    // Delegate multi-contract deployment to the shared workspace fixture (#466).
+    let f = comebackhere_tests::fixtures::setup_with_workflow(&env, register_workflow_signer);
+    let token_id = env.register_stellar_asset_contract(f.admin.clone());
 
     (
         env,
-        admin,
-        merchant,
-        compliance,
-        compliance_id,
-        treasury,
-        treasury_id,
-        workflow,
+        f.admin,
+        f.merchant,
+        f.compliance,
+        f.compliance_contract_id,
+        f.treasury,
+        f.treasury_contract_id,
+        f.workflow,
         token_id,
     )
 }
