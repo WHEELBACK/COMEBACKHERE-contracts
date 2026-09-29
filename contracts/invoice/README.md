@@ -60,6 +60,17 @@ stateDiagram-v2
 | `pause`              | `admin`       | `admin: Address`                                                                                                                                                 | `Result<(), InvoiceError>`            | `Unauthorized`                                                                                            |
 | `unpause`            | `admin`       | `admin: Address`                                                                                                                                                 | `Result<(), InvoiceError>`            | `Unauthorized`                                                                                            |
 
+## Batch creation atomicity
+
+`batch_create_invoice` is **all-or-nothing**. Every entry in the batch is
+validated up front — amounts, precision, due dates, merchant authorization,
+nonce uniqueness, and batch caps — before any invoice is persisted. If any
+entry fails validation, the call returns the corresponding typed
+`InvoiceError` and no state is written: the invoice count, pending index, and
+merchant index are left exactly as they were before the call. Integrators can
+therefore treat a failed batch as a no-op and retry the whole batch after
+correcting the offending entry.
+
 ## Merchant nonce lifecycle
 
 `merchant_nonce` is an idempotency key scoped to the merchant address. A value of

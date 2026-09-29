@@ -119,6 +119,9 @@ pub struct InvoiceTemplate {
     pub payer: MaybeAddress,
     pub metadata_hash: MaybeBytes,
     pub payment_link_hash: MaybeBytes,
+    /// Optional 32-byte hash anchoring an off-chain JSON document (line items,
+    /// tax info, etc.) so verifiers can prove the document is unchanged.
+    pub offchain_metadata_hash: MaybeHash32,
     /// Merchant-supplied nonce for storefront idempotency (0 = no nonce).
     pub merchant_nonce: u64,
     /// Token contract address the invoice is denominated in.

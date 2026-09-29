@@ -26,7 +26,7 @@ pub use refund::{
     BPS_DENOMINATOR, MAX_REFUND_FEE_BPS, REFUND_NETWORK_FEE,
 };
 
-use soroban_sdk::{contract, Env, Vec};
+use soroban_sdk::{contract, BytesN, Env, Vec};
 
 /// Persistent TTL thresholds for active invoices, per `docs/storage-ttl-audit.md`.
 ///

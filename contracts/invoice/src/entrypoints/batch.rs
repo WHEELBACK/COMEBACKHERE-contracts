@@ -14,7 +14,11 @@ use soroban_sdk::{contractimpl, Address, Env, Vec};
 #[contractimpl]
 impl InvoiceContract {
     /// Create multiple invoices atomically in a single invocation.
-    /// All validations run on every element before any storage is written.
+    ///
+    /// The batch is all-or-nothing: every entry is validated up front and no
+    /// storage is written until all entries pass. If any entry is invalid the
+    /// call returns a typed error and leaves the invoice count, pending index
+    /// and merchant index completely unchanged.
     /// Returns a Vec of assigned IDs in the same order as the input params.
     pub fn batch_create_invoice(
         env: Env,
@@ -74,7 +78,7 @@ impl InvoiceContract {
             .instance()
             .get(&DataKey::invoice_count())
             .unwrap_or(0);
-        count
+        let final_count = count
             .checked_add(params.len() as u64)
             .ok_or(InvoiceError::InvoiceCountOverflow)?;
 
@@ -92,6 +96,18 @@ impl InvoiceContract {
             let expires_at = created_at
                 .checked_add(p.expires_in_seconds)
                 .ok_or(InvoiceError::ExpiryOverflow)?;
+            expiries.push_back(expires_at);
+        }
+
+        // All entries validated: now persist the batch.
+        let mut ids = Vec::new(&env);
+        let mut next_id = count;
+        for (i, p) in params.iter().enumerate() {
+            next_id = next_id
+                .checked_add(1)
+                .ok_or(InvoiceError::InvoiceCountOverflow)?;
+            let id = next_id;
+            let expires_at = expiries.get(i as u32).unwrap();
             let invoice = Invoice {
                 id,
                 merchant: merchant.clone(),
