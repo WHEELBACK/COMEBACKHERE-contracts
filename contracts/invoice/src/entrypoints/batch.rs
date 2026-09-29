@@ -4,7 +4,7 @@ use crate::validation::{
     require_not_paused, require_positive_amount, require_usdc_precision,
     require_valid_payment_link_hash,
 };
-use crate::{append_history, pending_index_add, pending_index_remove};
+use crate::{append_history, pending_index_add, pending_index_remove, status_count_add};
 use crate::{
     BatchInvoiceParams, DataKey, Invoice, InvoiceContract, InvoiceContractArgs,
     InvoiceContractClient, InvoiceError, InvoiceStatus, MaybeAddress, MAX_BATCH_EXPIRE,
@@ -137,6 +137,7 @@ impl InvoiceContract {
                 .set(&merchant_count_key, &(merchant_count + 1));
 
             pending_index_add(&env, id);
+            status_count_add(&env, InvoiceStatus::Pending, 1);
             events::invoice_created(&env, id, &invoice);
             ids.push_back(id);
         }
@@ -171,6 +172,8 @@ impl InvoiceContract {
                     invoice.status = InvoiceStatus::Expired;
                     env.storage().persistent().set(&key, &invoice);
                     pending_index_remove(&env, id);
+                    status_count_add(&env, InvoiceStatus::Pending, -1);
+                    status_count_add(&env, InvoiceStatus::Expired, 1);
                     append_history(&env, id, InvoiceStatus::Pending, InvoiceStatus::Expired);
                     events::invoice_expired(&env, id, &invoice);
                     expired_count += 1;

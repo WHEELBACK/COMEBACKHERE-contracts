@@ -68,9 +68,10 @@ pub fn invoice_expired(env: &Env, id: u64, invoice: &Invoice) {
         .publish((Symbol::new(env, "invoice_expired"), id), invoice.clone());
 }
 
-pub fn invoice_cancelled(env: &Env, id: u64, invoice: &Invoice) {
+pub fn invoice_cancelled(env: &Env, id: u64, reason: CancelReason) {
+    let payload = InvoiceCancelledEvent { id, reason };
     env.events()
-        .publish((Symbol::new(env, "invoice_cancelled"), id), invoice.clone());
+        .publish((Symbol::new(env, "invoice_cancelled"), id), payload);
 }
 
 pub fn invoice_refund_requested(env: &Env, id: u64, invoice: &Invoice) {
