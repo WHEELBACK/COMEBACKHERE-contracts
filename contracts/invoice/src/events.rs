@@ -14,6 +14,7 @@
 // - Optional types (Option<u64>) serialize to null or value
 
 use crate::invoice::Invoice;
+use crate::refund::NetRefund;
 use soroban_sdk::{contracttype, Address, Env, Symbol};
 
 /// Emitted when an amendment changes an invoice's amount fields.
@@ -35,6 +36,16 @@ pub struct InvoiceExpiryExtendedEvent {
     pub new_expires_at: u64,
 }
 
+/// Emitted when a partial payment is recorded against an invoice.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct InvoicePartiallyPaidEvent {
+    pub id: u64,
+    pub amount: i128,
+    pub amount_paid: i128,
+    pub amount_remaining: i128,
+}
+
 pub fn invoice_created(env: &Env, id: u64, invoice: &Invoice) {
     env.events()
         .publish((Symbol::new(env, "invoice_created"), id), invoice.clone());
@@ -43,6 +54,13 @@ pub fn invoice_created(env: &Env, id: u64, invoice: &Invoice) {
 pub fn invoice_paid(env: &Env, id: u64, invoice: &Invoice) {
     env.events()
         .publish((Symbol::new(env, "invoice_paid"), id), invoice.clone());
+}
+
+pub fn invoice_partially_paid(env: &Env, event: &InvoicePartiallyPaidEvent) {
+    env.events().publish(
+        (Symbol::new(env, "invoice_partially_paid"), event.id),
+        event.clone(),
+    );
 }
 
 pub fn invoice_expired(env: &Env, id: u64, invoice: &Invoice) {
@@ -70,6 +88,42 @@ pub fn refund_approved(env: &Env, id: u64, invoice: &Invoice) {
 pub fn refund_rejected(env: &Env, id: u64, invoice: &Invoice) {
     env.events()
         .publish((Symbol::new(env, "refund_rejected"), id), invoice.clone());
+}
+
+/// Emitted when a refund is processed on-chain and the net payout is
+/// transferred to the payer (#71).
+///
+/// Carries the whole gross-vs-net breakdown rather than only the amount paid,
+/// so an indexer or a support workflow can show the customer exactly what was
+/// deducted (payment-gateway fee, network fee) instead of re-deriving it from
+/// the invoice. Mirrors [`crate::NetRefund`], which is also stored under
+/// `DataKey::RefundBreakdown` for the same invoice.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct RefundProcessedEvent {
+    pub id: u64,
+    /// The payer the net amount was transferred to.
+    pub payer: Address,
+    pub gross_amount: i128,
+    pub processing_fee: i128,
+    pub network_fee: i128,
+    pub net_amount: i128,
+    /// Ledger timestamp the payout was executed at.
+    pub processed_at: u64,
+}
+
+pub fn refund_processed(env: &Env, id: u64, payer: &Address, refund: &NetRefund) {
+    let payload = RefundProcessedEvent {
+        id,
+        payer: payer.clone(),
+        gross_amount: refund.gross_amount,
+        processing_fee: refund.processing_fee,
+        network_fee: refund.network_fee,
+        net_amount: refund.net_amount,
+        processed_at: env.ledger().timestamp(),
+    };
+    env.events()
+        .publish((Symbol::new(env, "refund_processed"), id), payload);
 }
 
 /// Minimal payload emitted when escrow is released for a paid invoice.
@@ -119,7 +173,10 @@ pub fn invoice_expiry_extended(env: &Env, event: &InvoiceExpiryExtendedEvent) {
 
 #[cfg(test)]
 mod tests {
-    use super::{invoice_expiry_extended, InvoiceExpiryExtendedEvent};
+    use super::{
+        invoice_expiry_extended, invoice_partially_paid, InvoiceExpiryExtendedEvent,
+        InvoicePartiallyPaidEvent,
+    };
     use soroban_sdk::{contract, testutils::Events, Env, Symbol, TryFromVal};
 
     #[contract]
@@ -144,6 +201,29 @@ mod tests {
         assert_eq!(
             Symbol::try_from_val(&env, &topics.get_unchecked(0)).unwrap(),
             Symbol::new(&env, "invoice_expiry_extended")
+        );
+    }
+
+    #[test]
+    fn invoice_partially_paid_emits_event() {
+        let env = Env::default();
+        let contract_id = env.register(TestContract, ());
+        env.as_contract(&contract_id, || {
+            invoice_partially_paid(
+                &env,
+                &InvoicePartiallyPaidEvent {
+                    id: 1,
+                    amount: 40,
+                    amount_paid: 40,
+                    amount_remaining: 60,
+                },
+            );
+        });
+
+        let (_, topics, _) = env.events().all().last().unwrap();
+        assert_eq!(
+            Symbol::try_from_val(&env, &topics.get_unchecked(0)).unwrap(),
+            Symbol::new(&env, "invoice_partially_paid")
         );
     }
 }

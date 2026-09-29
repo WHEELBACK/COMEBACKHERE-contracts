@@ -1,4 +1,4 @@
-use soroban_sdk::{contracttype, Address, Bytes};
+use soroban_sdk::{contracttype, Address, Bytes, String};
 
 pub use invoice_errors::InvoiceError;
 
@@ -15,16 +15,15 @@ pub const MAX_BATCH_EXPIRE: u32 = 100;
 /// Maximum bytes accepted for optional invoice hash fields.
 pub const MAX_HASH_BYTES: u32 = 64;
 
-/// Persistent TTL bump thresholds for active invoices, in ledgers.
+/// Basis points denominator: 100% expressed in basis points.
+pub const BPS_DENOMINATOR: i128 = 10_000;
+
+/// Upper bound for the configurable late fee, in basis points (10% = 1_000 bps).
 ///
-/// Soroban persistent entries are archived once their TTL runs out. Active
-/// invoices that are read or updated regularly must not be archived, so every
-/// access to a non-terminal invoice extends its TTL. Thresholds follow
-/// `docs/storage-ttl-audit.md`: bump when the remaining TTL drops below
-/// `INVOICE_TTL_THRESHOLD` ledgers, extending it back to `INVOICE_TTL_EXTEND`.
-/// At ~5s per ledger this is roughly a 30-day threshold and a 60-day extension.
-pub const INVOICE_TTL_THRESHOLD: u32 = 518_400;
-pub const INVOICE_TTL_EXTEND: u32 = 1_036_800;
+/// The late fee is applied only when an invoice is paid inside the grace window
+/// after `expires_at`. Values above this bound are rejected at configuration
+/// time so merchants cannot impose an unbounded penalty on late payers.
+pub const MAX_LATE_FEE_BPS: u32 = 1_000;
 
 /// Lifecycle status of an invoice.
 ///
@@ -88,6 +87,19 @@ pub enum MaybeBytes {
     Some(Bytes),
 }
 
+/// Nullable `String` wrapper compatible with `#[contracttype]`.
+///
+/// `Option<String>` is not supported by the Soroban contract-type macro, so
+/// this enum serves as a manual `Option` for string fields such as the
+/// optional invoice memo. `None` signals absence; `Some(string)` wraps a
+/// concrete string.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum MaybeString {
+    None,
+    Some(String),
+}
+
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Invoice {
@@ -96,6 +108,8 @@ pub struct Invoice {
     pub amount_usdc: i128,
     pub gross_usdc: i128,
     pub status: InvoiceStatus,
+    /// Ledger timestamp at creation, sourced from `env.ledger().timestamp()`.
+    pub created_at: u64,
     pub expires_at: u64,
     pub paid_at: Option<u64>,
     pub payer: MaybeAddress,
@@ -103,43 +117,40 @@ pub struct Invoice {
     pub payment_link_hash: MaybeBytes,
     /// Merchant-supplied nonce for storefront idempotency (0 = no nonce).
     pub merchant_nonce: u64,
+    /// Token contract address the invoice is denominated in.
+    ///
+    /// Defaults to the configured USDC token when callers do not pass one,
+    /// preserving backwards compatibility for existing invoices and callers.
+    pub token: Address,
     /// Optional token contract address for multi-currency invoices.
     /// `None` means the invoice is denominated in the default (USDC).
     pub token_address: MaybeAddress,
-    /// Set to `true` the first time `release_escrow` succeeds for this invoice.
-    ///
-    /// This is the state-based guard that prevents double escrow release: it is
-    /// written before any external token transfer (checks-effects-interactions),
-    /// so a second `release_escrow` call observes `true` and returns a typed
-    /// error without moving funds again.
-    pub escrow_released: bool,
-    /// Discounted amount (in USDC stroops) the payer may settle for when paying
-    /// on or before `discount_deadline`. `0` means no early-payment discount is
-    /// configured. When set it must be strictly less than `amount_usdc`.
-    pub discount_amount: i128,
-    /// Ledger timestamp (seconds) before which `discount_amount` applies.
-    /// `0` means no early-payment discount is configured. When set it must be
-    /// strictly before `expires_at`.
-    pub discount_deadline: u64,
+    /// Late fee in basis points applied when the invoice is paid inside the
+    /// grace window after `expires_at`. Bounded by `MAX_LATE_FEE_BPS`.
+    pub late_fee_bps: u32,
 }
 
-impl Invoice {
-    /// Returns `true` when an early-payment discount is configured for this
-    /// invoice (both the discounted amount and the deadline are set).
-    pub fn has_discount(&self) -> bool {
-        self.discount_amount > 0 && self.discount_deadline > 0
-    }
+/// Lightweight, read-only projection of an [`Invoice`] for list views.
+///
+/// Contains only the fields frontends need when enumerating many invoices:
+/// id, status, amount and expiry. It is derived from the same storage record
+/// as `get_invoice` (never a duplicated copy), so it can never go out of sync.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct InvoiceSummary {
+    pub id: u64,
+    pub status: InvoiceStatus,
+    pub amount_usdc: i128,
+    pub expires_at: u64,
+}
 
-    /// Returns the amount the payer must settle at `ledger_time`.
-    ///
-    /// If an early-payment discount is configured and `ledger_time` is on or
-    /// before `discount_deadline`, the discounted amount applies; otherwise the
-    /// full `amount_usdc` is required.
-    pub fn amount_due_at(&self, ledger_time: u64) -> i128 {
-        if self.has_discount() && ledger_time <= self.discount_deadline {
-            self.discount_amount
-        } else {
-            self.amount_usdc
+impl From<&Invoice> for InvoiceSummary {
+    fn from(invoice: &Invoice) -> Self {
+        InvoiceSummary {
+            id: invoice.id,
+            status: invoice.status.clone(),
+            amount_usdc: invoice.amount_usdc,
+            expires_at: invoice.expires_at,
         }
     }
 }
@@ -155,6 +166,8 @@ pub struct BatchInvoiceParams {
     pub payment_link_hash: MaybeBytes,
     pub merchant_nonce: u64,
     pub token_address: MaybeAddress,
+    /// Late fee in basis points applied inside the grace window.
+    pub late_fee_bps: u32,
 }
 
 /// A single status transition recorded in an invoice's audit log.
@@ -196,4 +209,7 @@ pub enum DataKey {
     CreationCooldown,
     /// Timestamp of the last successful create_invoice call for a given merchant.
     LastCreatedAt(Address),
+    /// Fee breakdown of a processed refund: gross amount, processing fee,
+    /// network fee and the net amount transferred to the payer (#71).
+    RefundBreakdown(u64),
 }

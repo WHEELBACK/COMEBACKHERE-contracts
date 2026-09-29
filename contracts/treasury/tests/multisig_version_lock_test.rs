@@ -25,7 +25,7 @@ use treasury::{
 /// Expected version of `crates/multisig` (see its `Cargo.toml`). Bump this only
 /// alongside a review of every exhaustive match below - if they still compile,
 /// the ABI-relevant shape of multisig's types is unchanged.
-const EXPECTED_MULTISIG_VERSION: &str = "0.4.0";
+const EXPECTED_MULTISIG_VERSION: &str = "0.5.0";
 
 const MULTISIG_CARGO_TOML: &str = include_str!("../../../crates/multisig/Cargo.toml");
 
@@ -107,6 +107,8 @@ fn treasury_error_shape_is_unchanged() {
     assert_eq!(TreasuryError::SignerChangeTooEarly as u32, 38);
     assert_eq!(TreasuryError::SignerChangeNotFound as u32, 39);
     assert_eq!(TreasuryError::SignerChangeAlreadyFinalised as u32, 40);
+    // Appended for #590: execution deadline exceeded.
+    assert_eq!(TreasuryError::ExecutionDeadlineExceeded as u32, 41);
 
     // No wildcard arm: adding, removing, or renaming a variant fails this compile.
     fn assert_exhaustive(err: TreasuryError) {
@@ -150,7 +152,8 @@ fn treasury_error_shape_is_unchanged() {
             | TreasuryError::ForceCancelNotAllowed
             | TreasuryError::SignerChangeTooEarly
             | TreasuryError::SignerChangeNotFound
-            | TreasuryError::SignerChangeAlreadyFinalised => {}
+            | TreasuryError::SignerChangeAlreadyFinalised
+            | TreasuryError::ExecutionDeadlineExceeded => {}
         }
     }
     assert_exhaustive(TreasuryError::AlreadyOnHold);
@@ -255,7 +258,7 @@ fn settlement_struct_shape_is_unchanged() {
     let (client, admin) = setup(&env);
     let merchant = Address::generate(&env);
 
-    let sid = client.propose_settlement(&admin, &merchant, &10_000_000);
+    let sid = client.propose_settlement(&admin, &merchant, &10_000_000, &0_u64);
     let settlement: Settlement = client.approve_settlement(&admin, &sid);
 
     let Settlement {
@@ -267,6 +270,7 @@ fn settlement_struct_shape_is_unchanged() {
         status,
         hold_reason,
         proposed_at,
+        execution_deadline,
     } = settlement;
 
     assert_eq!(id, sid);
@@ -277,6 +281,7 @@ fn settlement_struct_shape_is_unchanged() {
     assert_settlement_status_exhaustive(status);
     assert_hold_reason_exhaustive(hold_reason);
     assert_eq!(proposed_at, env.ledger().timestamp());
+    assert_eq!(execution_deadline, 0);
 }
 
 /// Builds a real `Dispute` through the deployed contract and destructures it with no
@@ -289,7 +294,7 @@ fn dispute_struct_shape_is_unchanged() {
     let merchant = Address::generate(&env);
     let counterparty = Address::generate(&env);
 
-    let sid = client.propose_settlement(&admin, &merchant, &10_000_000);
+    let sid = client.propose_settlement(&admin, &merchant, &10_000_000, &0_u64);
     let did = client.raise_dispute(&admin, &sid, &counterparty, &5_000_000, &1_000);
     let dispute: Dispute = client.get_dispute(&did);
 
@@ -305,6 +310,7 @@ fn dispute_struct_shape_is_unchanged() {
         resolution_for_claimant,
         dispute_expires_at,
         claimant_share_bps,
+        evidence_hash,
     } = dispute;
 
     assert_eq!(id, did);
@@ -318,6 +324,7 @@ fn dispute_struct_shape_is_unchanged() {
     assert!(!resolution_for_claimant);
     assert_eq!(dispute_expires_at, 1_000);
     assert_eq!(claimant_share_bps, 0);
+    assert!(evidence_hash.is_none());
 }
 
 /// Builds a real `SignerRotationProposal` through the deployed contract and
