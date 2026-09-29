@@ -1,4 +1,4 @@
-use crate::invoice::{DataKey, InvoiceError, MaybeBytes, MAX_HASH_BYTES, USDC_FACTOR};
+use crate::invoice::{DataKey, InvoiceError, MaybeBytes, MAX_HASH_BYTES, MAX_MEMO_BYTES, USDC_FACTOR};
 use soroban_sdk::{Address, Env};
 
 /// Maximum allowed expiry duration: 5 years in seconds.
@@ -38,10 +38,34 @@ pub fn require_positive_amount(amount_usdc: i128, gross_usdc: i128) -> Result<()
     Ok(())
 }
 
-/// Reject amounts below the minimum USDC unit (1 USDC = USDC_FACTOR stroops).
+/// Resolve the number of decimal places for a token, defaulting to the
+/// configured USDC token's decimals (6) when the token is not registered.
+fn token_decimals(env: &Env, token: &Address) -> u32 {
+    let usdc: Address = env
+        .storage()
+        .instance()
+        .get(&DataKey::UsdcToken)
+        .unwrap_or_else(|| token.clone());
+    if *token == usdc {
+        6
+    } else {
+        env.storage()
+            .instance()
+            .get(&DataKey::TokenDecimals(token.clone()))
+            .unwrap_or(6)
+    }
+}
+
+/// Reject amounts below the minimum unit for the invoice's token.
 /// This guards against off-by-factor errors (e.g., passing dollar cents instead of stroops).
-pub fn require_usdc_precision(amount_usdc: i128, gross_usdc: i128) -> Result<(), InvoiceError> {
-    if amount_usdc < USDC_FACTOR || gross_usdc < USDC_FACTOR {
+pub fn require_usdc_precision(
+    env: &Env,
+    token: &Address,
+    amount_usdc: i128,
+    gross_usdc: i128,
+) -> Result<(), InvoiceError> {
+    let factor = 10i128.pow(token_decimals(env, token));
+    if amount_usdc < factor || gross_usdc < factor {
         return Err(InvoiceError::AmountPrecision);
     }
     Ok(())
@@ -99,6 +123,16 @@ pub fn require_valid_payment_link_hash(hash: &MaybeBytes) -> Result<(), InvoiceE
         }
         if all_zero {
             return Err(InvoiceError::InvalidPaymentLinkHash);
+        }
+    }
+    Ok(())
+}
+
+/// Reject an optional memo that exceeds the storage/cost cap.
+pub fn require_memo_not_too_long(memo: &Option<String>) -> Result<(), InvoiceError> {
+    if let Some(m) = memo {
+        if m.len() > MAX_MEMO_BYTES {
+            return Err(InvoiceError::MemoTooLong);
         }
     }
     Ok(())

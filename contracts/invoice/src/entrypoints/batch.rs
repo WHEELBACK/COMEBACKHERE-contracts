@@ -1,7 +1,8 @@
 use crate::events;
 use crate::validation::{
-    require_admin, require_expiry_not_too_long, require_hash_not_too_long, require_not_paused,
-    require_positive_amount, require_usdc_precision, require_valid_payment_link_hash,
+    require_admin, require_expiry_not_too_long, require_hash_not_too_long, require_memo_not_too_long,
+    require_not_paused, require_positive_amount, require_usdc_precision,
+    require_valid_payment_link_hash,
 };
 use crate::{append_history, pending_index_add, pending_index_remove};
 use crate::{
@@ -31,6 +32,7 @@ impl InvoiceContract {
             require_hash_not_too_long(&p.metadata_hash)?;
             require_hash_not_too_long(&p.payment_link_hash)?;
             require_valid_payment_link_hash(&p.payment_link_hash)?;
+            require_memo_not_too_long(&p.memo)?;
             if p.expires_in_seconds == 0 {
                 return Err(InvoiceError::ZeroDuration);
             }
@@ -104,6 +106,7 @@ impl InvoiceContract {
                 payment_link_hash: p.payment_link_hash.clone(),
                 merchant_nonce: p.merchant_nonce,
                 token_address: p.token_address.clone(),
+                memo: p.memo.clone(),
             };
             env.storage()
                 .persistent()

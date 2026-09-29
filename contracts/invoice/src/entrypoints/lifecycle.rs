@@ -23,6 +23,10 @@ impl InvoiceContract {
     /// Create an invoice with an optional merchant-supplied nonce for idempotency.
     /// Pass `merchant_nonce = 0` to skip nonce enforcement.
     /// A non-zero nonce that has already been used for this merchant is rejected.
+    ///
+    /// #531: `token_address` stores the asset identifier for the invoice.
+    /// When omitted, the configured USDC token is used for backwards
+    /// compatibility.
     #[allow(clippy::too_many_arguments)]
     pub fn create_invoice(
         env: Env,
@@ -38,8 +42,20 @@ impl InvoiceContract {
         merchant.require_auth();
         require_not_paused(&env)?;
         require_positive_amount(amount_usdc, gross_usdc)?;
-        // #57: USDC decimal precision guardrail
-        require_usdc_precision(amount_usdc, gross_usdc)?;
+
+        // #531: resolve the invoice token, defaulting to the configured USDC
+        // address so existing callers that omit a token keep working.
+        let token: Address = match token_address {
+            MaybeAddress::Some(addr) => addr,
+            MaybeAddress::None => env
+                .storage()
+                .instance()
+                .get(&DataKey::UsdcToken)
+                .ok_or(InvoiceError::NotInitialized)?,
+        };
+
+        // #57: token-aware decimal precision guardrail
+        require_usdc_precision(&env, &token, amount_usdc, gross_usdc)?;
         require_hash_not_too_long(&metadata_hash)?;
         require_hash_not_too_long(&payment_link_hash)?;
         // #16: payment_link_hash must be exactly 32 bytes when provided
@@ -107,7 +123,8 @@ impl InvoiceContract {
             metadata_hash,
             payment_link_hash,
             merchant_nonce,
-            token_address,
+            token_address: MaybeAddress::Some(token),
+            amount_paid: 0,
         };
 
         env.storage()
@@ -454,55 +471,21 @@ impl InvoiceContract {
 
         let mut invoice: Invoice = env
             .storage()
-            .persistent()
-            .get(&DataKey::Invoice(id))
-            .ok_or(InvoiceError::NotFound)?;
-        if invoice.status != InvoiceStatus::RefundRequested {
-            return Err(InvoiceError::NotRefundRequested);
+            .instance()
+            .get(&DataKey::GraceWindow)
+            .unwrap_or(0u64);
+        let effective_deadline = invoice
+            .expires_at
+            .checked_add(grace)
+            .unwrap_or(invoice.expires_at);
+        if env.ledger().timestamp() >= effective_deadline {
+            return Err(InvoiceError::Expired);
         }
         verify_payment_state(&invoice)?;
 
-        invoice.status = InvoiceStatus::Paid;
-        env.storage()
-            .persistent()
-            .set(&DataKey::Invoice(id), &invoice);
-        append_history(
-            &env,
-            id,
-            InvoiceStatus::RefundRequested,
-            InvoiceStatus::Paid,
-        );
-        events::refund_rejected(&env, id, &invoice);
-        Ok(())
-    }
+        let new_total = invoice
+            .amount_paid
+            .checked_add(amount)
+            .ok_or(InvoiceError::Amoun
 
-    // --- #9: paginated merchant invoice index read ---
-
-    /// Return a page of invoice IDs for `merchant`.
-    /// `start` is a zero-based offset; `limit` caps the returned slice.
-    pub fn get_invoices_by_merchant(
-        env: Env,
-        merchant: Address,
-        start: u32,
-        limit: u32,
-    ) -> Vec<u64> {
-        let total: u64 = env
-            .storage()
-            .persistent()
-            .get(&DataKey::MerchantInvoiceCount(merchant.clone()))
-            .unwrap_or(0);
-        let start = u64::from(start).min(total);
-        let end = start.saturating_add(u64::from(limit)).min(total);
-        let mut page = Vec::new(&env);
-        for i in start..end {
-            if let Some(id) = env
-                .storage()
-                .persistent()
-                .get::<DataKey, u64>(&DataKey::MerchantInvoiceIndex(merchant.clone(), i))
-            {
-                page.push_back(id);
-            }
-        }
-        page
-    }
-}
+/* … truncated 3061 chars — edit only what you need near the top … */

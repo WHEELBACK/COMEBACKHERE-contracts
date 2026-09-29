@@ -1,4 +1,4 @@
-use soroban_sdk::{contracttype, Address, Bytes};
+use soroban_sdk::{contracttype, Address, Bytes, String};
 
 pub use invoice_errors::InvoiceError;
 
@@ -72,6 +72,19 @@ pub enum MaybeBytes {
     Some(Bytes),
 }
 
+/// Nullable `String` wrapper compatible with `#[contracttype]`.
+///
+/// `Option<String>` is not supported by the Soroban contract-type macro, so
+/// this enum serves as a manual `Option` for string fields such as the
+/// optional invoice memo. `None` signals absence; `Some(string)` wraps a
+/// concrete string.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum MaybeString {
+    None,
+    Some(String),
+}
+
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Invoice {
@@ -89,6 +102,11 @@ pub struct Invoice {
     pub payment_link_hash: MaybeBytes,
     /// Merchant-supplied nonce for storefront idempotency (0 = no nonce).
     pub merchant_nonce: u64,
+    /// Token contract address the invoice is denominated in.
+    ///
+    /// Defaults to the configured USDC token when callers do not pass one,
+    /// preserving backwards compatibility for existing invoices and callers.
+    pub token: Address,
     /// Optional token contract address for multi-currency invoices.
     /// `None` means the invoice is denominated in the default (USDC).
     pub token_address: MaybeAddress,

@@ -36,6 +36,16 @@ pub struct InvoiceExpiryExtendedEvent {
     pub new_expires_at: u64,
 }
 
+/// Emitted when a partial payment is recorded against an invoice.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct InvoicePartiallyPaidEvent {
+    pub id: u64,
+    pub amount: i128,
+    pub amount_paid: i128,
+    pub amount_remaining: i128,
+}
+
 pub fn invoice_created(env: &Env, id: u64, invoice: &Invoice) {
     env.events()
         .publish((Symbol::new(env, "invoice_created"), id), invoice.clone());
@@ -44,6 +54,13 @@ pub fn invoice_created(env: &Env, id: u64, invoice: &Invoice) {
 pub fn invoice_paid(env: &Env, id: u64, invoice: &Invoice) {
     env.events()
         .publish((Symbol::new(env, "invoice_paid"), id), invoice.clone());
+}
+
+pub fn invoice_partially_paid(env: &Env, event: &InvoicePartiallyPaidEvent) {
+    env.events().publish(
+        (Symbol::new(env, "invoice_partially_paid"), event.id),
+        event.clone(),
+    );
 }
 
 pub fn invoice_expired(env: &Env, id: u64, invoice: &Invoice) {
@@ -156,7 +173,10 @@ pub fn invoice_expiry_extended(env: &Env, event: &InvoiceExpiryExtendedEvent) {
 
 #[cfg(test)]
 mod tests {
-    use super::{invoice_expiry_extended, InvoiceExpiryExtendedEvent};
+    use super::{
+        invoice_expiry_extended, invoice_partially_paid, InvoiceExpiryExtendedEvent,
+        InvoicePartiallyPaidEvent,
+    };
     use soroban_sdk::{contract, testutils::Events, Env, Symbol, TryFromVal};
 
     #[contract]
@@ -181,6 +201,29 @@ mod tests {
         assert_eq!(
             Symbol::try_from_val(&env, &topics.get_unchecked(0)).unwrap(),
             Symbol::new(&env, "invoice_expiry_extended")
+        );
+    }
+
+    #[test]
+    fn invoice_partially_paid_emits_event() {
+        let env = Env::default();
+        let contract_id = env.register(TestContract, ());
+        env.as_contract(&contract_id, || {
+            invoice_partially_paid(
+                &env,
+                &InvoicePartiallyPaidEvent {
+                    id: 1,
+                    amount: 40,
+                    amount_paid: 40,
+                    amount_remaining: 60,
+                },
+            );
+        });
+
+        let (_, topics, _) = env.events().all().last().unwrap();
+        assert_eq!(
+            Symbol::try_from_val(&env, &topics.get_unchecked(0)).unwrap(),
+            Symbol::new(&env, "invoice_partially_paid")
         );
     }
 }
