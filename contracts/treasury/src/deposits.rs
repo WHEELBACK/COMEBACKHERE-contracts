@@ -74,6 +74,7 @@ impl TreasuryContract {
         if balance < amount {
             return Err(TreasuryError::InsufficientBalance);
         }
+        enforce_withdrawal_limit(&env, &to, amount);
         balance = balance
             .checked_sub(amount)
             .ok_or(TreasuryError::ArithmeticOverflow)?;
