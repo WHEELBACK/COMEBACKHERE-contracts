@@ -17,3 +17,4 @@ testutils = ["soroban-sdk/testutils"]
 
 [dependencies]
 soroban-sdk.workspace = true
+error-macros = { package = "comebackhere-error-macros", path = "../error-macros" }

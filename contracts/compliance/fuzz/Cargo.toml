@@ -1,0 +1,38 @@
+[package]
+name = "compliance-fuzz"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+[package.metadata]
+cargo-fuzz = true
+
+# Standalone workspace: kept out of the root workspace so `cargo test --all`
+# and normal `cargo build` at the repo root are unaffected by the fuzz crate,
+# which requires the nightly toolchain + cargo-fuzz to build/run.
+#
+# This crate ships its own `Cargo.lock`, copied from the root workspace. A
+# standalone workspace resolves dependencies independently, and an unpinned
+# resolve currently picks ed25519-dalek 3.x, which does not satisfy
+# soroban-env-host's `ChaCha20Rng: CryptoRng` bound and fails to compile. The
+# root lockfile pins the 2.x line that does build. The other two fuzz crates
+# (invoice, settlement-workflow) predate this and have no lockfile, so they hit
+# the same wall if built; this one is fixed in place rather than left broken.
+[workspace]
+
+[dependencies]
+libfuzzer-sys = "0.4"
+arbitrary = { version = "1", features = ["derive"] }
+soroban-sdk = { version = "22.0.4", features = ["testutils"] }
+
+[dependencies.compliance]
+package = "comebackhere-compliance"
+path = ".."
+features = ["testutils"]
+
+[[bin]]
+name = "is_allowed"
+path = "fuzz_targets/is_allowed.rs"
+test = false
+doc = false
+bench = false

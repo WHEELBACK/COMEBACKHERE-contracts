@@ -18,12 +18,12 @@ fn second_dispute_does_not_double_transition() {
     let claimant_a = Address::generate(&env);
     let claimant_b = Address::generate(&env);
 
-    let sid = client.propose_settlement(&admin, &merchant, &10_000_000);
+    let sid = client.propose_settlement(&admin, &merchant, &10_000_000, &0_u64);
 
-    client.raise_dispute(&claimant_a, &sid, &merchant, &5_000_000, &500);
+    client.raise_dispute(&claimant_a, &sid, &merchant, &5_000_000, &500, &None);
     assert_eq!(client.get_settlement(&sid).status, SettlementStatus::OnHold);
 
-    client.raise_dispute(&claimant_b, &sid, &merchant, &3_000_000, &500);
+    client.raise_dispute(&claimant_b, &sid, &merchant, &3_000_000, &500, &None);
     assert_eq!(client.get_settlement(&sid).status, SettlementStatus::OnHold);
 }
 
@@ -35,10 +35,10 @@ fn settlement_stays_on_hold_while_any_dispute_open() {
     let claimant_a = Address::generate(&env);
     let claimant_b = Address::generate(&env);
 
-    let sid = client.propose_settlement(&admin, &merchant, &10_000_000);
+    let sid = client.propose_settlement(&admin, &merchant, &10_000_000, &0_u64);
 
-    let did_a = client.raise_dispute(&claimant_a, &sid, &merchant, &5_000_000, &500);
-    let did_b = client.raise_dispute(&claimant_b, &sid, &merchant, &3_000_000, &500);
+    let did_a = client.raise_dispute(&claimant_a, &sid, &merchant, &5_000_000, &500, &None);
+    let did_b = client.raise_dispute(&claimant_b, &sid, &merchant, &3_000_000, &500, &None);
 
     // Resolve dispute A; dispute B is still open so settlement stays OnHold
     client.resolve_dispute(&admin, &did_a, &true);
@@ -60,10 +60,10 @@ fn both_disputes_resolved_same_direction_releases_hold() {
     let claimant_a = Address::generate(&env);
     let claimant_b = Address::generate(&env);
 
-    let sid = client.propose_settlement(&admin, &merchant, &10_000_000);
+    let sid = client.propose_settlement(&admin, &merchant, &10_000_000, &0_u64);
 
-    let did_a = client.raise_dispute(&claimant_a, &sid, &merchant, &5_000_000, &500);
-    let did_b = client.raise_dispute(&claimant_b, &sid, &merchant, &3_000_000, &500);
+    let did_a = client.raise_dispute(&claimant_a, &sid, &merchant, &5_000_000, &500, &None);
+    let did_b = client.raise_dispute(&claimant_b, &sid, &merchant, &3_000_000, &500, &None);
 
     client.resolve_dispute(&admin, &did_a, &false);
     assert_eq!(client.get_settlement(&sid).status, SettlementStatus::OnHold);
@@ -112,7 +112,7 @@ mod dispute_vote_ordering_proptest {
             let merchant = Address::generate(&env);
             let claimant = Address::generate(&env);
 
-            let sid = client.propose_settlement(&admin, &merchant, &10_000_000);
+            let sid = client.propose_settlement(&admin, &merchant, &10_000_000, &0_u64);
             let dispute_id = client.raise_dispute(&claimant, &sid, &merchant, &5_000_000, &500);
 
             let mut order: Vec<usize> = (0..SIGNER_COUNT).collect();
