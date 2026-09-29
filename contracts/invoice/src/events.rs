@@ -172,6 +172,69 @@ pub fn invoice_expiry_extended(env: &Env, event: &InvoiceExpiryExtendedEvent) {
     );
 }
 
+/// Emitted when a recurring invoice template is created.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct TemplateCreatedEvent {
+    pub template_id: u64,
+    pub merchant: Address,
+    pub interval: u64,
+}
+
+/// Emitted when a recurring invoice template is disabled.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct TemplateDisabledEvent {
+    pub template_id: u64,
+    pub merchant: Address,
+}
+
+/// Emitted each time a new invoice is generated from a template.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct TemplateGeneratedEvent {
+    pub template_id: u64,
+    pub invoice_id: u64,
+    pub generated_at: u64,
+}
+
+pub fn template_created(env: &Env, event: &TemplateCreatedEvent) {
+    env.events().publish(
+        (Symbol::new(env, "template_created"), event.template_id),
+        event.clone(),
+    );
+}
+
+pub fn template_disabled(env: &Env, event: &TemplateDisabledEvent) {
+    env.events().publish(
+        (Symbol::new(env, "template_disabled"), event.template_id),
+        event.clone(),
+    );
+}
+
+pub fn template_generated(env: &Env, event: &TemplateGeneratedEvent) {
+    env.events().publish(
+        (Symbol::new(env, "template_generated"), event.template_id),
+        event.clone(),
+    );
+}
+
+/// Emitted when a pending invoice is transferred to a new merchant address.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct InvoiceTransferredEvent {
+    pub id: u64,
+    pub old_merchant: Address,
+    pub new_merchant: Address,
+}
+
+pub fn invoice_transferred(env: &Env, event: &InvoiceTransferredEvent) {
+    env.events().publish(
+        (Symbol::new(env, "invoice_transferred"), event.id),
+        event.clone(),
+    );
+}
+
 #[cfg(test)]
 mod tests {
     use super::{

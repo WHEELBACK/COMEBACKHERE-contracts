@@ -1,6 +1,6 @@
 use soroban_sdk::{contracttype, Address, Bytes, String};
 
-pub use invoice_errors::InvoiceError;
+use soroban_sdk::{contract, contractimpl, contracttype, symbol_short, Address, Env, String, Vec};
 
 /// USDC on Stellar uses 7 decimal places: 1 USDC = 10_000_000 stroops.
 pub const USDC_FACTOR: i128 = 10_000_000;
@@ -32,17 +32,16 @@ pub const MAX_LATE_FEE_BPS: u32 = 1_000;
 /// `Pending` → `Cancelled` (merchant or admin cancellation), `Paid` →
 /// `RefundRequested` → `Refunded` (dispute/refund flow).
 #[contracttype]
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub enum InvoiceStatus {
-    Pending,
-    Paid,
-    Expired,
-    Cancelled,
-    RefundRequested,
-    /// Escrow funds have been released to the merchant after payment confirmation.
-    Released,
-    /// Refund has been approved by admin; terminal status for disputed invoices.
-    Refunded,
+#[derive(Clone)]
+pub enum DataKey {
+    /// Monotonic counter for invoice ids.
+    InvoiceCount,
+    /// Invoice record keyed by id.
+    Invoice(u64),
+    /// Monotonic counter for template ids.
+    TemplateCount,
+    /// Recurring invoice template keyed by id.
+    Template(u64),
 }
 
 impl InvoiceStatus {
@@ -68,13 +67,18 @@ impl InvoiceStatus {
 /// this enum serves as a manual `Option` for address fields. `None` signals
 /// absence; `Some(addr)` wraps a concrete address.
 #[contracttype]
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub enum MaybeAddress {
-    None,
-    Some(Address),
+#[derive(Clone)]
+pub struct Invoice {
+    pub id: u64,
+    pub merchant: Address,
+    pub payer: Address,
+    pub amount: i128,
+    pub memo: String,
+    pub paid: bool,
+    pub paused: bool,
 }
 
-/// Nullable `Bytes` wrapper compatible with `#[contracttype]`.
+/// A recurring invoice template.
 ///
 /// `Option<Bytes>` is not supported by the Soroban contract-type macro, so
 /// this enum serves as a manual `Option` for byte-string fields such as
@@ -101,8 +105,8 @@ pub enum MaybeString {
 }
 
 #[contracttype]
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct Invoice {
+#[derive(Clone)]
+pub struct InvoiceTemplate {
     pub id: u64,
     pub merchant: Address,
     pub amount_usdc: i128,
@@ -170,14 +174,17 @@ pub struct BatchInvoiceParams {
     pub late_fee_bps: u32,
 }
 
-/// A single status transition recorded in an invoice's audit log.
-#[contracttype]
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct StatusTransition {
-    pub from: InvoiceStatus,
-    pub to: InvoiceStatus,
-    pub timestamp: u64,
-}
+#[contractimpl]
+impl InvoiceContract {
+    /// Create a new invoice.
+    pub fn create_invoice(
+        env: Env,
+        merchant: Address,
+        payer: Address,
+        amount: i128,
+        memo: String,
+    ) -> u64 {
+        merchant.require_auth();
 
 /// Per-status invoice counters maintained incrementally on every transition.
 ///
