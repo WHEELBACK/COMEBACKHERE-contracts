@@ -15,6 +15,7 @@ The Compliance contract manages an allowlist of addresses permitted to interact 
 | `allow_address_until` | `admin` | `admin: Address, address: Address, expires_at: u64` | `Result<(), ContractError>` | `Unauthorized`, `ContractPaused` |
 | `allow_address_with_tier` | `admin` | `admin: Address, address: Address, tier: u32` | `Result<(), ContractError>` | `Unauthorized`, `ContractPaused` |
 | `get_address_tier` | None | `address: Address` | `u32` | None |
+| `get_address_history` | None | `address: Address` | `Vec<StatusHistoryEntry>` | None |
 | `set_jurisdiction` | `admin` | `admin: Address, address: Address, jurisdiction_code: Symbol` | `Result<(), ContractError>` | `Unauthorized`, `ContractPaused` |
 | `get_jurisdiction` | None | `address: Address` | `Option<Symbol>` | None |
 | `transfer_admin` | `admin` | `admin: Address, new_admin: Address` | `Result<(), ContractError>` | `Unauthorized` |

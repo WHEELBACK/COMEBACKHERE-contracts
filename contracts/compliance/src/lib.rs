@@ -93,6 +93,8 @@ pub enum DataKey {
     /// Keyed by tier number; settable only by admin. Maps tiers to their
     /// transaction limits for KYC-level enforcement.
     TierLimit(u32),
+    /// Bounded status change history for an address (#603).
+    StatusHistory(Address),
 }
 
 /// Coarse classification of an address's compliance state.
@@ -124,6 +126,18 @@ pub struct AddressStatus {
     /// Computed result equivalent to calling `is_allowed` — factors in block,
     /// expiry, and precedence rules.
     pub is_currently_allowed: bool,
+}
+
+/// Bounded status change history record for an address (#603).
+#[contracttype]
+#[derive(Clone, Debug, PartialEq)]
+pub struct StatusHistoryEntry {
+    /// The compliance status of the address after the change.
+    pub status: AddressState,
+    /// Ledger timestamp (seconds since epoch) when the status changed.
+    pub timestamp: u64,
+    /// The caller/actor that performed the status change.
+    pub actor: Address,
 }
 
 /// Primary error type for the compliance contract.
@@ -211,6 +225,12 @@ pub const BULK_OP_COOLDOWN_SECS: u64 = 60;
 /// unbounded storage-rent growth and keeps auth-check iteration cheap.
 pub const MAX_OPERATORS: u32 = 10;
 
+/// Maximum number of status change records retained per address (#603).
+///
+/// Keeps history bounded so frequently changing addresses cannot grow storage
+/// without limit. Once full, the oldest entry is dropped when a new one is appended.
+pub const MAX_STATUS_HISTORY: u32 = 10;
+
 #[contract]
 pub struct ComplianceContract;
 
@@ -275,6 +295,7 @@ impl ComplianceContract {
                         .unwrap_or_else(|| panic!("ArithmeticOverflow"))),
                 );
             }
+            Self::append_status_history(&env, &address, AddressState::Allowed, &admin);
             Self::track_address(&env, &address)?;
             env.events()
                 .publish((Symbol::new(&env, "address_allowed"),), address);
@@ -421,6 +442,7 @@ impl ComplianceContract {
                     .unwrap_or_else(|| panic!("ArithmeticOverflow"))),
             );
         }
+        Self::append_status_history(&env, &address, AddressState::Allowed, &admin);
         Self::track_address(&env, &address)?;
         env.events()
             .publish((Symbol::new(&env, "address_allowed"),), address);
@@ -453,6 +475,7 @@ impl ComplianceContract {
         env.storage()
             .persistent()
             .set(&DataKey::Tier(address.clone()), &tier);
+        Self::append_status_history(&env, &address, AddressState::Allowed, &admin);
         Self::track_address(&env, &address)?;
         env.events()
             .publish((Symbol::new(&env, "address_allowed"),), address);
@@ -580,6 +603,7 @@ impl ComplianceContract {
             // Admin-placed by construction: `bulk_block_addresses` is admin-only, so
             // no operator may clear these afterwards (#604).
             Self::record_block_placer(&env, &address, &admin);
+            Self::append_status_history(&env, &address, AddressState::Blocked, &admin);
             Self::track_address(&env, &address)?;
             env.events()
                 .publish((Symbol::new(&env, "address_blocked"),), address);
@@ -623,6 +647,7 @@ impl ComplianceContract {
                 .persistent()
                 .set(&DataKey::BlockReason(address.clone()), &r);
         }
+        Self::append_status_history(&env, &address, AddressState::Blocked, &caller);
         Self::track_address(&env, &address)?;
         env.events()
             .publish((Symbol::new(&env, "address_blocked"),), address);
@@ -653,6 +678,7 @@ impl ComplianceContract {
                 .persistent()
                 .set(&DataKey::BlockReason(address.clone()), &r);
         }
+        Self::append_status_history(&env, &address, AddressState::Blocked, &caller);
         Self::track_address(&env, &address)?;
         env.events().publish(
             (Symbol::new(&env, "address_blocked_until"),),
@@ -756,6 +782,7 @@ impl ComplianceContract {
         env.storage()
             .persistent()
             .set(&DataKey::AllowedUntil(address.clone()), &expires_at);
+        Self::append_status_history(&env, &address, AddressState::Allowed, &admin);
         Self::track_address(&env, &address)?;
         env.events().publish(
             (Symbol::new(&env, "address_allowed_until"),),
@@ -962,6 +989,7 @@ impl ComplianceContract {
                     .unwrap_or_else(|| panic!("ArithmeticOverflow"))),
             );
         }
+        Self::append_status_history(&env, &address, AddressState::Allowed, &admin);
         Self::track_address(&env, &address)?;
         env.events()
             .publish((Symbol::new(&env, "address_cleared"),), address);
@@ -980,6 +1008,7 @@ impl ComplianceContract {
         env.storage()
             .persistent()
             .remove(&DataKey::AllowedUntil(address.clone()));
+        Self::append_status_history(&env, &address, AddressState::Blocked, &admin);
         Self::track_address(&env, &address)?;
         env.events()
             .publish((Symbol::new(&env, "address_revoked"),), address);
@@ -1201,6 +1230,18 @@ impl ComplianceContract {
             .get::<_, u64>(&DataKey::AllowedUntil(address))
     }
 
+    /// Returns the bounded history of status changes for `address` (#603).
+    ///
+    /// Entries are returned in chronological order (oldest to newest), capped at
+    /// [`MAX_STATUS_HISTORY`]. If no status changes have been recorded for the
+    /// address, an empty vector is returned.
+    pub fn get_address_history(env: Env, address: Address) -> Vec<StatusHistoryEntry> {
+        env.storage()
+            .persistent()
+            .get(&DataKey::StatusHistory(address))
+            .unwrap_or_else(|| Vec::new(&env))
+    }
+
     /// Sweep tracked addresses for lapsed time-bound allow entries.
     ///
     /// `is_allowed` checks `AllowedUntil` lazily on every read, so there is
@@ -1260,6 +1301,7 @@ impl ComplianceContract {
                     env.storage()
                         .instance()
                         .set(&DataKey::AllowCount, &count.saturating_sub(1));
+                    Self::append_status_history(&env, &addr, AddressState::Expired, &admin);
                     env.events()
                         .publish((Symbol::new(&env, "address_allow_expired"),), addr.clone());
                     swept += 1;
@@ -1598,6 +1640,36 @@ impl ComplianceContract {
             }
         }
         all
+    }
+
+    /// Appends a new status change entry to `address`'s bounded history log (#603).
+    ///
+    /// If the log has reached [`MAX_STATUS_HISTORY`], the oldest entry is dropped
+    /// so that storage growth per address remains strictly bounded.
+    fn append_status_history(
+        env: &Env,
+        address: &Address,
+        status: AddressState,
+        actor: &Address,
+    ) {
+        let key = DataKey::StatusHistory(address.clone());
+        let mut history: Vec<StatusHistoryEntry> = env
+            .storage()
+            .persistent()
+            .get(&key)
+            .unwrap_or_else(|| Vec::new(env));
+
+        while history.len() >= MAX_STATUS_HISTORY {
+            history.pop_front();
+        }
+
+        history.push_back(StatusHistoryEntry {
+            status,
+            timestamp: env.ledger().timestamp(),
+            actor: actor.clone(),
+        });
+
+        env.storage().persistent().set(&key, &history);
     }
 }
 
