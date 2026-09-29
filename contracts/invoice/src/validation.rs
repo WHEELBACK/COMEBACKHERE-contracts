@@ -137,3 +137,29 @@ pub fn require_memo_not_too_long(memo: &Option<String>) -> Result<(), InvoiceErr
     }
     Ok(())
 }
+
+/// Validate an optional early-payment discount configuration.
+///
+/// When a discount is configured, the discounted amount must be strictly
+/// below the full invoice amount and the discount deadline must fall before
+/// the invoice expiry so the discount window is meaningful.
+pub fn require_valid_discount(
+    discount_amount: Option<i128>,
+    discount_deadline: Option<u64>,
+    amount_usdc: i128,
+    expires_at: u64,
+) -> Result<(), InvoiceError> {
+    match (discount_amount, discount_deadline) {
+        (None, None) => Ok(()),
+        (Some(discount), Some(deadline)) => {
+            if discount <= 0 || discount >= amount_usdc {
+                return Err(InvoiceError::InvalidDiscountAmount);
+            }
+            if deadline >= expires_at {
+                return Err(InvoiceError::InvalidDiscountDeadline);
+            }
+            Ok(())
+        }
+        _ => Err(InvoiceError::InvalidDiscountAmount),
+    }
+}

@@ -45,6 +45,21 @@ pub enum InvoiceStatus {
     Refunded,
 }
 
+impl InvoiceStatus {
+    /// Returns `true` for statuses that are terminal, i.e. the invoice will not
+    /// transition again. Terminal invoices are left alone by TTL bumps so their
+    /// storage can age out naturally.
+    pub fn is_terminal(&self) -> bool {
+        matches!(
+            self,
+            InvoiceStatus::Expired
+                | InvoiceStatus::Cancelled
+                | InvoiceStatus::Released
+                | InvoiceStatus::Refunded
+        )
+    }
+}
+
 // contracttype enum wrappers for optional complex types; Option<Address> and
 // Option<Bytes> are not supported by the contracttype macro in soroban-sdk v20.
 /// Nullable `Address` wrapper compatible with `#[contracttype]`.

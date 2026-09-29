@@ -158,6 +158,8 @@ impl InvoiceContract {
             .set(&open_key, &(open_count + 1));
 
         pending_index_add(&env, id);
+        // #547: newly created invoices are active — extend their TTL.
+        bump_invoice_ttl(&env, &invoice);
         events::invoice_created(&env, id, &invoice);
         Ok(id)
     }
@@ -219,6 +221,9 @@ impl InvoiceContract {
             .persistent()
             .get(&DataKey::Invoice(id))
             .ok_or(InvoiceError::NotFound)?;
+
+        // #547: invoice is still active on read — extend TTL.
+        bump_invoice_ttl(&env, &invoice);
 
         if invoice.status != InvoiceStatus::Pending {
             return Err(InvoiceError::NotPending);
@@ -290,6 +295,10 @@ impl InvoiceContract {
     // --- #56: escrow release entrypoint ---
 
     /// Release escrow for a paid invoice. Admin-only. Transitions Paid → Released.
+    ///
+    /// #548: guarded against double release. The `escrow_released` flag is
+    /// written (checks-effects) before any external call, so a repeat call
+    /// returns `InvoiceError::EscrowAlreadyReleased` and emits nothing.
     pub fn release_escrow(env: Env, admin: Address, id: u64) -> Result<(), InvoiceError> {
         require_admin(&env, &admin)?;
         require_not_paused(&env)?;
