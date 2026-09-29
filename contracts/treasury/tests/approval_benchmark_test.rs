@@ -38,7 +38,7 @@ fn bench_approval_set(signer_count: u32) -> u32 {
     client.set_signer(&admin, &admin, &signer_count); // admin carries full weight
 
     let merchant = Address::generate(&env);
-    let settlement_id = client.propose_settlement(&admin, &merchant, &10_000_000);
+    let settlement_id = client.propose_settlement(&admin, &merchant, &10_000_000, &0_u64);
     let settlement = client.approve_settlement(&admin, &settlement_id);
 
     settlement.approval_weight
@@ -57,7 +57,7 @@ fn bench_large_signer_proposal(signer_count: u32) -> u64 {
     let signers = register_signers(&client, &admin, &env, signer_count - 1);
 
     let merchant = Address::generate(&env);
-    let settlement_id = client.propose_settlement(&admin, &merchant, &10_000_000);
+    let settlement_id = client.propose_settlement(&admin, &merchant, &10_000_000, &0_u64);
 
     // Each signer approves sequentially
     for s in &signers {
@@ -113,7 +113,7 @@ fn bench_large_signer_set_proposal_and_approval() {
     let signers = register_signers(&client, &admin, &env, signer_count);
 
     let merchant = Address::generate(&env);
-    let settlement_id = client.propose_settlement(&admin, &merchant, &10_000_000);
+    let settlement_id = client.propose_settlement(&admin, &merchant, &10_000_000, &0_u64);
 
     // First half approves
     for i in 0..(signer_count as usize / 2) {
@@ -171,7 +171,7 @@ fn bench_duplicate_approval_does_not_double_count() {
     client.set_signer(&admin, &backup, &1);
 
     let merchant = Address::generate(&env);
-    let settlement_id = client.propose_settlement(&admin, &merchant, &10_000_000);
+    let settlement_id = client.propose_settlement(&admin, &merchant, &10_000_000, &0_u64);
     assert_eq!(client.get_settlement(&settlement_id).approval_weight, 2);
 
     // Approve again — must not double-count admin's weight

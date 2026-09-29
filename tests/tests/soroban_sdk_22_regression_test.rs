@@ -35,7 +35,7 @@ fn events_do_not_accumulate_across_separate_top_level_calls() {
     let client = TreasuryContractClient::new(&env, &contract_id);
     client.initialize(&admin, &1, &soroban_sdk::Vec::new(&env));
 
-    let sid = client.propose_settlement(&admin, &merchant, &1_000_000);
+    let sid = client.propose_settlement(&admin, &merchant, &1_000_000, &0_u64);
     assert_eq!(
         env.events().all().len(),
         1,

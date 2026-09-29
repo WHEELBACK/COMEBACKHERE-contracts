@@ -178,7 +178,7 @@ fn scenario_invoice_paused_blocks_mark_paid_cleanly() {
     // Step 3 – propose a treasury settlement (also unaffected by invoice state)
     let sid = f
         .treasury
-        .propose_settlement(&f.admin, &f.merchant, &10_000_000);
+        .propose_settlement(&f.admin, &f.merchant, &10_000_000, &0_u64);
     assert_eq!(
         f.treasury.get_settlement(&sid).status,
         SettlementStatus::Pending
@@ -295,7 +295,7 @@ fn scenario_invoice_pause_unpause_full_lifecycle_recovers() {
     // Compliance and treasury remain operational
     let sid = f
         .treasury
-        .propose_settlement(&f.admin, &f.merchant, &10_000_000);
+        .propose_settlement(&f.admin, &f.merchant, &10_000_000, &0_u64);
     assert_eq!(
         f.treasury.get_settlement(&sid).status,
         SettlementStatus::Pending
@@ -347,7 +347,7 @@ fn scenario_treasury_paused_blocks_propose_settlement() {
     f.treasury.pause(&f.admin);
     // This must panic with "ContractPaused"
     f.treasury
-        .propose_settlement(&f.admin, &f.merchant, &10_000_000);
+        .propose_settlement(&f.admin, &f.merchant, &10_000_000, &0_u64);
 }
 
 /// Pausing treasury *after* proposal panics with "ContractPaused" on execute.
@@ -358,7 +358,7 @@ fn scenario_treasury_paused_blocks_execute_settlement() {
     f.compliance.allow_address(&f.admin, &f.merchant);
     let sid = f
         .treasury
-        .propose_settlement(&f.admin, &f.merchant, &10_000_000);
+        .propose_settlement(&f.admin, &f.merchant, &10_000_000, &0_u64);
     // Pause AFTER proposal
     f.treasury.pause(&f.admin);
     // This must panic with "ContractPaused"
@@ -439,7 +439,7 @@ fn scenario_treasury_pause_unpause_full_lifecycle_recovers() {
     // Now propose and execute succeed
     let sid = f
         .treasury
-        .propose_settlement(&f.admin, &f.merchant, &10_000_000);
+        .propose_settlement(&f.admin, &f.merchant, &10_000_000, &0_u64);
     let workflow = PauseTestWorkflowClient::new(&f.env, &f.workflow_id);
     assert!(workflow
         .try_execute_if_compliant(
@@ -483,14 +483,15 @@ fn scenario_compliance_paused_blocks_new_allow_so_gate_rejects() {
     // Step 2 – propose treasury settlement (treasury doesn't consult compliance)
     let sid = f
         .treasury
-        .propose_settlement(&f.admin, &f.merchant, &10_000_000);
+        .propose_settlement(&f.admin, &f.merchant, &10_000_000, &0_u64);
     assert_eq!(
         f.treasury.get_settlement(&sid).status,
         SettlementStatus::Pending
     );
 
     // Step 3 – PAUSE compliance *before* allowing the merchant
-    f.compliance.pause(&f.admin);
+    f.compliance
+        .pause(&f.admin, &soroban_sdk::symbol_short!("maint"));
 
     // Step 4 – allow_address must be blocked while paused
     let allow_err = f
@@ -575,10 +576,11 @@ fn scenario_compliance_paused_pre_allowed_merchant_can_still_execute() {
 
     let sid = f
         .treasury
-        .propose_settlement(&f.admin, &f.merchant, &10_000_000);
+        .propose_settlement(&f.admin, &f.merchant, &10_000_000, &0_u64);
 
     // Pause compliance after allow
-    f.compliance.pause(&f.admin);
+    f.compliance
+        .pause(&f.admin, &soroban_sdk::symbol_short!("maint"));
 
     // is_allowed is a read — it still works while paused
     assert!(
@@ -617,10 +619,11 @@ fn scenario_compliance_paused_block_address_is_permitted() {
 
     let sid = f
         .treasury
-        .propose_settlement(&f.admin, &f.merchant, &10_000_000);
+        .propose_settlement(&f.admin, &f.merchant, &10_000_000, &0_u64);
 
     // Pause compliance
-    f.compliance.pause(&f.admin);
+    f.compliance
+        .pause(&f.admin, &soroban_sdk::symbol_short!("maint"));
 
     // block_address is allowed even while paused (emergency policy)
     let block_result = f.compliance.try_block_address(&f.admin, &f.merchant, &None);

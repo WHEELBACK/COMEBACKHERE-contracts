@@ -185,3 +185,61 @@ fn test_batch_amounts_stored_exactly() {
     assert_eq!(inv1.amount_usdc, 99 * USDC);
     assert_eq!(inv1.gross_usdc, 100 * USDC);
 }
+
+// Atomicity: an invalid LAST entry must not leave earlier invoices persisted.
+#[test]
+fn test_batch_invalid_last_entry_leaves_count_unchanged() {
+    let (env, _, client) = setup();
+    let merchant = Address::generate(&env);
+
+    // First two entries are valid; the last one has a zero amount.
+    let params = vec![
+        &env,
+        param(&env, USDC, USDC),
+        param(&env, 2 * USDC, 2 * USDC),
+        param(&env, 0, 0),
+    ];
+    assert!(client.try_batch_create_invoice(&merchant, &params).is_err());
+
+    // No invoices should have been persisted by the failed batch.
+    assert_eq!(client.get_invoice_count(), 0);
+}
+
+// Atomicity: invoice count and pending index are unchanged after a failed batch.
+#[test]
+fn test_batch_failure_leaves_count_and_pending_index_unchanged() {
+    let (env, _, client) = setup();
+    let merchant = Address::generate(&env);
+
+    // Seed one valid invoice so we can observe that state is untouched.
+    let seed_id = client.create_invoice(
+        &merchant,
+        &USDC,
+        &USDC,
+        &3600,
+        &MaybeBytes::None,
+        &MaybeBytes::None,
+        &0,
+        &MaybeAddress::None,
+    );
+    assert_eq!(client.get_invoice_count(), 1);
+
+    let pending_before = client.get_pending_invoices();
+
+    // Batch with a valid first entry and an invalid last entry.
+    let params = vec![
+        &env,
+        param(&env, USDC, USDC),
+        param(&env, USDC - 1, USDC),
+    ];
+    assert!(client.try_batch_create_invoice(&merchant, &params).is_err());
+
+    // Count and pending index must be exactly as before the failed batch.
+    assert_eq!(client.get_invoice_count(), 1);
+    assert_eq!(client.get_pending_invoices(), pending_before);
+
+    // The pre-existing invoice is still retrievable and unchanged.
+    let seed = client.get_invoice(&seed_id);
+    assert_eq!(seed.status, InvoiceStatus::Pending);
+    assert_eq!(seed.merchant, merchant);
+}

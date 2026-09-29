@@ -1,5 +1,5 @@
 #![no_std]
-use soroban_sdk::{contracterror, contracttype, Address, Env, Vec};
+use soroban_sdk::{contracterror, contracttype, Address, BytesN, Env, Vec};
 
 /// Error codes for all treasury contract operations. Variants are append-only
 /// and must never be renumbered, as discriminants are stored on-chain and
@@ -58,6 +58,9 @@ pub enum TreasuryError {
     // Appended for `force_cancel_settlement`: the target settlement is already in a
     // terminal state (Executed, Cancelled, Expired) and cannot be force-cancelled.
     ForceCancelNotAllowed = 37,
+    // Appended for `remove_signer` (#563): removing the signer would reduce total
+    // weight below the current threshold, breaking quorum.
+    QuorumBreak = 38,
     // Appended for #447: a timelocked signer/threshold change cannot be executed
     // before its minimum delay has elapsed.
     SignerChangeTooEarly = 38,
@@ -66,6 +69,9 @@ pub enum TreasuryError {
     // Appended for #447: the referenced signer/threshold change has already been
     // executed or cancelled and cannot be acted on again.
     SignerChangeAlreadyFinalised = 40,
+    // Appended for #590: execute_settlement was called after the proposer-set
+    // execution deadline has passed.
+    ExecutionDeadlineExceeded = 41,
 }
 
 // Issue #48: reason codes attached to a held settlement; None means not on hold
@@ -133,6 +139,10 @@ pub struct Settlement {
     pub status: SettlementStatus,
     pub hold_reason: SettlementHoldReason,
     pub proposed_at: u64,
+    /// Optional hard business deadline: if non-zero, `execute_settlement` must
+    /// reject calls after this timestamp even when approvals are complete.
+    /// Set by the proposer at proposal time; `0` means no deadline (default).
+    pub execution_deadline: u64,
 }
 
 #[contracttype]
@@ -151,6 +161,11 @@ pub struct Dispute {
     /// Claimant's share of `amount` in basis points (0..=10_000), set when `status` is
     /// `ResolvedSplit`; meaningless (always 0) for every other status. See #456.
     pub claimant_share_bps: u32,
+    /// Optional 32-byte hash of an off-chain evidence bundle (screenshots, messages,
+    /// delivery proof) supporting the dispute (#574). `None` when the claimant supplied
+    /// none. Purely a verifiable pointer for signers/audits — never itself verified
+    /// on-chain.
+    pub evidence_hash: Option<BytesN<32>>,
 }
 
 /// Lifecycle state of a signer-rotation proposal.
@@ -248,6 +263,18 @@ pub struct ApprovalExpiry {
     pub expires_at: u64,
 }
 
+/// Nullable `Address` wrapper compatible with `#[contracttype]`.
+///
+/// `Option<Address>` is not supported by the Soroban contract-type macro, so
+/// this enum serves as a manual `Option` for address fields. `None` signals
+/// absence; `Some(addr)` wraps a concrete address.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum MaybeAddress {
+    None,
+    Some(Address),
+}
+
 /// Storage keys for all treasury contract state.
 ///
 /// Used as keys for Soroban instance and persistent storage. Variants must not
@@ -288,6 +315,10 @@ pub enum DataKey {
     SignerChangeCount,
     /// Persistent storage for a timelocked signer/threshold-change proposal (#447).
     SignerChange(u64),
+    /// Optional UNIX timestamp after which a settlement hold automatically lapses (#592).
+    /// Stored separately from `Settlement` to avoid breaking the ABI snapshot.
+    /// Absent means the hold has no expiry.
+    HoldExpiry(u64),
 }
 
 /// Returns the approval weight assigned to `signer`, or `0` if not registered.
@@ -350,7 +381,8 @@ pub fn require_authorized_signer(env: &Env, signer: &Address) {
 
 /// Adds `signer`'s weight to `weight` and appends `signer` to `approvals`, unless `signer` has
 /// already approved (in which case this is a no-op). Captures the dedup-then-accumulate pattern
-/// used for settlement, dispute, and rotation approvals.
+/// used for settlement, dispute, and rotation approvals. Also records the current ledger timestamp
+/// as the signer's last-active time under `DataKey::SignerLastActive(signer)` (#587).
 ///
 /// # Examples
 ///
@@ -387,6 +419,53 @@ pub fn record_approval(
             .unwrap_or_else(|| soroban_sdk::panic_with_error!(env, TreasuryError::WeightOverflow));
         approvals.push_back(signer.clone());
     }
+    // Always update last-active timestamp, even for duplicate calls, so the
+    // timestamp reflects the most recent approval attempt by this signer.
+    let now = env.ledger().timestamp();
+    env.storage()
+        .instance()
+        .set(&DataKey::SignerLastActive(signer.clone()), &now);
+}
+
+/// Withdraws `signer`'s approval: removes `signer` from `approvals` and subtracts their weight
+/// from `weight`. The inverse of [`record_approval`]. Returns `false` (leaving both untouched)
+/// if `signer` has not approved.
+///
+/// The weight subtracted is `signer`'s *current* weight, mirroring how [`record_approval`] adds
+/// the weight in force at approval time. The subtraction saturates at zero, so if a signer's
+/// weight was raised after they approved the total can never underflow; it can only end up
+/// lower (execution stays blocked) rather than higher.
+///
+/// # Examples
+///
+/// ```rust,no_run
+/// use soroban_sdk::{Address, Env, Vec};
+/// use multisig::{record_approval, revoke_approval};
+///
+/// # let env: Env = unimplemented!();
+/// # let signer: Address = unimplemented!();
+/// # let mut approvals: Vec<Address> = unimplemented!();
+/// # let mut weight: u32 = 0;
+/// record_approval(&env, &mut approvals, &mut weight, &signer);
+/// // Changed their mind before execution: take the approval back.
+/// assert!(revoke_approval(&env, &mut approvals, &mut weight, &signer));
+/// // Revoking again is a no-op.
+/// assert!(!revoke_approval(&env, &mut approvals, &mut weight, &signer));
+/// ```
+pub fn revoke_approval(
+    env: &Env,
+    approvals: &mut Vec<Address>,
+    weight: &mut u32,
+    signer: &Address,
+) -> bool {
+    match approvals.first_index_of(signer) {
+        Some(index) => {
+            approvals.remove(index);
+            *weight = weight.saturating_sub(signer_weight(env, signer));
+            true
+        }
+        None => false,
+    }
 }
 
 /// Builds expiry metadata for a newly collected approval.
@@ -395,9 +474,9 @@ pub fn approval_expiry(env: &Env, signer: &Address, ttl_seconds: u64) -> Approva
     let expires_at = if ttl_seconds == 0 {
         0
     } else {
-        approved_at
-            .checked_add(ttl_seconds)
-            .unwrap_or_else(|| soroban_sdk::panic_with_error!(env, TreasuryError::ArithmeticOverflow))
+        approved_at.checked_add(ttl_seconds).unwrap_or_else(|| {
+            soroban_sdk::panic_with_error!(env, TreasuryError::ArithmeticOverflow)
+        })
     };
     ApprovalExpiry {
         signer: signer.clone(),
@@ -434,100 +513,664 @@ pub fn meets_threshold(weight: u32, threshold: u32) -> bool {
     weight >= threshold
 }
 
-#[cfg(feature = "testutils")]
+// Unit tests for the multisig crate's shared logic (#623).
+//
+// `signer_weight`, `require_authorized_signer`, `record_approval` and
+// `meets_threshold` are the quorum primitives every treasury entrypoint leans
+// on. Until now they were only reachable indirectly through the treasury
+// contract's integration tests, so a failure pointed at "treasury" rather than at
+// the crate that actually broke, and every edge case had to be re-derived as a
+// full contract deployment to pin down.
+//
+// Two things are worth calling out:
+//
+// * Deliberately gated on `#[cfg(test)]` only — NOT on `feature = "testutils"`.
+//   Nothing in the workspace enables `multisig/testutils`, and a crate's own
+//   feature cannot be switched on for its own unit tests without a non-default
+//   `cargo test --features ...` command, so a feature gate here meant the tests
+//   silently did not run at all. `soroban-sdk/testutils` comes in through the
+//   dev-dependency in Cargo.toml instead, which affects test builds only and
+//   leaves wasm32 release builds untouched.
+//
+// * The functions under test are instance-storage readers, and
+//   `soroban-sdk` refuses instance-storage access outside a contract frame
+//   ("this function is not accessible outside of a contract"). They are
+//   therefore driven through `MultisigHarness`, a throwaway `#[contract]` defined
+//   below that does nothing but forward to the real functions. That also means
+//   each call goes through a real contract invocation, so `require_auth` is
+//   recorded the same way it is in production and `env.auths()` can be inspected.
 #[cfg(test)]
 mod tests {
     use super::*;
     use soroban_sdk::testutils::Address as _;
-    use soroban_sdk::Env;
+    use soroban_sdk::{contract, contractimpl, Env};
+
+    /// Test-only pass-through contract. Every entrypoint forwards to the
+    /// function under test, so the assertions below exercise the real
+    /// implementation rather than a copy of it.
+    #[contract]
+    struct MultisigHarness;
+
+    #[contractimpl]
+    impl MultisigHarness {
+        /// Mirrors the write `Treasury::set_signer` performs. The crate under
+        /// test exposes no setter — signers are managed by the treasury contract
+        /// — so these two entrypoints stand in for it.
+        pub fn set_signer_weight(env: Env, signer: Address, weight: u32) {
+            env.storage()
+                .instance()
+                .set(&DataKey::Signer(signer.clone()), &weight);
+        }
+
+        /// Mirrors the delete `Treasury::remove_signer` performs: the entry is
+        /// removed outright rather than zeroed.
+        pub fn remove_signer_weight(env: Env, signer: Address) {
+            env.storage()
+                .instance()
+                .remove(&DataKey::Signer(signer.clone()));
+        }
+
+        pub fn signer_weight(env: Env, signer: Address) -> u32 {
+            crate::signer_weight(&env, &signer)
+        }
+
+        pub fn require_authorized_signer(env: Env, signer: Address) {
+            crate::require_authorized_signer(&env, &signer);
+        }
+
+        /// `record_approval` takes `&mut` accumulators, which contract
+        /// entrypoints cannot express, so they are passed and returned by value.
+        pub fn record_approval(
+            env: Env,
+            approvals: Vec<Address>,
+            weight: u32,
+            signer: Address,
+        ) -> (Vec<Address>, u32) {
+            let mut approvals = approvals;
+            let mut weight = weight;
+            crate::record_approval(&env, &mut approvals, &mut weight, &signer);
+            (approvals, weight)
+        }
+
+        pub fn meets_threshold(weight: u32, threshold: u32) -> bool {
+            crate::meets_threshold(weight, threshold)
+        }
+    }
+
+    /// Sets up an env with the harness registered. Signer weights are written via
+    /// the harness so they live in the same contract instance the helpers read.
+    fn setup() -> (Env, MultisigHarnessClient<'static>) {
+        let env = Env::default();
+        env.mock_all_auths();
+        let id = env.register(MultisigHarness, ());
+        let client = MultisigHarnessClient::new(&env, &id);
+        (env, client)
+    }
+
+    /// Asserts `approvals` holds exactly `expected`, in order.
+    ///
+    /// Takes a slice rather than returning a collection because this crate is
+    /// `#![no_std]`: there is no `vec!` macro or `std::vec::Vec` in scope, and
+    /// the test module deliberately avoids needing an `extern crate std`.
+    fn assert_approvals(approvals: &Vec<Address>, expected: &[Address]) {
+        assert_eq!(
+            approvals.len(),
+            expected.len() as u32,
+            "unexpected number of recorded approvals"
+        );
+        for (i, addr) in expected.iter().enumerate() {
+            assert_eq!(
+                approvals.get(i as u32).unwrap(),
+                *addr,
+                "approval at position {i} is the wrong address"
+            );
+        }
+    }
+
+    // ---------------------------------------------------------------------
+    // signer_weight
+    // ---------------------------------------------------------------------
 
     /// Tests the `.unwrap_or(0)` contract in `signer_weight`: an address that was
     /// never passed to any `set_signer` call (i.e. has no entry under
     /// `DataKey::Signer(addr)` in instance storage) returns `0` and does not panic.
     #[test]
     fn signer_weight_returns_zero_for_never_registered_address() {
-        let env = Env::default();
-        let never_registered = Address::generate(&env);
-        let weight = signer_weight(&env, &never_registered);
+        let (_env, client) = setup();
+        let never_registered = Address::generate(&_env);
+        let weight = client.signer_weight(&never_registered);
         assert_eq!(weight, 0);
     }
+
+    /// A registered signer's weight is read back verbatim — the value written by
+    /// `set_signer` is exactly what quorum accounting sees.
+    #[test]
+    fn signer_weight_returns_the_registered_weight() {
+        let (_env, client) = setup();
+        let signer = Address::generate(&_env);
+        client.set_signer_weight(&signer, &7);
+        assert_eq!(client.signer_weight(&signer), 7);
+    }
+
+    /// Weights are per-address, not global: registering one signer must not
+    /// change what any other address reads.
+    #[test]
+    fn signer_weight_is_independent_per_address() {
+        let (_env, client) = setup();
+        let alice = Address::generate(&_env);
+        let bob = Address::generate(&_env);
+        client.set_signer_weight(&alice, &3);
+        client.set_signer_weight(&bob, &11);
+
+        assert_eq!(client.signer_weight(&alice), 3);
+        assert_eq!(client.signer_weight(&bob), 11);
+    }
+
+    /// Re-registering a signer with a new weight takes effect immediately. This
+    /// is the `set_signer` upsert path, not the rotation path.
+    #[test]
+    fn signer_weight_reflects_the_latest_registration() {
+        let (_env, client) = setup();
+        let signer = Address::generate(&_env);
+        client.set_signer_weight(&signer, &5);
+        assert_eq!(client.signer_weight(&signer), 5);
+
+        client.set_signer_weight(&signer, &9);
+        assert_eq!(client.signer_weight(&signer), 9);
+
+        client.set_signer_weight(&signer, &1);
+        assert_eq!(client.signer_weight(&signer), 1);
+    }
+
+    /// A signer whose entry was deleted (`remove_signer`) reads back as `0`,
+    /// which is what makes `require_authorized_signer` reject it. Deletion and an
+    /// explicit zero weight are different writes but must be indistinguishable to
+    /// callers.
+    #[test]
+    fn signer_weight_returns_zero_after_removal() {
+        let (_env, client) = setup();
+        let signer = Address::generate(&_env);
+        client.set_signer_weight(&signer, &4);
+        assert_eq!(client.signer_weight(&signer), 4);
+
+        client.remove_signer_weight(&signer);
+        assert_eq!(client.signer_weight(&signer), 0);
+    }
+
+    /// A signer explicitly deactivated by `set_signer(_, 0)` reads back as `0`,
+    /// matching the removed-signer case above.
+    #[test]
+    fn signer_weight_returns_zero_for_zero_weight_signer() {
+        let (_env, client) = setup();
+        let signer = Address::generate(&_env);
+        client.set_signer_weight(&signer, &0);
+        assert_eq!(client.signer_weight(&signer), 0);
+    }
+
+    /// The largest representable weight round-trips rather than saturating or
+    /// wrapping.
+    #[test]
+    fn signer_weight_supports_u32_max() {
+        let (_env, client) = setup();
+        let signer = Address::generate(&_env);
+        client.set_signer_weight(&signer, &u32::MAX);
+        assert_eq!(client.signer_weight(&signer), u32::MAX);
+    }
+
+    // ---------------------------------------------------------------------
+    // meets_threshold
+    // ---------------------------------------------------------------------
+
+    /// Core `>=` semantics: exact match, above, and below.
+    #[test]
+    fn meets_threshold_compares_weight_against_threshold() {
+        let (_env, client) = setup();
+        assert!(client.meets_threshold(&3, &3), "exact must be satisfied");
+        assert!(client.meets_threshold(&4, &3), "above must be satisfied");
+        assert!(
+            !client.meets_threshold(&2, &3),
+            "below must not be satisfied"
+        );
+    }
+
+    /// One short of the threshold is not enough — the off-by-one that would let a
+    /// settlement execute a vote early.
+    #[test]
+    fn meets_threshold_is_false_one_below() {
+        let (_env, client) = setup();
+        assert!(!client.meets_threshold(&2, &3));
+        assert!(client.meets_threshold(&3, &3));
+    }
+
+    /// A zero threshold is trivially satisfied, including by zero weight. This is
+    /// why `Treasury::initialize` rejects a zero threshold with `ZeroThreshold`
+    /// rather than relying on quorum logic to catch it.
+    #[test]
+    fn meets_threshold_with_zero_threshold_is_always_satisfied() {
+        let (_env, client) = setup();
+        assert!(client.meets_threshold(&0, &0));
+        assert!(client.meets_threshold(&1, &0));
+        assert!(client.meets_threshold(&u32::MAX, &0));
+    }
+
+    /// Zero weight never satisfies a non-zero threshold, so a zero-weight signer
+    /// can never be the deciding vote.
+    #[test]
+    fn meets_threshold_with_zero_weight_and_nonzero_threshold_is_false() {
+        let (_env, client) = setup();
+        assert!(!client.meets_threshold(&0, &1));
+        assert!(!client.meets_threshold(&0, &u32::MAX));
+    }
+
+    /// Boundary sweep across the whole `u32` range: the only pair that must
+    /// return `false` is `weight < threshold`.
+    #[test]
+    fn meets_threshold_boundaries() {
+        let (_env, client) = setup();
+        assert!(client.meets_threshold(&1, &1));
+        assert!(client.meets_threshold(&u32::MAX, &u32::MAX));
+        assert!(client.meets_threshold(&u32::MAX, &(u32::MAX - 1)));
+        assert!(!client.meets_threshold(&(u32::MAX - 1), &u32::MAX));
+        assert!(!client.meets_threshold(&0, &u32::MAX));
+    }
+
+    /// `meets_threshold` stays consistent when driven by the weight
+    /// `record_approval` actually accumulates, not by hand-supplied literals.
+    /// Pins the "threshold equal to total weight of all signers" case the issue
+    /// calls out: every signer must approve, and only then is it satisfied.
+    #[test]
+    fn meets_threshold_at_exactly_total_registered_weight() {
+        let (env, client) = setup();
+
+        let alice = Address::generate(&env);
+        let bob = Address::generate(&env);
+        let carol = Address::generate(&env);
+        client.set_signer_weight(&alice, &2);
+        client.set_signer_weight(&bob, &3);
+        client.set_signer_weight(&carol, &5);
+        let total: u32 = 2 + 3 + 5;
+
+        let approvals = Vec::new(&env);
+        let weight: u32 = 0;
+
+        let (a, w) = client.record_approval(&approvals, &weight, &alice);
+        let (a, w) = client.record_approval(&a, &w, &bob);
+        assert!(
+            !client.meets_threshold(&w, &total),
+            "5 of 10 is not a quorum"
+        );
+
+        let (_a, w) = client.record_approval(&a, &w, &carol);
+        assert_eq!(w, total);
+        assert!(
+            client.meets_threshold(&w, &total),
+            "the full set of signers must satisfy a threshold set to their total weight"
+        );
+        assert!(!client.meets_threshold(&w, &(total + 1)));
+    }
+
+    // ---------------------------------------------------------------------
+    // record_approval
+    // ---------------------------------------------------------------------
 
     /// Tests that `record_approval` correctly accumulates weight up to exactly
     /// `u32::MAX` without panicking. This pins the upper boundary of the happy
     /// path: the final `checked_add` that produces `u32::MAX` must succeed.
     #[test]
     fn record_approval_accumulates_to_u32_max() {
-        let env = Env::default();
-        env.mock_all_auths();
-
+        let (env, client) = setup();
         let signer_a = Address::generate(&env);
         let signer_b = Address::generate(&env);
 
         // Register signer_a with weight u32::MAX - 1 and signer_b with weight 1,
         // so their combined weight exactly equals u32::MAX.
-        let weight_a: u32 = u32::MAX - 1;
-        let weight_b: u32 = 1;
-        env.storage()
-            .instance()
-            .set(&DataKey::Signer(signer_a.clone()), &weight_a);
-        env.storage()
-            .instance()
-            .set(&DataKey::Signer(signer_b.clone()), &weight_b);
+        client.set_signer_weight(&signer_a, &(u32::MAX - 1));
+        client.set_signer_weight(&signer_b, &1);
 
-        let mut approvals: Vec<Address> = Vec::new(&env);
-        let mut accumulated_weight: u32 = 0;
-
-        record_approval(&env, &mut approvals, &mut accumulated_weight, &signer_a);
-        assert_eq!(accumulated_weight, u32::MAX - 1);
+        let approvals = Vec::new(&env);
+        let (approvals, weight) = client.record_approval(&approvals, &0, &signer_a);
+        assert_eq!(weight, u32::MAX - 1);
 
         // Adding signer_b's weight of 1 should bring the total to exactly u32::MAX —
         // checked_add must succeed here; u32::MAX is a valid, non-overflowing result.
-        record_approval(&env, &mut approvals, &mut accumulated_weight, &signer_b);
-        assert_eq!(accumulated_weight, u32::MAX);
+        let (_approvals, weight) = client.record_approval(&approvals, &weight, &signer_b);
+        assert_eq!(weight, u32::MAX);
     }
 
-    /// Tests that `record_approval` panics with `WeightOverflow` when accumulating
-    /// signer weights would exceed `u32::MAX`. Uses `#[should_panic]` because
-    /// `panic_with_error!` inside a no_std Soroban contract produces a host-level
-    /// panic that propagates out of the call in test mode.
+    /// `record_approval` fails with a typed `WeightOverflow` when accumulating
+    /// signer weights would exceed `u32::MAX`.
     ///
     /// Boundary being tested: the `checked_add` in `record_approval` returns `None`
     /// when `u32::MAX + 1` would wrap, and the `.unwrap_or_else` branch fires
     /// `panic_with_error!(env, TreasuryError::WeightOverflow)`.
     #[test]
-    #[should_panic]
-    fn record_approval_panics_on_weight_overflow() {
-        let env = Env::default();
-        env.mock_all_auths();
-
+    fn record_approval_errors_on_weight_overflow() {
+        let (env, client) = setup();
         let signer_a = Address::generate(&env);
         let signer_b = Address::generate(&env);
         let signer_c = Address::generate(&env);
 
         // signer_a holds u32::MAX - 1, signer_b holds 1 (sum = u32::MAX),
         // signer_c holds 1 (adding it would overflow past u32::MAX).
-        let weight_a: u32 = u32::MAX - 1;
-        let weight_b: u32 = 1;
-        let weight_c: u32 = 1;
-        env.storage()
-            .instance()
-            .set(&DataKey::Signer(signer_a.clone()), &weight_a);
-        env.storage()
-            .instance()
-            .set(&DataKey::Signer(signer_b.clone()), &weight_b);
-        env.storage()
-            .instance()
-            .set(&DataKey::Signer(signer_c.clone()), &weight_c);
+        client.set_signer_weight(&signer_a, &(u32::MAX - 1));
+        client.set_signer_weight(&signer_b, &1);
+        client.set_signer_weight(&signer_c, &1);
 
-        let mut approvals: Vec<Address> = Vec::new(&env);
-        let mut accumulated_weight: u32 = 0;
+        let approvals = Vec::new(&env);
+        // Bring accumulated weight up to u32::MAX (no error expected here).
+        let (approvals, weight) = client.record_approval(&approvals, &0, &signer_a);
+        let (_approvals, weight) = client.record_approval(&approvals, &weight, &signer_b);
+        assert_eq!(weight, u32::MAX);
 
-        // Bring accumulated weight up to u32::MAX (no panic expected here).
-        record_approval(&env, &mut approvals, &mut accumulated_weight, &signer_a);
-        record_approval(&env, &mut approvals, &mut accumulated_weight, &signer_b);
-        assert_eq!(accumulated_weight, u32::MAX);
+        // This call attempts u32::MAX + 1, which must fail rather than wrap.
+        let err = client
+            .try_record_approval(&Vec::new(&env), &weight, &signer_c)
+            .unwrap_err()
+            .unwrap();
+        assert_eq!(err, TreasuryError::WeightOverflow.into());
+    }
 
-        // This call attempts u32::MAX + 1, which overflows — must panic.
-        record_approval(&env, &mut approvals, &mut accumulated_weight, &signer_c);
+    /// A first approval records both the weight and the address.
+    #[test]
+    fn record_approval_records_weight_and_address() {
+        let (env, client) = setup();
+        let signer = Address::generate(&env);
+        client.set_signer_weight(&signer, &6);
+
+        let approvals = Vec::new(&env);
+        let (approvals, weight) = client.record_approval(&approvals, &0, &signer);
+
+        assert_eq!(weight, 6);
+        assert_approvals(&approvals, &[signer]);
+    }
+
+    /// A repeated approval from the same signer is a complete no-op: weight is not
+    /// double-counted and the address is not appended twice. Without the
+    /// `contains` guard a single signer could approve `n` times to reach any
+    /// threshold, so this is the most security-relevant behaviour here.
+    #[test]
+    fn record_approval_deduplicates_repeat_approvals() {
+        let (env, client) = setup();
+        let signer = Address::generate(&env);
+        client.set_signer_weight(&signer, &2);
+
+        let approvals = Vec::new(&env);
+        let mut approvals = approvals;
+        let mut weight: u32 = 0;
+        for _ in 0..5 {
+            let (a, w) = client.record_approval(&approvals, &weight, &signer);
+            approvals = a;
+            weight = w;
+        }
+
+        assert_eq!(weight, 2, "repeat approvals must not accumulate weight");
+        assert_eq!(
+            approvals.len(),
+            1,
+            "repeat approvals must not append the address again"
+        );
+    }
+
+    /// Deduplication is by address and applies regardless of position in the
+    /// sequence, not just for consecutive calls.
+    #[test]
+    fn record_approval_deduplicates_non_adjacent_approvals() {
+        let (env, client) = setup();
+        let alice = Address::generate(&env);
+        let bob = Address::generate(&env);
+        client.set_signer_weight(&alice, &1);
+        client.set_signer_weight(&bob, &1);
+
+        let approvals = Vec::new(&env);
+        let (approvals, weight) = client.record_approval(&approvals, &0, &alice);
+        let (approvals, weight) = client.record_approval(&approvals, &weight, &bob);
+        let (approvals, weight) = client.record_approval(&approvals, &weight, &alice);
+        let (approvals, weight) = client.record_approval(&approvals, &weight, &alice);
+
+        assert_eq!(weight, 2);
+        assert_approvals(&approvals, &[alice, bob]);
+    }
+
+    /// A zero-weight signer is still appended to `approvals` and contributes `0`
+    /// to the weight. It cannot help reach a threshold, but it is still recorded,
+    /// and — critically — it can never be counted twice either.
+    #[test]
+    fn record_approval_handles_zero_weight_signers() {
+        let (env, client) = setup();
+        let zero_weight = Address::generate(&env);
+        let real_signer = Address::generate(&env);
+        client.set_signer_weight(&zero_weight, &0);
+        client.set_signer_weight(&real_signer, &4);
+
+        let approvals = Vec::new(&env);
+        let (approvals, weight) = client.record_approval(&approvals, &0, &zero_weight);
+        assert_eq!(weight, 0, "a zero-weight signer must add nothing");
+        assert_approvals(&approvals, &[zero_weight.clone()]);
+
+        let (approvals, weight) = client.record_approval(&approvals, &weight, &zero_weight);
+        assert_eq!(weight, 0);
+        assert_eq!(approvals.len(), 1);
+
+        let (approvals, weight) = client.record_approval(&approvals, &weight, &real_signer);
+        assert_eq!(weight, 4);
+        assert_approvals(&approvals, &[zero_weight, real_signer]);
+    }
+
+    /// A signer that was never registered has weight `0` and is recorded the same
+    /// way as an explicit zero-weight signer. `record_approval` is not an
+    /// authorization check — `require_authorized_signer` is the gate. This test
+    /// documents that the two are independent, so a future refactor does not fold
+    /// one into the other by accident.
+    #[test]
+    fn record_approval_accepts_unregistered_signer_with_zero_weight() {
+        let (env, client) = setup();
+        let unregistered = Address::generate(&env);
+
+        let approvals = Vec::new(&env);
+        let (approvals, weight) = client.record_approval(&approvals, &0, &unregistered);
+
+        assert_eq!(weight, 0);
+        assert_approvals(&approvals, &[unregistered]);
+    }
+
+    /// A signer removed *after* approving keeps the weight it contributed: the
+    /// approval snapshot is not recomputed. This matches treasury's documented
+    /// behaviour that removing a signer does not retroactively invalidate in-flight
+    /// approvals.
+    #[test]
+    fn record_approval_keeps_weight_of_a_signer_removed_after_approving() {
+        let (env, client) = setup();
+        let signer = Address::generate(&env);
+        client.set_signer_weight(&signer, &5);
+
+        let approvals = Vec::new(&env);
+        let (approvals, weight) = client.record_approval(&approvals, &0, &signer);
+        assert_eq!(weight, 5);
+
+        client.remove_signer_weight(&signer);
+        assert_eq!(client.signer_weight(&signer), 0);
+        assert_eq!(weight, 5, "already-recorded approval weight is unchanged");
+        assert_approvals(&approvals, &[signer]);
+    }
+
+    /// A signer re-weighted before approving contributes their *new* weight. This
+    /// is the direct contrast with the removed-signer case above: removal reads back
+    /// as zero, but a re-weight to a live value is read at approval time.
+    #[test]
+    fn record_approval_uses_current_weight_for_signers_not_yet_approving() {
+        let (env, client) = setup();
+        let approver = Address::generate(&env);
+        let later = Address::generate(&env);
+        client.set_signer_weight(&approver, &1);
+        client.set_signer_weight(&later, &2);
+
+        let approvals = Vec::new(&env);
+        let (approvals, weight) = client.record_approval(&approvals, &0, &approver);
+        assert_eq!(weight, 1);
+
+        // Re-weight `later` before it approves; its contribution follows the new
+        // value.
+        client.set_signer_weight(&later, &8);
+        let (_approvals, weight) = client.record_approval(&approvals, &weight, &later);
+        assert_eq!(weight, 9);
+    }
+
+    /// Distinct signers accumulate in insertion order, and the total is the sum of
+    /// their weights.
+    #[test]
+    fn record_approval_accumulates_distinct_signers_in_order() {
+        let (env, client) = setup();
+        let a = Address::generate(&env);
+        let b = Address::generate(&env);
+        let c = Address::generate(&env);
+        client.set_signer_weight(&a, &10);
+        client.set_signer_weight(&b, &20);
+        client.set_signer_weight(&c, &30);
+
+        let approvals = Vec::new(&env);
+        let (approvals, weight) = client.record_approval(&approvals, &0, &a);
+        let (approvals, weight) = client.record_approval(&approvals, &weight, &b);
+        let (approvals, weight) = client.record_approval(&approvals, &weight, &c);
+
+        assert_eq!(weight, 60);
+        assert_approvals(&approvals, &[a, b, c]);
+    }
+
+    /// A pre-populated `approvals` vector is respected: an address already in it is
+    /// not appended again and contributes no weight, so resuming a partially
+    /// recorded approval round is safe.
+    #[test]
+    fn record_approval_respects_preexisting_approvals() {
+        let (env, client) = setup();
+        let a = Address::generate(&env);
+        let b = Address::generate(&env);
+        client.set_signer_weight(&a, &3);
+        client.set_signer_weight(&b, &4);
+
+        let mut approvals = Vec::new(&env);
+        approvals.push_back(a.clone());
+
+        let (approvals, weight) = client.record_approval(&approvals, &0, &a);
+        assert_eq!(weight, 0, "an address already present adds no weight");
+        assert_eq!(approvals.len(), 1);
+
+        let (approvals, weight) = client.record_approval(&approvals, &weight, &b);
+        assert_eq!(weight, 4);
+        assert_approvals(&approvals, &[a, b]);
+    }
+
+    // ---------------------------------------------------------------------
+    // require_authorized_signer
+    // ---------------------------------------------------------------------
+
+    /// A registered signer with non-zero weight is authorized and the call returns
+    /// normally.
+    #[test]
+    fn require_authorized_signer_allows_a_registered_signer() {
+        let (env, client) = setup();
+        let signer = Address::generate(&env);
+        client.set_signer_weight(&signer, &1);
+
+        client.require_authorized_signer(&signer);
+    }
+
+    /// The signer must authenticate: `require_auth` is invoked, and it is the
+    /// signer itself — not the caller or some ambient account — that is recorded as
+    /// having authorized. This is what stops a caller from approving on someone
+    /// else's behalf.
+    #[test]
+    fn require_authorized_signer_requests_the_signers_own_auth() {
+        let (env, client) = setup();
+        let signer = Address::generate(&env);
+        client.set_signer_weight(&signer, &1);
+
+        client.require_authorized_signer(&signer);
+
+        let auths = env.auths();
+        assert_eq!(auths.len(), 1, "expected exactly one require_auth");
+        let (address, _invocation) = auths.first().unwrap();
+        assert_eq!(
+            *address, signer,
+            "the signer must be the authorizing address"
+        );
+    }
+
+    /// An unregistered address is rejected with `UnauthorizedSigner` rather than
+    /// being treated as a weight-0 signer that is merely unhelpful.
+    #[test]
+    fn require_authorized_signer_rejects_an_unregistered_address() {
+        let (env, client) = setup();
+        let stranger = Address::generate(&env);
+
+        let err = client
+            .try_require_authorized_signer(&stranger)
+            .unwrap_err()
+            .unwrap();
+        assert_eq!(err, TreasuryError::UnauthorizedSigner.into());
+    }
+
+    /// A signer removed via `remove_signer` (its storage entry deleted) is rejected
+    /// — the issue's "signers that have been removed" case. Authorization is lost
+    /// immediately, on the very next call.
+    #[test]
+    fn require_authorized_signer_rejects_a_removed_signer() {
+        let (env, client) = setup();
+        let signer = Address::generate(&env);
+        client.set_signer_weight(&signer, &9);
+        // Authorized while registered...
+        client.require_authorized_signer(&signer);
+
+        // ...and rejected immediately after removal.
+        client.remove_signer_weight(&signer);
+        let err = client
+            .try_require_authorized_signer(&signer)
+            .unwrap_err()
+            .unwrap();
+        assert_eq!(err, TreasuryError::UnauthorizedSigner.into());
+    }
+
+    /// A signer deactivated by `set_signer(_, 0)` is rejected too:
+    /// `signer_weight` cannot distinguish "weight 0" from "absent", and both must
+    /// fail the gate.
+    #[test]
+    fn require_authorized_signer_rejects_a_zero_weight_signer() {
+        let (env, client) = setup();
+        let signer = Address::generate(&env);
+        client.set_signer_weight(&signer, &0);
+
+        let err = client
+            .try_require_authorized_signer(&signer)
+            .unwrap_err()
+            .unwrap();
+        assert_eq!(err, TreasuryError::UnauthorizedSigner.into());
+    }
+
+    /// A signer downgraded to weight 0 *after* being registered loses authorization
+    /// immediately.
+    #[test]
+    fn require_authorized_signer_rejects_after_weight_is_zeroed() {
+        let (env, client) = setup();
+        let signer = Address::generate(&env);
+        client.set_signer_weight(&signer, &1);
+        client.require_authorized_signer(&signer);
+
+        client.set_signer_weight(&signer, &0);
+        let err = client
+            .try_require_authorized_signer(&signer)
+            .unwrap_err()
+            .unwrap();
+        assert_eq!(err, TreasuryError::UnauthorizedSigner.into());
+    }
+
+    /// `u32::MAX` weight is still "non-zero" and therefore authorized — the gate is
+    /// `== 0`, not "is some plausible value". Pins that the check does not silently
+    /// grow an upper bound.
+    #[test]
+    fn require_authorized_signer_allows_u32_max_weight() {
+        let (env, client) = setup();
+        let signer = Address::generate(&env);
+        client.set_signer_weight(&signer, &u32::MAX);
+
+        client.require_authorized_signer(&signer);
     }
 }

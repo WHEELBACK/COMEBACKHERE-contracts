@@ -36,7 +36,7 @@ impl TreasuryComplianceWorkflow {
         }
         let signer = env.current_contract_address();
         Ok(TreasuryContractClient::new(&env, &treasury_contract)
-            .propose_settlement(&signer, &merchant, &amount))
+            .propose_settlement(&signer, &merchant, &amount, &0_u64))
     }
 }
 
@@ -113,7 +113,7 @@ fn paused_compliance_blocks_settlement_when_merchant_not_yet_allowed() {
     let (env, admin, merchant, compliance_cid, compliance, treasury_cid, _treasury, wf_id) =
         setup();
     // Pausing prevents allow_address from being called; merchant stays denied.
-    compliance.pause(&admin);
+    compliance.pause(&admin, &soroban_sdk::symbol_short!("maint"));
 
     let err = TreasuryComplianceWorkflowClient::new(&env, &wf_id)
         .try_check_and_propose(&compliance_cid, &treasury_cid, &merchant, &10_000_000)
