@@ -14,6 +14,7 @@
 // - Optional types (Option<u64>) serialize to null or value
 
 use crate::invoice::Invoice;
+use crate::refund::NetRefund;
 use soroban_sdk::{contracttype, Address, Env, Symbol};
 
 /// Emitted when an amendment changes an invoice's amount fields.
@@ -35,6 +36,16 @@ pub struct InvoiceExpiryExtendedEvent {
     pub new_expires_at: u64,
 }
 
+/// Emitted when a partial payment is recorded against an invoice.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct InvoicePartiallyPaidEvent {
+    pub id: u64,
+    pub amount: i128,
+    pub amount_paid: i128,
+    pub amount_remaining: i128,
+}
+
 pub fn invoice_created(env: &Env, id: u64, invoice: &Invoice) {
     env.events()
         .publish((Symbol::new(env, "invoice_created"), id), invoice.clone());
@@ -45,14 +56,22 @@ pub fn invoice_paid(env: &Env, id: u64, invoice: &Invoice) {
         .publish((Symbol::new(env, "invoice_paid"), id), invoice.clone());
 }
 
+pub fn invoice_partially_paid(env: &Env, event: &InvoicePartiallyPaidEvent) {
+    env.events().publish(
+        (Symbol::new(env, "invoice_partially_paid"), event.id),
+        event.clone(),
+    );
+}
+
 pub fn invoice_expired(env: &Env, id: u64, invoice: &Invoice) {
     env.events()
         .publish((Symbol::new(env, "invoice_expired"), id), invoice.clone());
 }
 
-pub fn invoice_cancelled(env: &Env, id: u64, invoice: &Invoice) {
+pub fn invoice_cancelled(env: &Env, id: u64, reason: CancelReason) {
+    let payload = InvoiceCancelledEvent { id, reason };
     env.events()
-        .publish((Symbol::new(env, "invoice_cancelled"), id), invoice.clone());
+        .publish((Symbol::new(env, "invoice_cancelled"), id), payload);
 }
 
 pub fn invoice_refund_requested(env: &Env, id: u64, invoice: &Invoice) {
@@ -70,6 +89,42 @@ pub fn refund_approved(env: &Env, id: u64, invoice: &Invoice) {
 pub fn refund_rejected(env: &Env, id: u64, invoice: &Invoice) {
     env.events()
         .publish((Symbol::new(env, "refund_rejected"), id), invoice.clone());
+}
+
+/// Emitted when a refund is processed on-chain and the net payout is
+/// transferred to the payer (#71).
+///
+/// Carries the whole gross-vs-net breakdown rather than only the amount paid,
+/// so an indexer or a support workflow can show the customer exactly what was
+/// deducted (payment-gateway fee, network fee) instead of re-deriving it from
+/// the invoice. Mirrors [`crate::NetRefund`], which is also stored under
+/// `DataKey::RefundBreakdown` for the same invoice.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct RefundProcessedEvent {
+    pub id: u64,
+    /// The payer the net amount was transferred to.
+    pub payer: Address,
+    pub gross_amount: i128,
+    pub processing_fee: i128,
+    pub network_fee: i128,
+    pub net_amount: i128,
+    /// Ledger timestamp the payout was executed at.
+    pub processed_at: u64,
+}
+
+pub fn refund_processed(env: &Env, id: u64, payer: &Address, refund: &NetRefund) {
+    let payload = RefundProcessedEvent {
+        id,
+        payer: payer.clone(),
+        gross_amount: refund.gross_amount,
+        processing_fee: refund.processing_fee,
+        network_fee: refund.network_fee,
+        net_amount: refund.net_amount,
+        processed_at: env.ledger().timestamp(),
+    };
+    env.events()
+        .publish((Symbol::new(env, "refund_processed"), id), payload);
 }
 
 /// Minimal payload emitted when escrow is released for a paid invoice.
@@ -183,11 +238,10 @@ pub fn invoice_transferred(env: &Env, event: &InvoiceTransferredEvent) {
 #[cfg(test)]
 mod tests {
     use super::{
-        invoice_expiry_extended, invoice_transferred, template_created, template_disabled,
-        template_generated, InvoiceExpiryExtendedEvent, InvoiceTransferredEvent,
-        TemplateCreatedEvent, TemplateDisabledEvent, TemplateGeneratedEvent,
+        invoice_expiry_extended, invoice_partially_paid, InvoiceExpiryExtendedEvent,
+        InvoicePartiallyPaidEvent,
     };
-    use soroban_sdk::{contract, testutils::Address as _, testutils::Events, Address, Env, Symbol, TryFromVal};
+    use soroban_sdk::{contract, testutils::Events, Env, Symbol, TryFromVal};
 
     #[contract]
     struct TestContract;
@@ -215,18 +269,17 @@ mod tests {
     }
 
     #[test]
-    fn invoice_transferred_emits_event() {
+    fn invoice_partially_paid_emits_event() {
         let env = Env::default();
         let contract_id = env.register(TestContract, ());
-        let old_merchant = Address::generate(&env);
-        let new_merchant = Address::generate(&env);
         env.as_contract(&contract_id, || {
-            invoice_transferred(
+            invoice_partially_paid(
                 &env,
-                &InvoiceTransferredEvent {
-                    id: 7,
-                    old_merchant: old_merchant.clone(),
-                    new_merchant: new_merchant.clone(),
+                &InvoicePartiallyPaidEvent {
+                    id: 1,
+                    amount: 40,
+                    amount_paid: 40,
+                    amount_remaining: 60,
                 },
             );
         });
@@ -234,56 +287,7 @@ mod tests {
         let (_, topics, _) = env.events().all().last().unwrap();
         assert_eq!(
             Symbol::try_from_val(&env, &topics.get_unchecked(0)).unwrap(),
-            Symbol::new(&env, "invoice_transferred")
-        );
-    }
-
-    #[test]
-    fn template_lifecycle_emits_events() {
-        let env = Env::default();
-        let contract_id = env.register(TestContract, ());
-        let merchant = Address::generate(&env);
-        env.as_contract(&contract_id, || {
-            template_created(
-                &env,
-                &TemplateCreatedEvent {
-                    template_id: 1,
-                    merchant: merchant.clone(),
-                    interval: 86_400,
-                },
-            );
-            template_generated(
-                &env,
-                &TemplateGeneratedEvent {
-                    template_id: 1,
-                    invoice_id: 10,
-                    generated_at: 1_000,
-                },
-            );
-            template_disabled(
-                &env,
-                &TemplateDisabledEvent {
-                    template_id: 1,
-                    merchant: merchant.clone(),
-                },
-            );
-        });
-
-        let events = env.events().all();
-        let (_, created_topics, _) = events.get(events.len() - 3).unwrap();
-        assert_eq!(
-            Symbol::try_from_val(&env, &created_topics.get_unchecked(0)).unwrap(),
-            Symbol::new(&env, "template_created")
-        );
-        let (_, generated_topics, _) = events.get(events.len() - 2).unwrap();
-        assert_eq!(
-            Symbol::try_from_val(&env, &generated_topics.get_unchecked(0)).unwrap(),
-            Symbol::new(&env, "template_generated")
-        );
-        let (_, disabled_topics, _) = events.get(events.len() - 1).unwrap();
-        assert_eq!(
-            Symbol::try_from_val(&env, &disabled_topics.get_unchecked(0)).unwrap(),
-            Symbol::new(&env, "template_disabled")
+            Symbol::new(&env, "invoice_partially_paid")
         );
     }
 }

@@ -40,6 +40,31 @@ impl InvoiceContract {
             .unwrap_or(0u64)
     }
 
+    // --- #537: per-merchant open invoice limit ---
+
+    /// Set the maximum number of pending invoices a single merchant may hold at once.
+    /// A value of 0 disables the limit. Existing merchants already above the limit
+    /// are not broken; they are only prevented from creating more invoices.
+    pub fn set_max_open_invoices(
+        env: Env,
+        admin: Address,
+        max_open: u64,
+    ) -> Result<(), InvoiceError> {
+        require_admin(&env, &admin)?;
+        env.storage()
+            .instance()
+            .set(&DataKey::MaxOpenInvoices, &max_open);
+        Ok(())
+    }
+
+    /// Return the current per-merchant open invoice limit (0 if not set / disabled).
+    pub fn get_max_open_invoices(env: Env) -> u64 {
+        env.storage()
+            .instance()
+            .get(&DataKey::MaxOpenInvoices)
+            .unwrap_or(0u64)
+    }
+
     // --- #15: two-step admin transfer ---
 
     /// Initiate admin transfer. Current admin nominates `new_admin`.

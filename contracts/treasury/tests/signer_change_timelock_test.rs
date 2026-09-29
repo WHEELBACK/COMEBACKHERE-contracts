@@ -291,7 +291,7 @@ fn update_threshold_change_applies_new_threshold() {
     // The settlement below with only admin approving (weight=1) should NOT execute
     // because the threshold is now 3.
     let merchant = Address::generate(&env);
-    let sid = client.propose_settlement(&admin, &merchant, &1_000);
+    let sid = client.propose_settlement(&admin, &merchant, &1_000, &0_u64);
     let settlement = client.approve_settlement(&admin, &sid);
     // approval_weight is 1 (only admin), threshold is 3 → not yet executed.
     assert_eq!(settlement.approval_weight, 1);
@@ -321,4 +321,116 @@ fn update_threshold_change_rejects_unreachable_threshold() {
     let cid = client.propose_signer_change(&admin, &SignerChangeKind::UpdateThreshold(10));
     env.ledger().set_timestamp(TIMELOCK_SECS);
     client.execute_signer_change(&admin, &cid);
+}
+
+// ── edge cases (#569): boundary timestamps, cancel-then-reexecute, duplicate proposals ──
+
+/// One second before the delay boundary must still be rejected — the delay is
+/// `>=`, not `>`, so this pins the off-by-one down from the other direction of
+/// `execute_exactly_at_delay_boundary_succeeds`.
+#[test]
+#[should_panic(expected = "Error(Contract, #38)")]
+fn execute_one_second_before_delay_boundary_is_rejected() {
+    let env = Env::default();
+    env.ledger().set_timestamp(1_000);
+    let (client, admin) = setup(&env);
+    let signer = Address::generate(&env);
+
+    let cid = client.propose_signer_change(&admin, &SignerChangeKind::SetSigner(signer, 2));
+    let proposal = client.get_signer_change(&cid).expect("proposal must exist");
+
+    env.ledger().set_timestamp(proposal.executable_at - 1);
+    client.execute_signer_change(&admin, &cid);
+}
+
+/// A proposal cancelled *after* it was already executed is a no-op attempt that
+/// must fail without altering the already-applied change — the cancel is
+/// rejected before it can touch the (already terminal) proposal or its effects.
+#[test]
+fn cancel_after_execute_fails_and_leaves_the_applied_change_intact() {
+    let env = Env::default();
+    env.ledger().set_timestamp(0);
+    let (client, admin) = setup(&env);
+    let signer = Address::generate(&env);
+
+    let cid = client.propose_signer_change(&admin, &SignerChangeKind::SetSigner(signer.clone(), 7));
+    env.ledger().set_timestamp(TIMELOCK_SECS);
+    client.execute_signer_change(&admin, &cid);
+    assert_eq!(client.get_signer_weight(&signer), 7);
+
+    let result = client.try_cancel_signer_change(&admin, &cid);
+    assert!(result.is_err(), "cancelling an already-executed change must fail");
+
+    // The executed change's effect must be untouched by the failed cancel attempt.
+    assert_eq!(client.get_signer_weight(&signer), 7);
+    let proposal = client.get_signer_change(&cid).expect("proposal must still exist");
+    assert_eq!(proposal.status, SignerChangeStatus::Executed);
+}
+
+/// Proposing a second, unrelated change while the first is still pending must not
+/// disturb the first proposal — each id is tracked and executed independently
+/// (this is the "duplicate proposals" case: nothing in the design rejects a
+/// second proposal merely because one is already in flight).
+#[test]
+fn second_proposal_while_first_pending_is_tracked_and_executed_independently() {
+    let env = Env::default();
+    env.ledger().set_timestamp(0);
+    let (client, admin) = setup(&env);
+    let signer_a = Address::generate(&env);
+    let signer_b = Address::generate(&env);
+
+    let cid_a = client.propose_signer_change(&admin, &SignerChangeKind::SetSigner(signer_a.clone(), 2));
+    // A second proposal while `cid_a` is still Pending must succeed and get its own id.
+    let cid_b = client.propose_signer_change(&admin, &SignerChangeKind::SetSigner(signer_b.clone(), 3));
+    assert_ne!(cid_a, cid_b);
+
+    let proposal_a = client.get_signer_change(&cid_a).expect("proposal A must exist");
+    let proposal_b = client.get_signer_change(&cid_b).expect("proposal B must exist");
+    assert_eq!(proposal_a.status, SignerChangeStatus::Pending);
+    assert_eq!(proposal_b.status, SignerChangeStatus::Pending);
+
+    env.ledger().set_timestamp(TIMELOCK_SECS);
+
+    // Execute B first, out of proposal order, to confirm they don't interfere.
+    client.execute_signer_change(&admin, &cid_b);
+    assert_eq!(client.get_signer_weight(&signer_b), 3);
+    assert_eq!(client.get_signer_weight(&signer_a), 0);
+
+    client.execute_signer_change(&admin, &cid_a);
+    assert_eq!(client.get_signer_weight(&signer_a), 2);
+}
+
+/// After a proposal is cancelled, the admin creates a brand-new proposal for the
+/// same logical change; the new proposal executes normally, and the cancelled
+/// one remains permanently terminal (per module docs: "create a new proposal
+/// via `propose_signer_change`").
+#[test]
+fn re_propose_after_cancel_executes_successfully() {
+    let env = Env::default();
+    env.ledger().set_timestamp(0);
+    let (client, admin) = setup(&env);
+    let signer = Address::generate(&env);
+
+    let first_cid = client.propose_signer_change(&admin, &SignerChangeKind::SetSigner(signer.clone(), 4));
+    client.cancel_signer_change(&admin, &first_cid);
+    assert_eq!(
+        client.get_signer_change(&first_cid).unwrap().status,
+        SignerChangeStatus::Cancelled
+    );
+    // The cancelled proposal must never have taken effect.
+    assert_eq!(client.get_signer_weight(&signer), 0);
+
+    let second_cid = client.propose_signer_change(&admin, &SignerChangeKind::SetSigner(signer.clone(), 4));
+    assert_ne!(first_cid, second_cid);
+
+    env.ledger().set_timestamp(TIMELOCK_SECS);
+    let proposal = client.execute_signer_change(&admin, &second_cid);
+
+    assert_eq!(proposal.status, SignerChangeStatus::Executed);
+    assert_eq!(client.get_signer_weight(&signer), 4);
+    // The original cancelled proposal stays terminal and untouched.
+    assert_eq!(
+        client.get_signer_change(&first_cid).unwrap().status,
+        SignerChangeStatus::Cancelled
+    );
 }

@@ -17,7 +17,7 @@ fn paused_rejects_propose_settlement() {
     let env = Env::default();
     let (client, admin) = paused_setup(&env);
     let merchant = Address::generate(&env);
-    client.propose_settlement(&admin, &merchant, &1_000);
+    client.propose_settlement(&admin, &merchant, &1_000, &0_u64);
 }
 
 #[test]
@@ -43,7 +43,7 @@ fn paused_rejects_deposit() {
     let env = Env::default();
     let (client, admin) = paused_setup(&env);
     let token = Address::generate(&env);
-    client.deposit(&admin, &token, &1_000);
+    client.deposit(&admin, &token, &1_000, &None);
 }
 
 #[test]
@@ -54,7 +54,7 @@ fn paused_rejects_batch_deposit() {
     let token = Address::generate(&env);
     let mut deposits = Vec::new(&env);
     deposits.push_back((token, 1_000));
-    client.batch_deposit(&admin, &deposits);
+    client.batch_deposit(&admin, &deposits, &None);
 }
 
 #[test]
@@ -73,7 +73,7 @@ fn paused_rejects_raise_dispute() {
     let (client, _admin) = paused_setup(&env);
     let claimant = Address::generate(&env);
     let counterparty = Address::generate(&env);
-    client.raise_dispute(&claimant, &1, &counterparty, &1_000, &500);
+    client.raise_dispute(&claimant, &1, &counterparty, &1_000, &500, &None);
 }
 
 #[test]

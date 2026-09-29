@@ -29,7 +29,7 @@ fn deposit_baseline_no_reentry_credits_internal_balance_once() {
     token.set_callback_target(&CallbackTarget::None, &treasury_id);
     token.mint(&depositor, &5_000_000);
 
-    client.deposit(&depositor, &token_id, &5_000_000);
+    client.deposit(&depositor, &token_id, &5_000_000, &None);
 
     assert_eq!(client.get_balance(&depositor, &token_id), 5_000_000);
     assert_eq!(token.balance(&depositor), 0);
