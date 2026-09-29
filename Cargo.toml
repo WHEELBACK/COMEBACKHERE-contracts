@@ -6,6 +6,7 @@ members = [
     "contracts/settlement-workflow",
     "tests",
     "crates/compliance-client",
+    "crates/error-macros",
     "crates/multisig",
     "crates/invoice-errors",
     "crates/compliance-errors",

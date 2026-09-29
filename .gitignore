@@ -14,3 +14,10 @@ contracts/invoice/tests/snapshots/
 **/*.snap.new
 .DS_Store
 **/__pycache__/
+
+# ── cargo-fuzz ───────────────────────────────────────────────────────────────
+# Per-target seed corpora and crash artifacts are local iteration state: they are
+# machine-generated, machine-specific, and would swamp the diff. Crash artifacts
+# are the exception worth keeping — a crash reproducer is valuable, so those are
+# intentionally NOT ignored; the ignore below is scoped to corpus/ only.
+contracts/*/fuzz/corpus/

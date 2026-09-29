@@ -187,7 +187,7 @@ impl TreasuryContract {
                 }
                 let total_weight: u32 = TreasuryContract::get_all_signers(env.clone())
                     .iter()
-                    .map(|(_, weight)| weight)
+                    .map(|(_, weight, _)| weight)
                     .sum();
                 if new_threshold > total_weight {
                     return Err(TreasuryError::ThresholdUnreachable);

@@ -107,6 +107,7 @@ Persistent keys (`contracts/invoice/src/invoice.rs:131-152`):
 | `DataKey::InvoiceHistory(u64)` | status-transition helper (`lib.rs:61`) | audit/history reads | **No** |
 | `DataKey::PendingIndex` | `lib.rs:30,34` | expiry enumeration | **No** |
 | `DataKey::LastCreatedAt(Address)` | `create_invoice` cooldown check | cooldown check | **No** |
+| `DataKey::RefundBreakdown(u64)` (#71) | `process_refund`, alongside the `Refunded` transition | `get_refund_breakdown` | **No** |
 
 **Assessment — lower risk, not a genuine gap today.** Invoices are designed
 around a bounded lifecycle (`expires_at`, with an admin-tunable grace window);

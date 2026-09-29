@@ -54,7 +54,7 @@ impl FullLifecycleWorkflow {
         }
         let signer = env.current_contract_address();
         Ok(TreasuryContractClient::new(&env, &treasury_contract)
-            .propose_settlement(&signer, &inv.merchant, &inv.amount_usdc))
+            .propose_settlement(&signer, &inv.merchant, &inv.amount_usdc, &0_u64))
     }
 }
 

@@ -63,7 +63,7 @@ fn treasury_with_history(env: &Env, n: u64) -> (TreasuryContractClient<'static>,
 
     for _ in 0..n {
         let merchant = Address::generate(env);
-        client.propose_settlement(&admin, &merchant, &1_000_000);
+        client.propose_settlement(&admin, &merchant, &1_000_000, &0_u64);
     }
 
     (client, admin)
@@ -163,7 +163,7 @@ fn page_scan_skips_executed_entries_at_scale() {
     let mut executed_ids = std::vec::Vec::new();
     for i in 1..=LARGE_HISTORY {
         let merchant = Address::generate(&env);
-        let sid = client.propose_settlement(&admin, &merchant, &1_000_000);
+        let sid = client.propose_settlement(&admin, &merchant, &1_000_000, &0_u64);
         if i % 10 == 0 {
             client.execute_settlement(&admin, &sid, &token_id);
             executed_ids.push(sid);
@@ -238,38 +238,45 @@ fn page_scan_cost_scales_with_history_size() {
     );
 }
 
-/// Finding, recorded here rather than asserted away: `get_pending_settlements_page`
-/// early-`break`s as soon as the requested page is full, so a *shallow* page
-/// (`start` near 0) is cheap while a *deep* page (`start` near the end of a large
-/// history) costs proportionally to `start + limit` - i.e. it approaches the cost
-/// of a full-history scan. Paginating a UI to the end of a 1000+ settlement
-/// history is therefore not a cheap operation, and callers that must repeatedly
-/// reach deep offsets pay O(count) each time. This is the same "cost scales with
-/// total accumulated history" shape as the `resolve_dispute` concern in
-/// `resolve_dispute_dos_test.rs`; a follow-up that maintains a compacted pending
-/// index would remove it. This test pins the current behaviour so a future
-/// change either preserves it deliberately or is noticed here.
+/// Historical finding (fixed by #572): `get_pending_settlements_page` used to
+/// early-`break` as soon as the requested page was full, scanning settlement ids
+/// from 1 upward and reading each one's status individually - so a *shallow*
+/// page (`start` near 0) was cheap while a *deep* page (`start` near the end of
+/// a large history) cost proportionally to `start + limit`, approaching the cost
+/// of a full-history scan.
+///
+/// #572 replaced that per-id scan with `DataKey::PendingSettlementIndex`, a
+/// compact `Vec<u64>` of currently-pending ids kept in sync by `write_settlement`
+/// on every settlement write. The whole index loads as a single storage read;
+/// skipping to `start` is then in-memory `Vec` iteration with **no** additional
+/// persistent reads, and only the `limit` settlements actually returned cost a
+/// `Settlement` read each. Depth no longer matters - this test now pins *that*
+/// property (previously it pinned the opposite, with a comment anticipating and
+/// welcoming exactly this fix).
 #[test]
-fn page_scan_cost_grows_with_offset_depth() {
+fn page_scan_cost_no_longer_grows_with_offset_depth() {
     let (cost_shallow, _) = bench_page_scan(LARGE_HISTORY, 0, 20);
     let (cost_deep, _) = bench_page_scan(LARGE_HISTORY, LARGE_HISTORY - 20, 20);
 
     eprintln!("get_pending_settlements_page offset-depth cost (history = {LARGE_HISTORY}):");
     eprintln!("  start=0    (shallow) -> {cost_shallow} instructions");
     eprintln!(
-        "  start={:<4} (deep)    -> {cost_deep} instructions  ({:.1}x the shallow cost)",
+        "  start={:<4} (deep)    -> {cost_deep} instructions  ({:.2}x the shallow cost)",
         LARGE_HISTORY - 20,
         cost_deep as f64 / cost_shallow as f64
     );
 
-    // A shallow page reads ~limit entries and stops; a deep page reads ~count.
-    // Over a 1000-entry history that is a large, deliberate gap.
+    // Both costs are now dominated by the single index read plus `limit`
+    // Settlement reads - depth within the index contributes no extra storage
+    // I/O. A wide margin (3x) absorbs incidental variance without hiding a
+    // real regression back to per-id scanning (which measured >5x in practice
+    // before #572).
     assert!(
-        cost_deep > cost_shallow * 5,
-        "expected a deep-offset page to cost far more than a shallow one because \
-         the scan runs from id 1 every call (deep {cost_deep} vs shallow \
-         {cost_shallow}); if this ever fails because deep pages got cheap, that \
-         is a welcome fix worth documenting rather than a bug in this test"
+        cost_deep < cost_shallow * 3,
+        "expected a deep-offset page to cost about the same as a shallow one \
+         now that both read the same single pending index (deep {cost_deep} vs \
+         shallow {cost_shallow}); a ratio this high suggests the per-id scan \
+         this test was written to catch has regressed"
     );
     assert!(
         cost_deep <= SCAN_INSTRUCTION_CEILING,
@@ -300,6 +307,7 @@ fn resolve_dispute_cost_with_1000_plus_settlement_history() {
         &merchant,
         &500_000,
         &u64::MAX,
+        &None,
     );
     assert_eq!(
         client.get_settlement(&target_settlement).status,

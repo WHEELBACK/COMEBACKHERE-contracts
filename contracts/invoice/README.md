@@ -2,6 +2,43 @@
 
 The Invoice contract manages the lifecycle of merchant invoices, from creation to payment and escrow release. It supports merchant-supplied nonces for idempotency, configurable grace windows for payment validity, and admin-controlled escrow releases.
 
+## Invoice state machine
+
+The diagram below shows every invoice status and the entrypoint that moves an
+invoice between statuses. It is kept in sync with `src/invoice.rs`; update it in
+the same PR as any lifecycle change.
+
+```mermaid
+stateDiagram-v2
+    [*] --> Pending: create_invoice (merchant)
+    Pending --> Paid: mark_paid (admin)
+    Pending --> Cancelled: cancel_invoice (merchant or payer)
+    Pending --> Expired: batch_expire (admin)
+    Paid --> RefundRequested: request_refund (payer)
+    Paid --> Released: release_escrow (admin)
+    RefundRequested --> Refunded: approve_refund (admin)
+    RefundRequested --> Paid: reject_refund (admin)
+    Cancelled --> [*]
+    Expired --> [*]
+    Refunded --> [*]
+    Released --> [*]
+```
+
+### Roles per transition
+
+| Transition | Entrypoint | Role that can trigger it |
+| --- | --- | --- |
+| `[*]` → `Pending` | `create_invoice` | merchant |
+| `Pending` → `Paid` | `mark_paid` | admin |
+| `Pending` → `Cancelled` | `cancel_invoice` | merchant or payer (invoice owner) |
+| `Pending` → `Expired` | `batch_expire` | admin |
+| `Paid` → `RefundRequested` | `request_refund` | payer |
+| `Paid` → `Released` | `release_escrow` | admin |
+| `RefundRequested` → `Refunded` | `approve_refund` | admin |
+| `RefundRequested` → `Paid` | `reject_refund` | admin |
+
+`Cancelled`, `Expired`, `Refunded` and `Released` are terminal statuses.
+
 ## Entrypoints
 
 | Function             | Auth Required | Parameters                                                                                                                                                       | Returns                               | Errors                                                                                                    |

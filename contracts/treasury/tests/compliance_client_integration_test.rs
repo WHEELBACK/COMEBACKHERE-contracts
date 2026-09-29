@@ -149,7 +149,7 @@ fn settlement_proceeds_when_compliance_passing_via_compliance_client() {
     assert!(compliance.is_allowed(&ctx.merchant));
 
     // Create settlement
-    let settlement_id = treasury.propose_settlement(&ctx.admin, &ctx.merchant, &10_000_000);
+    let settlement_id = treasury.propose_settlement(&ctx.admin, &ctx.merchant, &10_000_000, &0_u64);
 
     // Fund treasury
     token.mint(&ctx.treasury_id, &10_000_000);
@@ -184,7 +184,7 @@ fn settlement_rejected_when_merchant_not_allowed_via_compliance_client() {
     let token = TestTokenClient::new(&ctx.env, &ctx.token_id);
 
     // Merchant is NOT allowed (default-deny)
-    let settlement_id = treasury.propose_settlement(&ctx.admin, &ctx.merchant, &10_000_000);
+    let settlement_id = treasury.propose_settlement(&ctx.admin, &ctx.merchant, &10_000_000, &0_u64);
 
     token.mint(&ctx.treasury_id, &10_000_000);
 
@@ -223,7 +223,7 @@ fn settlement_rejected_when_merchant_blocked_via_compliance_client() {
     compliance_admin.block_address(&ctx.admin, &ctx.merchant, &None);
     assert!(!compliance.is_allowed(&ctx.merchant));
 
-    let settlement_id = treasury.propose_settlement(&ctx.admin, &ctx.merchant, &10_000_000);
+    let settlement_id = treasury.propose_settlement(&ctx.admin, &ctx.merchant, &10_000_000, &0_u64);
 
     token.mint(&ctx.treasury_id, &10_000_000);
 
@@ -259,7 +259,7 @@ fn settlement_proceeds_with_temp_allow_via_compliance_client() {
     compliance_admin.allow_address_until(&ctx.admin, &ctx.merchant, &(now + 1000));
     assert!(compliance.is_allowed(&ctx.merchant));
 
-    let settlement_id = treasury.propose_settlement(&ctx.admin, &ctx.merchant, &10_000_000);
+    let settlement_id = treasury.propose_settlement(&ctx.admin, &ctx.merchant, &10_000_000, &0_u64);
 
     token.mint(&ctx.treasury_id, &10_000_000);
 
@@ -293,7 +293,7 @@ fn settlement_rejected_when_temp_allow_expired_via_compliance_client() {
     compliance_admin.allow_address_until(&ctx.admin, &ctx.merchant, &now);
     assert!(!compliance.is_allowed(&ctx.merchant));
 
-    let settlement_id = treasury.propose_settlement(&ctx.admin, &ctx.merchant, &10_000_000);
+    let settlement_id = treasury.propose_settlement(&ctx.admin, &ctx.merchant, &10_000_000, &0_u64);
 
     token.mint(&ctx.treasury_id, &10_000_000);
 

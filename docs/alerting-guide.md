@@ -22,7 +22,7 @@ entrypoints on an interval.
 | Settlement past its TTL but not yet expired on-chain | `SETTLEMENT_TTL` is 7 days (`contracts/treasury/src/settlements.rs`); poll `get_pending_settlements_page` and alert when `proposed_at + 7d < now` for any `Pending` settlement | Warn — `expire_settlement` is admin-gated and won't fire itself |
 | Pending settlement backlog growing | `get_pending_metrics()` → `(count, total_value)` (single-call aggregate, avoids paginating `get_pending_settlements_page`) | Alert on operator-defined count/value thresholds tuned to normal throughput |
 | Treasury balance drained | `treasury_drained` event (`contracts/treasury/src/deposits.rs`) | Page immediately — this is an admin-only emergency-withdrawal path |
-| Token removed mid-flight | `token_removed` event while settlements referencing that token are still `Pending` | Warn — those settlements will fail `execute_settlement` with `TreasuryError::TokenNotAllowed` (12) |
+| Token removal blocked by pending settlements | `remove_allowed_token` failing with `TreasuryError::TokenHasPendingSettlements` (41) — removal is refused on-chain while any settlement is `Pending`, so a token can no longer be removed mid-flight | Info — resolve (execute, cancel or expire) the pending settlements, then retry the removal |
 
 ## Compliance (`contracts/compliance`)
 

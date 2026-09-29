@@ -7,7 +7,7 @@ fn setup(env: &Env) -> (TreasuryContractClient<'_>, Address, u64) {
     let contract_id = env.register_contract(None, TreasuryContract);
     let client = TreasuryContractClient::new(env, &contract_id);
     client.initialize(&admin, &2, &soroban_sdk::Vec::new(env));
-    let sid = client.propose_settlement(&admin, &merchant, &5_000_000);
+    let sid = client.propose_settlement(&admin, &merchant, &5_000_000, &0_u64);
     (client, admin, sid)
 }
 
@@ -72,7 +72,7 @@ fn weighted_signer_duplicate_approval_does_not_double_count_weight() {
     let heavy = Address::generate(&env);
     client.set_signer(&admin, &heavy, &5);
 
-    let sid = client.propose_settlement(&heavy, &merchant, &5_000_000);
+    let sid = client.propose_settlement(&heavy, &merchant, &5_000_000, &0_u64);
 
     // First approval records weight 5.
     let s1 = client.approve_settlement(&heavy, &sid);

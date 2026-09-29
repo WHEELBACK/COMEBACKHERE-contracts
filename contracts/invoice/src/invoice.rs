@@ -1,6 +1,6 @@
-use soroban_sdk::{contracttype, Address, Bytes, BytesN, Symbol, Vec};
+use soroban_sdk::{contracttype, Address, Bytes, String};
 
-pub use invoice_errors::InvoiceError;
+use soroban_sdk::{contract, contractimpl, contracttype, symbol_short, Address, Env, String, Vec};
 
 /// USDC on Stellar uses 7 decimal places: 1 USDC = 10_000_000 stroops.
 pub const USDC_FACTOR: i128 = 10_000_000;
@@ -15,11 +15,15 @@ pub const MAX_BATCH_EXPIRE: u32 = 100;
 /// Maximum bytes accepted for optional invoice hash fields.
 pub const MAX_HASH_BYTES: u32 = 64;
 
-/// Maximum number of merchant-defined tags accepted per invoice.
-pub const MAX_TAGS: u32 = 5;
+/// Basis points denominator: 100% expressed in basis points.
+pub const BPS_DENOMINATOR: i128 = 10_000;
 
-/// Maximum length (in characters) accepted for each merchant-defined tag.
-pub const MAX_TAG_LENGTH: u32 = 16;
+/// Upper bound for the configurable late fee, in basis points (10% = 1_000 bps).
+///
+/// The late fee is applied only when an invoice is paid inside the grace window
+/// after `expires_at`. Values above this bound are rejected at configuration
+/// time so merchants cannot impose an unbounded penalty on late payers.
+pub const MAX_LATE_FEE_BPS: u32 = 1_000;
 
 /// Lifecycle status of an invoice.
 ///
@@ -28,17 +32,31 @@ pub const MAX_TAG_LENGTH: u32 = 16;
 /// `Pending` → `Cancelled` (merchant or admin cancellation), `Paid` →
 /// `RefundRequested` → `Refunded` (dispute/refund flow).
 #[contracttype]
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub enum InvoiceStatus {
-    Pending,
-    Paid,
-    Expired,
-    Cancelled,
-    RefundRequested,
-    /// Escrow funds have been released to the merchant after payment confirmation.
-    Released,
-    /// Refund has been approved by admin; terminal status for disputed invoices.
-    Refunded,
+#[derive(Clone)]
+pub enum DataKey {
+    /// Monotonic counter for invoice ids.
+    InvoiceCount,
+    /// Invoice record keyed by id.
+    Invoice(u64),
+    /// Monotonic counter for template ids.
+    TemplateCount,
+    /// Recurring invoice template keyed by id.
+    Template(u64),
+}
+
+impl InvoiceStatus {
+    /// Returns `true` for statuses that are terminal, i.e. the invoice will not
+    /// transition again. Terminal invoices are left alone by TTL bumps so their
+    /// storage can age out naturally.
+    pub fn is_terminal(&self) -> bool {
+        matches!(
+            self,
+            InvoiceStatus::Expired
+                | InvoiceStatus::Cancelled
+                | InvoiceStatus::Released
+                | InvoiceStatus::Refunded
+        )
+    }
 }
 
 // contracttype enum wrappers for optional complex types; Option<Address> and
@@ -49,13 +67,18 @@ pub enum InvoiceStatus {
 /// this enum serves as a manual `Option` for address fields. `None` signals
 /// absence; `Some(addr)` wraps a concrete address.
 #[contracttype]
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub enum MaybeAddress {
-    None,
-    Some(Address),
+#[derive(Clone)]
+pub struct Invoice {
+    pub id: u64,
+    pub merchant: Address,
+    pub payer: Address,
+    pub amount: i128,
+    pub memo: String,
+    pub paid: bool,
+    pub paused: bool,
 }
 
-/// Nullable `Bytes` wrapper compatible with `#[contracttype]`.
+/// A recurring invoice template.
 ///
 /// `Option<Bytes>` is not supported by the Soroban contract-type macro, so
 /// this enum serves as a manual `Option` for byte-string fields such as
@@ -68,27 +91,29 @@ pub enum MaybeBytes {
     Some(Bytes),
 }
 
-/// Nullable `BytesN<32>` wrapper compatible with `#[contracttype]`.
+/// Nullable `String` wrapper compatible with `#[contracttype]`.
 ///
-/// `Option<BytesN<32>>` is not supported by the Soroban contract-type macro,
-/// so this enum serves as a manual `Option` for fixed 32-byte hash fields such
-/// as the off-chain metadata hash. `None` signals absence; `Some(hash)` wraps
-/// a concrete 32-byte hash.
+/// `Option<String>` is not supported by the Soroban contract-type macro, so
+/// this enum serves as a manual `Option` for string fields such as the
+/// optional invoice memo. `None` signals absence; `Some(string)` wraps a
+/// concrete string.
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub enum MaybeHash32 {
+pub enum MaybeString {
     None,
-    Some(BytesN<32>),
+    Some(String),
 }
 
 #[contracttype]
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct Invoice {
+#[derive(Clone)]
+pub struct InvoiceTemplate {
     pub id: u64,
     pub merchant: Address,
     pub amount_usdc: i128,
     pub gross_usdc: i128,
     pub status: InvoiceStatus,
+    /// Ledger timestamp at creation, sourced from `env.ledger().timestamp()`.
+    pub created_at: u64,
     pub expires_at: u64,
     pub paid_at: Option<u64>,
     pub payer: MaybeAddress,
@@ -99,13 +124,42 @@ pub struct Invoice {
     pub offchain_metadata_hash: MaybeHash32,
     /// Merchant-supplied nonce for storefront idempotency (0 = no nonce).
     pub merchant_nonce: u64,
+    /// Token contract address the invoice is denominated in.
+    ///
+    /// Defaults to the configured USDC token when callers do not pass one,
+    /// preserving backwards compatibility for existing invoices and callers.
+    pub token: Address,
     /// Optional token contract address for multi-currency invoices.
     /// `None` means the invoice is denominated in the default (USDC).
     pub token_address: MaybeAddress,
-    /// Merchant-defined informational tags for off-chain categorisation
-    /// (project, department, campaign, ...). Bounded by `MAX_TAGS` and
-    /// `MAX_TAG_LENGTH`; never affects lifecycle or authorisation logic.
-    pub tags: Vec<Symbol>,
+    /// Late fee in basis points applied when the invoice is paid inside the
+    /// grace window after `expires_at`. Bounded by `MAX_LATE_FEE_BPS`.
+    pub late_fee_bps: u32,
+}
+
+/// Lightweight, read-only projection of an [`Invoice`] for list views.
+///
+/// Contains only the fields frontends need when enumerating many invoices:
+/// id, status, amount and expiry. It is derived from the same storage record
+/// as `get_invoice` (never a duplicated copy), so it can never go out of sync.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct InvoiceSummary {
+    pub id: u64,
+    pub status: InvoiceStatus,
+    pub amount_usdc: i128,
+    pub expires_at: u64,
+}
+
+impl From<&Invoice> for InvoiceSummary {
+    fn from(invoice: &Invoice) -> Self {
+        InvoiceSummary {
+            id: invoice.id,
+            status: invoice.status.clone(),
+            amount_usdc: invoice.amount_usdc,
+            expires_at: invoice.expires_at,
+        }
+    }
 }
 
 /// Parameters for a single invoice within a batch_create_invoice call.
@@ -119,15 +173,36 @@ pub struct BatchInvoiceParams {
     pub payment_link_hash: MaybeBytes,
     pub merchant_nonce: u64,
     pub token_address: MaybeAddress,
+    /// Late fee in basis points applied inside the grace window.
+    pub late_fee_bps: u32,
 }
 
-/// A single status transition recorded in an invoice's audit log.
+#[contractimpl]
+impl InvoiceContract {
+    /// Create a new invoice.
+    pub fn create_invoice(
+        env: Env,
+        merchant: Address,
+        payer: Address,
+        amount: i128,
+        memo: String,
+    ) -> u64 {
+        merchant.require_auth();
+
+/// Per-status invoice counters maintained incrementally on every transition.
+///
+/// Dashboards read these via `get_status_counts` instead of scanning every
+/// invoice. Each field tracks the number of invoices currently in the
+/// corresponding status; transitions decrement the source counter and
+/// increment the destination counter so the totals stay in sync with reality.
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub struct StatusTransition {
-    pub from: InvoiceStatus,
-    pub to: InvoiceStatus,
-    pub timestamp: u64,
+pub struct StatusCounts {
+    pub pending: u64,
+    pub paid: u64,
+    pub expired: u64,
+    pub cancelled: u64,
+    pub refunded: u64,
 }
 
 /// Storage keys for invoice contract state.
@@ -160,4 +235,7 @@ pub enum DataKey {
     CreationCooldown,
     /// Timestamp of the last successful create_invoice call for a given merchant.
     LastCreatedAt(Address),
+    /// Fee breakdown of a processed refund: gross amount, processing fee,
+    /// network fee and the net amount transferred to the payer (#71).
+    RefundBreakdown(u64),
 }
