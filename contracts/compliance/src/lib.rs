@@ -296,7 +296,7 @@ impl ComplianceContract {
         for address in addresses.iter() {
             results.push_back(Self::is_allowed_at(&env, &address, now));
         }
-        results
+        Ok(results)
     }
 
     pub fn is_allowed(env: Env, address: Address) -> bool {
