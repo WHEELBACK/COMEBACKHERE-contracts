@@ -229,6 +229,14 @@ impl InvoiceContract {
             return Err(InvoiceError::NotPending);
         }
 
+        // #533: when the invoice is restricted, only the designated payer may settle it
+        if let MaybeAddress::Some(designated) = &invoice.designated_payer {
+            if &payer != designated {
+                return Err(InvoiceError::WrongPayer);
+            }
+            payer.require_auth();
+        }
+
         if provided_metadata_hash != MaybeBytes::None
             && provided_metadata_hash != invoice.metadata_hash
         {
