@@ -16,3 +16,6 @@ name = "protocol_errors"
 invoice-errors  = { package = "comebackhere-invoice-errors",  path = "../../crates/invoice-errors" }
 treasury        = { package = "comebackhere-treasury",        path = "../../contracts/treasury" }
 compliance-errors = { package = "comebackhere-compliance-errors", path = "../../crates/compliance-errors" }
+
+[dev-dependencies]
+soroban-sdk.workspace = true

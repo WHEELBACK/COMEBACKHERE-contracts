@@ -50,6 +50,7 @@ all entrypoints in `contracts/invoice/src/entrypoints/` call through these helpe
 | `contract_unpaused` | `(Symbol,)` | `Address` (admin) | `unpause` |
 | `invoice_amended` | `(Symbol, id: u64)` | `InvoiceAmountUpdatedEvent` | `amend_invoice` |
 | `invoice_expiry_extended` | `(Symbol, id: u64)` | `InvoiceExpiryExtendedEvent` | `extend_expiry` |
+| `refund_processed` | `(Symbol, id: u64)` | `RefundProcessedEvent` | `process_refund` |
 
 **`Invoice`** (`contracts/invoice/src/invoice.rs`):
 `id: u64`, `merchant: Address`, `amount_usdc: i128`, `gross_usdc: i128`,
@@ -68,6 +69,16 @@ wrappers used in place of `Option<Address>`/`Option<Bytes>`, which soroban-sdk v
 `old_gross_usdc: i128`, `new_gross_usdc: i128`.
 
 **`InvoiceExpiryExtendedEvent`**: `id: u64`, `old_expires_at: u64`, `new_expires_at: u64`.
+
+**`RefundProcessedEvent`** (#71): `id: u64`, `payer: Address`, `gross_amount: i128`,
+`processing_fee: i128`, `network_fee: i128`, `net_amount: i128`, `processed_at: u64`.
+
+Published alongside `refund_approved` by `process_refund`, and carrying the same
+`NetRefund` record that is stored under `DataKey::RefundBreakdown(id)`. It exists
+so an indexer can show a customer exactly what was deducted from their refund
+without re-deriving the fee arithmetic: `gross_amount` is what was paid,
+`processing_fee` is the merchant gateway's `fee_bps` share, `network_fee` is the
+flat payout cost, and `net_amount` is the amount actually transferred.
 
 ### Reconstructing invoice status history
 
@@ -99,6 +110,8 @@ Source: `contracts/compliance/src/lib.rs` (single-file contract; no submodules).
 | `compliance_paused` | `(Symbol,)` | `Address` (admin) | `pause` |
 | `compliance_unpaused` | `(Symbol,)` | `Address` (admin) | `unpause` |
 | `operator_set` | `(Symbol,)` | `Address` (operator) | `set_operator` |
+| `tier_limit_set` | `(Symbol,)` | `(u32, i128)` — `(tier, limit)` | `set_tier_limit` |
+| `jurisdiction_set` | `(Symbol,)` | `(Address, Bytes)` — `(address, code)` | `set_jurisdiction` |
 
 None of these events carry the address in a second topic — indexers must decode the
 data payload (or, for the tuple-payload events, its first element) to key by address.
@@ -114,12 +127,49 @@ Source: `contracts/settlement-workflow/src/lib.rs`.
 
 | Event | Topics | Data type | Emitted by |
 |---|---|---|---|
-| `workflow_initialized` | `(Symbol,)` | `(Address, Address)` — `(compliance_id, treasury_id)` | `initialize` |
+| `workflow_initialized` | `(Symbol,)` | `(Address, Address, Address)` — `(admin, compliance_id, treasury_id)` | `initialize` |
 | `settlement_workflow_executed` | `(Symbol, settlement_id: u64)` | `(Address, Address)` — `(merchant, token_contract)` | `execute_with_compliance`, `execute_with_compliance_batch` (per settlement actually executed) |
+| `emergency_pause_configured` | `(Symbol,)` | `(Address, Vec<Address>)` — `(admin, targets)` | `initialize_emergency_pause` |
+| `emergency_pause_completed` | `(Symbol,)` | `(Address, Vec<Address>)` — `(admin, paused)` | `emergency_pause_all` |
+| `emergency_pause_resumed` | `(Symbol,)` | `Vec<Address>` — `(resumed)` | `resume_all` |
+
+### Emergency pause coordination (#73)
+
+`emergency_pause_completed` is emitted **only after every target has confirmed
+the pause**, and `emergency_pause_resumed` only after every target has confirmed
+the unpause. Neither event is ever emitted for a partial sweep: a target that
+refuses fails the whole call, which reverts the sweep, so the absence of
+`emergency_pause_completed` is itself the signal that nothing was paused. An
+off-chain monitor should treat `get_emergency_paused_at()` returning a timestamp
+as authoritative for the same reason — it is written last, after the fan-out.
 
 `settlement_workflow_executed` exists specifically so indexers can distinguish
 compliance-gated execution from a direct `Treasury::execute_settlement` call, which
 emits its own `settlement_executed` event (below) with no knowledge of the gate.
+The `amount` element is the settlement amount that moved, so the outcome, the
+recipient, and the amount are readable from this one event without correlating
+against `settlement_executed`.
+
+`workflow_batch_completed` carries the batch outcome: `requested` is the number of
+settlement IDs submitted and `executed` is how many were actually executed. A batch
+where `requested != executed` means some IDs were skipped (non-existent,
+already-executed, or threshold-failed), which is otherwise only discoverable by
+diffing the per-item events. It is published even when nothing executed, so a
+fully-skipped batch is still observable.
+
+**Failures emit no event.** A compliance-blocked merchant fails the whole
+invocation, and Soroban discards events from a failed invocation, so there is
+deliberately no "compliance blocked" event to subscribe to — an alert on
+`settlement_workflow_executed` not arriving is not a signal by itself. Alert on the
+failed transaction itself, which carries `ComplianceCheckFailed` (or `ContractPaused`
+while the workflow is halted).
+
+`admin_transfer_initiated` and `admin_transferred` mirror the compliance
+contract's pair above and carry the same two-step meaning: an indexer must read
+`admin_transfer_initiated` as "a nomination is outstanding" and must **not**
+conclude the admin role has moved until `admin_transferred` arrives. A nomination
+that is never accepted, or that is superseded by a later `transfer_admin`, emits
+no `admin_transferred` at all.
 
 ---
 
@@ -131,6 +181,7 @@ Source: `contracts/treasury/src/{lib,settlements,disputes,deposits,holds,signers
 |---|---|---|---|
 | `treasury_initialized` | `(Symbol,)` | `Address` (admin) | `initialize` |
 | `threshold_updated` | `(Symbol,)` | `u32` (new_threshold) | `update_threshold` |
+| `update_threshold_deprecated` | `(Symbol,)` | `Address` (admin) | `update_threshold` (#570; deprecation-signal event emitted on every call so off-chain indexers can detect remaining callers of the deprecated direct path — see CONTRIBUTING.md "Deprecating an entrypoint") |
 | `treasury_paused` | `(Symbol,)` | `Address` (admin) | `pause` |
 | `treasury_unpaused` | `(Symbol,)` | `Address` (admin) | `unpause` |
 | `withdrawal_limit_set` | `(Symbol,)` | `(i128, u64)` — `(limit, window_secs)` | `set_withdrawal_limit` |
@@ -141,7 +192,8 @@ Source: `contracts/treasury/src/{lib,settlements,disputes,deposits,holds,signers
 | `settlement_partial_executed` | `(Symbol, settlement_id: u64)` | `Settlement` | `partially_execute_settlement` |
 | `settlement_cancelled` | `(Symbol, settlement_id: u64)` | `Settlement` | `cancel_settlement`, `batch_cancel_settlements` (per settlement) |
 | `settlement_force_cancelled` | `(Symbol, settlement_id: u64)` | `(Address, Settlement)` — `(admin, settlement)` | `force_cancel_settlement` (#457; admin-only emergency override, distinct from `settlement_cancelled`) |
-| `settlement_expired` | `(Symbol, settlement_id: u64)` | `Settlement` | `expire_settlement` |
+| `settlement_approval_revoked` | `(Symbol, settlement_id: u64)` | `(Address, Settlement)` — `(signer, settlement)`; `settlement` reflects the approvals and `approval_weight` after the revocation (#577) | `revoke_approval` |
+| `settlement_expired` | `(Symbol, settlement_id: u64)` | `Settlement` — the settlement in its final state, with `status == Expired` (#576) | `expire_settlement` |
 | `settlement_held` | `(Symbol, settlement_id: u64)` | `SettlementHoldReason` | `hold_settlement` |
 | `settlement_released` | `(Symbol, settlement_id: u64)` | `Settlement` | `release_hold` |
 | `merchant_payout_updated` | `(Symbol, merchant: Address)` | `Address` (new_payout_address) | `update_merchant_payout_address` |
@@ -156,6 +208,7 @@ Source: `contracts/treasury/src/{lib,settlements,disputes,deposits,holds,signers
 | `withdraw` | `(Symbol, to: Address)` | `i128` (amount) | `withdraw` |
 | `treasury_drained` | `(Symbol,)` | `Address` (recipient) | `withdraw_all` |
 | `signer_weight_set` | `(Symbol, signer: Address)` | `u32` (weight) | `set_signer` |
+| `signer_label_set` | `(Symbol, signer: Address)` | `String` (label) | `set_signer_label` (#568; informational only, never consulted for authorisation) |
 | `signer_removed` | `(Symbol,)` | `Address` (signer) | `remove_signer` |
 | `rotation_proposed` | `(Symbol, id: u64)` | `SignerRotationProposal` | `propose_signer_rotation` |
 | `rotation_approved` | `(Symbol, rotation_id: u64)` | `SignerRotationProposal` | `approve_signer_rotation` |

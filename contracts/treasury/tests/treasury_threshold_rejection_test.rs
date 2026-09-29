@@ -19,7 +19,7 @@ fn test_zero_additional_approvals_panics() {
     let env = Env::default();
     env.mock_all_auths();
     let (client, admin, merchant, token_id) = setup(&env, 2);
-    let sid = client.propose_settlement(&admin, &merchant, &10_000_000);
+    let sid = client.propose_settlement(&admin, &merchant, &10_000_000, &0_u64);
     // approval_weight = 1 (only proposer), threshold = 2 → must panic
     client.execute_settlement(&admin, &sid, &token_id);
 }
@@ -33,7 +33,7 @@ fn test_below_threshold_panics() {
     let (client, admin, merchant, token_id) = setup(&env, 3);
     let backup = Address::generate(&env);
     client.set_signer(&admin, &backup, &1);
-    let sid = client.propose_settlement(&admin, &merchant, &10_000_000);
+    let sid = client.propose_settlement(&admin, &merchant, &10_000_000, &0_u64);
     client.approve_settlement(&backup, &sid);
     // approval_weight = 2 (admin + backup), threshold = 3 → must panic
     client.execute_settlement(&admin, &sid, &token_id);
@@ -51,7 +51,7 @@ fn test_threshold_minus_one_approvals_panics() {
     let signer_c = Address::generate(&env);
     client.set_signer(&admin, &signer_b, &1);
     client.set_signer(&admin, &signer_c, &1);
-    let sid = client.propose_settlement(&admin, &merchant, &10_000_000);
+    let sid = client.propose_settlement(&admin, &merchant, &10_000_000, &0_u64);
     client.approve_settlement(&signer_b, &sid);
     client.approve_settlement(&signer_c, &sid);
     // approval_weight = 3 (admin + b + c), threshold = 4 → must panic
@@ -67,7 +67,7 @@ fn test_exactly_at_threshold_succeeds() {
     let (client, admin, merchant, token_id) = setup(&env, 2);
     let backup = Address::generate(&env);
     client.set_signer(&admin, &backup, &1);
-    let sid = client.propose_settlement(&admin, &merchant, &10_000_000);
+    let sid = client.propose_settlement(&admin, &merchant, &10_000_000, &0_u64);
     client.approve_settlement(&backup, &sid);
     // approval_weight = 2 == threshold = 2 → must succeed
     client.execute_settlement(&admin, &sid, &token_id);
@@ -85,7 +85,7 @@ fn test_threshold_one_proposer_satisfies_alone() {
     let env = Env::default();
     env.mock_all_auths();
     let (client, admin, merchant, token_id) = setup(&env, 1);
-    let sid = client.propose_settlement(&admin, &merchant, &5_000_000);
+    let sid = client.propose_settlement(&admin, &merchant, &5_000_000, &0_u64);
     // approval_weight = 1 (admin), threshold = 1 → must execute cleanly
     client.execute_settlement(&admin, &sid, &token_id);
     let pending = client.get_pending_settlements();
@@ -102,7 +102,7 @@ fn test_unanimous_threshold_partial_approvals_panics() {
     let (client, admin, merchant, token_id) = setup(&env, 3);
     let signer_b = Address::generate(&env);
     client.set_signer(&admin, &signer_b, &1);
-    let sid = client.propose_settlement(&admin, &merchant, &10_000_000);
+    let sid = client.propose_settlement(&admin, &merchant, &10_000_000, &0_u64);
     // Only admin + signer_b approve (weight 2), signer_c absent → weight 2 < 3
     client.approve_settlement(&signer_b, &sid);
     client.execute_settlement(&admin, &sid, &token_id);
@@ -118,7 +118,7 @@ fn test_unanimous_threshold_all_approved_succeeds() {
     let signer_c = Address::generate(&env);
     client.set_signer(&admin, &signer_b, &1);
     client.set_signer(&admin, &signer_c, &1);
-    let sid = client.propose_settlement(&admin, &merchant, &10_000_000);
+    let sid = client.propose_settlement(&admin, &merchant, &10_000_000, &0_u64);
     client.approve_settlement(&signer_b, &sid);
     client.approve_settlement(&signer_c, &sid);
     // approval_weight = 3 == threshold = 3 → must succeed
@@ -145,7 +145,7 @@ fn test_weighted_signer_satisfies_threshold_alone() {
     client.set_signer(&admin, &admin, &5);
     let token_id = env.register_stellar_asset_contract(admin.clone());
     soroban_sdk::token::StellarAssetClient::new(&env, &token_id).mint(&contract_id, &10_000_000);
-    let sid = client.propose_settlement(&admin, &merchant, &10_000_000);
+    let sid = client.propose_settlement(&admin, &merchant, &10_000_000, &0_u64);
     client.execute_settlement(&admin, &sid, &token_id);
     let settlement = client.get_pending_settlements();
     assert_eq!(settlement.len(), 0);
@@ -159,7 +159,7 @@ fn test_status_stays_pending_when_below_threshold() {
     let (client, admin, merchant, _token_id) = setup(&env, 3);
     let backup = Address::generate(&env);
     client.set_signer(&admin, &backup, &1);
-    let sid = client.propose_settlement(&admin, &merchant, &10_000_000);
+    let sid = client.propose_settlement(&admin, &merchant, &10_000_000, &0_u64);
     let settlement = client.approve_settlement(&backup, &sid);
     // weight = 2, threshold = 3 — not yet executable
     assert_eq!(settlement.status, SettlementStatus::Pending);
