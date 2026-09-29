@@ -18,8 +18,7 @@
 //! cargo test -p protocol-integration-tests
 //! ```
 
-#[cfg(test)]
-mod fixtures;
+pub mod fixtures;
 #[cfg(test)]
 mod invoice_treasury;
 #[cfg(test)]

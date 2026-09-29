@@ -14,3 +14,4 @@ soroban-sdk.workspace = true
 invoice = { package = "comebackhere-invoice", path = "../contracts/invoice" }
 treasury = { package = "comebackhere-treasury", path = "../contracts/treasury" }
 compliance = { package = "comebackhere-compliance", path = "../contracts/compliance" }
+settlement-workflow = { package = "comebackhere-settlement-workflow", path = "../contracts/settlement-workflow" }

@@ -306,6 +306,39 @@ stellar contract invoke --id $COMPLIANCE_CONTRACT --source $ADMIN --network $NET
 
 Advance `--start` by `--limit` until an empty page is returned and archive the output.
 
+#### Consistency guarantee for multi-page exports
+
+`export_snapshot_page` reads the AddressIndex, which is **append-only**: entries are
+never moved, replaced, or deleted from an existing index slot — only appended at the
+end when a new address is first tracked (via `allow_address`, `allow_address_until`,
+`allow_address_with_tier`, or their bulk equivalents).
+
+This guarantee holds for callers that read the index in multiple page calls, with
+arbitrary time or writes between them:
+
+- **Already-fetched pages are stable.** A page returned by an earlier call cannot
+  change: no subsequent `allow_address` or `block_address` call can modify a slot
+  that has already been written to. Repeating a page fetch with the same `start`/
+  `limit` parameters always returns the same addresses in the same order.
+- **Mid-export additions appear in later pages.** If an address is added after you
+  read page N but before you read page N+1, it will appear at the tail of the index.
+  If that tail falls within a page you have not yet fetched, you will see it there.
+  If it falls beyond the last page you intend to fetch, you may miss it — this is
+  expected and is not a bug. Off-chain exporters that require a complete snapshot
+  should record the total count from an initial probe call and read only up to that
+  count.
+- **No entry is skipped or duplicated.** Because the index is append-only, a
+  sequential scan (incrementing `start` by `limit` on each call) will never visit
+  the same index slot twice and will never skip a slot that existed at the time of
+  the first page call.
+
+**Known limitation:** entries added *after* your export started may or may not be
+included, depending on whether you have already advanced past their index slot. If
+complete, point-in-time consistency is required, record the total count with an
+initial `export_snapshot_page` call at `start=0, limit=0` (which returns an empty
+page but still reflects the current count via the `AddrIndexCount` storage key), and
+stop reading at that count.
+
 ### Incident response
 
 1. **Block first.** Block the offending address(es) immediately. Blocking works
