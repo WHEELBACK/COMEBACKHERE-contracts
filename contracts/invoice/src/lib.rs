@@ -59,6 +59,9 @@ pub(crate) fn bump_invoice_ttl(env: &Env, id: u64) {
     );
 }
 
+/// Maximum number of invoices returned by a single paginated query.
+pub const MAX_PAGE_LIMIT: u32 = 50;
+
 pub(crate) fn pending_index_add(env: &Env, id: u64) {
     let mut ids: Vec<u64> = env
         .storage()

@@ -170,6 +170,56 @@ fn event_invoice_refund_requested_snapshot() {
     );
 }
 
+// --- invoice_amended ---
+
+#[test]
+fn event_invoice_amended_snapshot() {
+    let (env, _admin, client) = setup_at(1000);
+    let m = merchant(&env);
+    let id = client.create_invoice(
+        &m,
+        &10_000_000,
+        &10_250_000,
+        &3600,
+        &MaybeBytes::None,
+        &MaybeBytes::None,
+        &0,
+        &MaybeAddress::None,
+    );
+    env.ledger().with_mut(|l| l.timestamp = 2000);
+    client.amend_invoice(
+        &m,
+        &id,
+        &12_000_000,
+        &12_300_000,
+        &7200,
+        &MaybeBytes::None,
+        &MaybeBytes::None,
+    );
+    assert_snapshot("invoice_amended", &to_hex(&env, client.get_invoice(&id)));
+}
+
+// --- invoice_expiry_extended ---
+
+#[test]
+fn event_invoice_expiry_extended_snapshot() {
+    let (env, _admin, client) = setup_at(1000);
+    let m = merchant(&env);
+    let id = client.create_invoice(
+        &m,
+        &10_000_000,
+        &10_250_000,
+        &3600,
+        &MaybeBytes::None,
+        &MaybeBytes::None,
+        &0,
+        &MaybeAddress::None,
+    );
+    env.ledger().with_mut(|l| l.timestamp = 2000);
+    client.extend_expiry(&m, &id, &7200);
+    assert_snapshot("invoice_expiry_extended", &to_hex(&env, client.get_invoice(&id)));
+}
+
 // --- escrow_released ---
 
 #[test]
