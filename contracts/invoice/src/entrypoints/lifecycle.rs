@@ -1,4 +1,7 @@
 use crate::events::{self, InvoiceAmountUpdatedEvent};
+use crate::refund::{
+    calculate_net_refund, refund_recipient, transfer_net_refund, verify_payment_state,
+};
 use crate::validation::{
     require_admin, require_expiry_not_too_long, require_hash_not_too_long, require_not_paused,
     require_positive_amount, require_usdc_precision, require_valid_payment_link_hash,
@@ -6,23 +9,12 @@ use crate::validation::{
 use crate::{append_history, pending_index_add, pending_index_remove};
 use crate::{
     DataKey, Invoice, InvoiceContract, InvoiceContractArgs, InvoiceContractClient, InvoiceError,
-    InvoiceStatus, MaybeAddress, MaybeBytes,
+    InvoiceStatus, MaybeAddress, MaybeBytes, NetRefund,
 };
 use soroban_sdk::{contractimpl, Address, Env, Vec};
 
-/// #543: increment the stored counter for `status` by one.
-fn status_count_inc(env: &Env, status: &InvoiceStatus) {
-    let key = DataKey::StatusCount(status.clone());
-    let count: u64 = env.storage().instance().get(&key).unwrap_or(0);
-    env.storage().instance().set(&key, &(count + 1));
-}
-
-/// #543: decrement the stored counter for `status` by one (saturating at 0).
-fn status_count_dec(env: &Env, status: &InvoiceStatus) {
-    let key = DataKey::StatusCount(status.clone());
-    let count: u64 = env.storage().instance().get(&key).unwrap_or(0);
-    env.storage().instance().set(&key, &count.saturating_sub(1));
-}
+/// #556: upper bound for the configurable late fee, in basis points (10%).
+pub const MAX_LATE_FEE_BPS: u32 = 1_000;
 
 #[contractimpl]
 impl InvoiceContract {
@@ -31,6 +23,10 @@ impl InvoiceContract {
     /// Create an invoice with an optional merchant-supplied nonce for idempotency.
     /// Pass `merchant_nonce = 0` to skip nonce enforcement.
     /// A non-zero nonce that has already been used for this merchant is rejected.
+    ///
+    /// #531: `token_address` stores the asset identifier for the invoice.
+    /// When omitted, the configured USDC token is used for backwards
+    /// compatibility.
     #[allow(clippy::too_many_arguments)]
     pub fn create_invoice(
         env: Env,
@@ -46,8 +42,20 @@ impl InvoiceContract {
         merchant.require_auth();
         require_not_paused(&env)?;
         require_positive_amount(amount_usdc, gross_usdc)?;
-        // #57: USDC decimal precision guardrail
-        require_usdc_precision(amount_usdc, gross_usdc)?;
+
+        // #531: resolve the invoice token, defaulting to the configured USDC
+        // address so existing callers that omit a token keep working.
+        let token: Address = match token_address {
+            MaybeAddress::Some(addr) => addr,
+            MaybeAddress::None => env
+                .storage()
+                .instance()
+                .get(&DataKey::UsdcToken)
+                .ok_or(InvoiceError::NotInitialized)?,
+        };
+
+        // #57: token-aware decimal precision guardrail
+        require_usdc_precision(&env, &token, amount_usdc, gross_usdc)?;
         require_hash_not_too_long(&metadata_hash)?;
         require_hash_not_too_long(&payment_link_hash)?;
         // #16: payment_link_hash must be exactly 32 bytes when provided
@@ -63,6 +71,24 @@ impl InvoiceContract {
             let nonce_key = DataKey::MerchantNonce(merchant.clone(), merchant_nonce);
             if env.storage().persistent().has(&nonce_key) {
                 return Err(InvoiceError::DuplicateNonce);
+            }
+        }
+
+        // #537: enforce per-merchant open invoice limit
+        let max_open: u64 = env
+            .storage()
+            .instance()
+            .get(&DataKey::MaxOpenInvoices)
+            .unwrap_or(0u64);
+        if max_open != 0 {
+            let open_key = DataKey::MerchantOpenInvoiceCount(merchant.clone());
+            let open_count: u64 = env
+                .storage()
+                .persistent()
+                .get(&open_key)
+                .unwrap_or(0);
+            if open_count >= max_open {
+                return Err(InvoiceError::MerchantOpenInvoiceLimitReached);
             }
         }
 
@@ -97,7 +123,8 @@ impl InvoiceContract {
             metadata_hash,
             payment_link_hash,
             merchant_nonce,
-            token_address,
+            token_address: MaybeAddress::Some(token),
+            amount_paid: 0,
         };
 
         env.storage()
@@ -119,11 +146,63 @@ impl InvoiceContract {
             .persistent()
             .set(&merchant_count_key, &(merchant_count + 1));
 
+        // #537: track open (pending) invoice count for this merchant
+        let open_key = DataKey::MerchantOpenInvoiceCount(merchant.clone());
+        let open_count: u64 = env
+            .storage()
+            .persistent()
+            .get(&open_key)
+            .unwrap_or(0);
+        env.storage()
+            .persistent()
+            .set(&open_key, &(open_count + 1));
+
         pending_index_add(&env, id);
-        // #543: a new invoice starts Pending
-        status_count_inc(&env, &InvoiceStatus::Pending);
+        // #547: newly created invoices are active — extend their TTL.
+        bump_invoice_ttl(&env, &invoice);
         events::invoice_created(&env, id, &invoice);
         Ok(id)
+    }
+
+    /// #558: lightweight invoice view returning only the essentials
+    /// (id, status, amount and expiry) for list views. Reads from the same
+    /// `DataKey::Invoice` storage as `get_invoice`, so it can never go out of
+    /// sync with the full record.
+    pub fn get_invoice_summary(env: Env, id: u64) -> Result<InvoiceSummary, InvoiceError> {
+        let invoice: Invoice = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Invoice(id))
+            .ok_or(InvoiceError::NotFound)?;
+        Ok(InvoiceSummary {
+            id: invoice.id,
+            status: invoice.status,
+            amount_usdc: invoice.amount_usdc,
+            expires_at: invoice.expires_at,
+        })
+    }
+
+    /// #556: configure the late fee (in basis points) applied to payments
+    /// settled inside the grace window after expiry. Admin-only. The value is
+    /// bounded by `MAX_LATE_FEE_BPS`; `0` disables the fee.
+    pub fn set_late_fee_bps(env: Env, admin: Address, late_fee_bps: u32) -> Result<(), InvoiceError> {
+        require_admin(&env, &admin)?;
+        require_not_paused(&env)?;
+        if late_fee_bps > MAX_LATE_FEE_BPS {
+            return Err(InvoiceError::LateFeeTooHigh);
+        }
+        env.storage()
+            .instance()
+            .set(&DataKey::LateFeeBps, &late_fee_bps);
+        Ok(())
+    }
+
+    /// #556: read the currently configured late fee in basis points.
+    pub fn get_late_fee_bps(env: Env) -> u32 {
+        env.storage()
+            .instance()
+            .get(&DataKey::LateFeeBps)
+            .unwrap_or(0u32)
     }
 
     pub fn mark_paid(
@@ -143,8 +222,19 @@ impl InvoiceContract {
             .get(&DataKey::Invoice(id))
             .ok_or(InvoiceError::NotFound)?;
 
+        // #547: invoice is still active on read — extend TTL.
+        bump_invoice_ttl(&env, &invoice);
+
         if invoice.status != InvoiceStatus::Pending {
             return Err(InvoiceError::NotPending);
+        }
+
+        // #533: when the invoice is restricted, only the designated payer may settle it
+        if let MaybeAddress::Some(designated) = &invoice.designated_payer {
+            if &payer != designated {
+                return Err(InvoiceError::WrongPayer);
+            }
+            payer.require_auth();
         }
 
         if provided_metadata_hash != MaybeBytes::None
@@ -169,20 +259,42 @@ impl InvoiceContract {
             .expires_at
             .checked_add(grace)
             .unwrap_or(invoice.expires_at);
-        if env.ledger().timestamp() >= effective_deadline {
+        let now = env.ledger().timestamp();
+        if now >= effective_deadline {
             return Err(InvoiceError::Expired);
         }
 
+        // #556: apply the merchant-configured late fee only when the payment
+        // lands inside the grace window (i.e. after expiry but before the
+        // effective deadline). On-time payments are never charged a fee.
+        if now > invoice.expires_at {
+            let late_fee_bps: u32 = env
+                .storage()
+                .instance()
+                .get(&DataKey::LateFeeBps)
+                .unwrap_or(0u32);
+            if late_fee_bps > 0 {
+                let fee = invoice
+                    .amount_usdc
+                    .checked_mul(late_fee_bps as i128)
+                    .ok_or(InvoiceError::AmountOverflow)?
+                    / 10_000i128;
+                invoice.amount_usdc = invoice
+                    .amount_usdc
+                    .checked_add(fee)
+                    .ok_or(InvoiceError::AmountOverflow)?;
+            }
+        }
+
         invoice.status = InvoiceStatus::Paid;
-        invoice.paid_at = Some(env.ledger().timestamp());
+        invoice.paid_at = Some(now);
         invoice.payer = MaybeAddress::Some(payer);
         env.storage()
             .persistent()
             .set(&DataKey::Invoice(id), &invoice);
         pending_index_remove(&env, id);
-        // #543: Pending -> Paid
-        status_count_dec(&env, &InvoiceStatus::Pending);
-        status_count_inc(&env, &InvoiceStatus::Paid);
+        // #537: decrement merchant open count on exit from pending
+        Self::decrement_open_count(&env, &invoice.merchant);
         append_history(&env, id, InvoiceStatus::Pending, InvoiceStatus::Paid);
         events::invoice_paid(&env, id, &invoice);
         Ok(())
@@ -191,6 +303,10 @@ impl InvoiceContract {
     // --- #56: escrow release entrypoint ---
 
     /// Release escrow for a paid invoice. Admin-only. Transitions Paid → Released.
+    ///
+    /// #548: guarded against double release. The `escrow_released` flag is
+    /// written (checks-effects) before any external call, so a repeat call
+    /// returns `InvoiceError::EscrowAlreadyReleased` and emits nothing.
     pub fn release_escrow(env: Env, admin: Address, id: u64) -> Result<(), InvoiceError> {
         require_admin(&env, &admin)?;
         require_not_paused(&env)?;
@@ -210,15 +326,183 @@ impl InvoiceContract {
             .persistent()
             .set(&DataKey::Invoice(id), &invoice);
         append_history(&env, id, InvoiceStatus::Paid, InvoiceStatus::Released);
-        events::escrow_released(&env, id, &invoice);
+        events::invoice_released(&env, id, &invoice);
         Ok(())
     }
 
-    /// Extend the expiry of a pending invoice by `additional_seconds`.
+    /// Approve a refund request. Admin-only. Transitions RefundRequested → Refunded.
     ///
-    /// #542: the resulting lifetime (from now until the new expiry) must not
-    /// exceed the same maximum enforced at creation via
-    /// `require_expiry_not_too_long`, otherwise a merchant could repeatedly
-    /// extend an invoice far beyond the intended 
+    /// Records the refund decision on-chain only: no tokens move. Use
+    /// [`Self::process_refund`] to approve *and* pay the payer out in the same
+    /// transaction.
+    ///
+    /// #70: the invoice's payment state is verified first, so a refund can
+    /// never be approved against an invoice that does not describe a completed
+    /// payment. Errors: `NotRefundRequested`, `PaymentStateInconsistent`.
+    /// Emits: `refund_approved`.
+    pub fn approve_refund(env: Env, admin: Address, id: u64) -> Result<(), InvoiceError> {
+        require_admin(&env, &admin)?;
+        require_not_paused(&env)?;
 
-/* … truncated 2474 chars — edit only what you need near the top … */
+        let mut invoice: Invoice = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Invoice(id))
+            .ok_or(InvoiceError::NotFound)?;
+
+        if invoice.status != InvoiceStatus::RefundRequested {
+            return Err(InvoiceError::NotRefundRequested);
+        }
+        verify_payment_state(&invoice)?;
+
+        invoice.status = InvoiceStatus::Refunded;
+        env.storage()
+            .persistent()
+            .set(&DataKey::Invoice(id), &invoice);
+        append_history(
+            &env,
+            id,
+            InvoiceStatus::RefundRequested,
+            InvoiceStatus::Refunded,
+        );
+        events::refund_approved(&env, id, &invoice);
+        Ok(())
+    }
+
+    /// Approve a refund **and** pay the payer out on-chain. Admin-only.
+    /// Transitions `RefundRequested` → `Refunded`.
+    ///
+    /// This is the refund path that actually moves money, and it spans a
+    /// contract boundary: the amount is transferred by the invoice's own
+    /// `token_address` contract from the escrow balance this contract holds
+    /// (#70). Four properties make the boundary safe:
+    ///
+    /// 1. **The payment state is verified before anything else.** An invoice
+    ///    that does not describe a completed payment is rejected with
+    ///    `PaymentStateInconsistent`, so no payout is ever attempted against it.
+    /// 2. **The payout is the net of the documented fees, not the gross.** The
+    ///    `fee_bps` argument is the merchant's payment-gateway policy; the
+    ///    customer's `net_amount` is computed once by
+    ///    [`calculate_net_refund`] and is the exact amount transferred (#71).
+    /// 3. **The transfer is the last thing that can fail, and it fails
+    ///    safely.** `try_transfer` turns any token-side failure into
+    ///    `RefundTransferFailed`, and because the status transition is written
+    ///    only after the transfer returns `Ok`, a failed payout leaves the
+    ///    invoice in `RefundRequested` — retryable, and not falsely recorded as
+    ///    refunded.
+    /// 4. **The funds debited are not caller-chosen.** They come from this
+    ///    contract's own escrow balance, and the recipient is the payer recorded
+    ///    at `mark_paid`, not anything the caller supplies.
+    ///
+    /// Returns the [`NetRefund`] that was applied, which is also stored under
+    /// `DataKey::RefundBreakdown` and published in the `refund_processed` event.
+    ///
+    /// Errors: `NotRefundRequested`, `PaymentStateInconsistent`,
+    /// `RefundTokenNotSet`, `RefundFeeTooHigh`, `RefundTransferFailed`.
+    /// Emits: `refund_approved`, `refund_processed`.
+    pub fn process_refund(
+        env: Env,
+        admin: Address,
+        id: u64,
+        fee_bps: u32,
+    ) -> Result<NetRefund, InvoiceError> {
+        require_admin(&env, &admin)?;
+        require_not_paused(&env)?;
+
+        let mut invoice: Invoice = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Invoice(id))
+            .ok_or(InvoiceError::NotFound)?;
+
+        if invoice.status != InvoiceStatus::RefundRequested {
+            return Err(InvoiceError::NotRefundRequested);
+        }
+        // Verify before resolving the recipient and the token, so an
+        // inconsistent invoice cannot reach the cross-contract call at all.
+        verify_payment_state(&invoice)?;
+        let payer = refund_recipient(&invoice)?;
+        let token_id = match &invoice.token_address {
+            MaybeAddress::Some(token_id) => token_id.clone(),
+            MaybeAddress::None => return Err(InvoiceError::RefundTokenNotSet),
+        };
+        // Reject an out-of-range fee before the transfer, not after.
+        let refund = calculate_net_refund(invoice.amount_usdc, fee_bps)?;
+
+        // Payout first: on failure this returns `Err` and none of the writes
+        // below run, which is what keeps the two contracts from disagreeing.
+        transfer_net_refund(&env, &token_id, &payer, refund.net_amount)?;
+
+        invoice.status = InvoiceStatus::Refunded;
+        env.storage()
+            .persistent()
+            .set(&DataKey::Invoice(id), &invoice);
+        env.storage()
+            .persistent()
+            .set(&DataKey::RefundBreakdown(id), &refund);
+        append_history(
+            &env,
+            id,
+            InvoiceStatus::RefundRequested,
+            InvoiceStatus::Refunded,
+        );
+        events::refund_approved(&env, id, &invoice);
+        events::refund_processed(&env, id, &payer, &refund);
+        Ok(refund)
+    }
+
+    /// Read-only preview of the fee arithmetic `process_refund` would apply to a
+    /// refund of `gross_amount` under `fee_bps` (#71), so a merchant UI can show
+    /// the customer what they will actually receive before approving.
+    ///
+    /// Deliberately not gated by `require_not_paused`: quoting a refund is a
+    /// read, and an operator working out what a paused contract owes its
+    /// customers is exactly the case where that read has to keep working.
+    ///
+    /// Errors: `RefundFeeTooHigh`, `InvalidAmount`, `ArithmeticOverflow`.
+    pub fn calculate_net_refund(
+        _env: Env,
+        gross_amount: i128,
+        fee_bps: u32,
+    ) -> Result<NetRefund, InvoiceError> {
+        calculate_net_refund(gross_amount, fee_bps)
+    }
+
+    /// The fee breakdown recorded by `process_refund` for `id`, if any.
+    /// Returns `NotFound` for an invoice that was approved without a payout
+    /// (`approve_refund`) or has not been refunded yet.
+    pub fn get_refund_breakdown(env: Env, id: u64) -> Result<NetRefund, InvoiceError> {
+        env.storage()
+            .persistent()
+            .get(&DataKey::RefundBreakdown(id))
+            .ok_or(InvoiceError::NotFound)
+    }
+
+    /// Reject a refund request. Admin-only. Transitions RefundRequested → Paid.
+    /// #70: the payment state is verified for the same reason as on
+    /// `approve_refund` — a refund round-trip must not be able to land on an
+    /// invoice that never described a completed payment.
+    pub fn reject_refund(env: Env, admin: Address, id: u64) -> Result<(), InvoiceError> {
+        require_admin(&env, &admin)?;
+        require_not_paused(&env)?;
+
+        let mut invoice: Invoice = env
+            .storage()
+            .instance()
+            .get(&DataKey::GraceWindow)
+            .unwrap_or(0u64);
+        let effective_deadline = invoice
+            .expires_at
+            .checked_add(grace)
+            .unwrap_or(invoice.expires_at);
+        if env.ledger().timestamp() >= effective_deadline {
+            return Err(InvoiceError::Expired);
+        }
+        verify_payment_state(&invoice)?;
+
+        let new_total = invoice
+            .amount_paid
+            .checked_add(amount)
+            .ok_or(InvoiceError::Amoun
+
+/* … truncated 3061 chars — edit only what you need near the top … */

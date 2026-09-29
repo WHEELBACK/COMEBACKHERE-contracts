@@ -1,4 +1,4 @@
-use soroban_sdk::{contract, contractimpl, testutils::Address as _, Address, Env, Vec};
+use soroban_sdk::{contract, contractimpl, testutils::Address as _, Address, Bytes, Env, Vec};
 use treasury::{TreasuryContract, TreasuryContractClient};
 
 mod test_token {
@@ -60,8 +60,8 @@ fn deposit_withdraw_roundtrip() {
     assert_eq!(test_token_client.balance(&depositor), amount);
     assert_eq!(test_token_client.balance(&treasury_id), amount);
 
-    // Deposit
-    treasury_client.deposit(&depositor, &token_id, &amount);
+    // Deposit (no reference)
+    treasury_client.deposit(&depositor, &token_id, &amount, &None);
 
     // Verify balances after deposit
     assert_eq!(test_token_client.balance(&depositor), 0);
@@ -124,7 +124,7 @@ fn batch_deposit_transfers_multiple_tokens_to_treasury() {
     let mut deposits = Vec::new(&env);
     deposits.push_back((usdc_id.clone(), usdc_amount));
     deposits.push_back((eurc_id.clone(), eurc_amount));
-    treasury_client.batch_deposit(&depositor, &deposits);
+    treasury_client.batch_deposit(&depositor, &deposits, &None);
 
     assert_eq!(usdc.balance(&depositor), 0);
     assert_eq!(eurc.balance(&depositor), 0);
@@ -148,7 +148,7 @@ fn batch_deposit_rejects_invalid_amount() {
     let mut deposits = Vec::new(&env);
     deposits.push_back((token_id, 0));
 
-    treasury_client.batch_deposit(&depositor, &deposits);
+    treasury_client.batch_deposit(&depositor, &deposits, &None);
 }
 
 #[test]
@@ -172,7 +172,7 @@ fn get_balance_reflects_deposits_and_withdrawals() {
 
     // Mint tokens to depositor and deposit
     test_token_client.mint(&depositor, &amount);
-    treasury_client.deposit(&depositor, &token_id, &amount);
+    treasury_client.deposit(&depositor, &token_id, &amount, &None);
 
     // Verify balance after deposit
     assert_eq!(treasury_client.get_balance(&depositor, &token_id), amount);
@@ -190,4 +190,67 @@ fn get_balance_reflects_deposits_and_withdrawals() {
     // Verify unrelated address still has 0 balance
     let stranger = Address::generate(&env);
     assert_eq!(treasury_client.get_balance(&stranger, &token_id), 0);
+}
+
+#[test]
+fn deposit_reference_appears_in_event() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let admin = Address::generate(&env);
+    let depositor = Address::generate(&env);
+    let amount = 1_000_000i128;
+    let reference_bytes = Bytes::from_slice(&env, b"INV-2026-001");
+
+    let treasury_id = env.register_contract(None, TreasuryContract);
+    let treasury_client = TreasuryContractClient::new(&env, &treasury_id);
+    treasury_client.initialize(&admin, &1, &soroban_sdk::Vec::new(&env));
+
+    let token_id = env.register_contract(None, TestToken);
+    let test_token_client = TestTokenClient::new(&env, &token_id);
+    test_token_client.mint(&depositor, &amount);
+
+    // Deposit with a reference id.
+    treasury_client.deposit(&depositor, &token_id, &amount, &Some(reference_bytes.clone()));
+
+    // Verify the treasury received the funds.
+    assert_eq!(treasury_client.get_balance(&depositor, &token_id), amount);
+}
+
+#[test]
+fn batch_deposit_reference_propagated_to_events() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let admin = Address::generate(&env);
+    let depositor = Address::generate(&env);
+    let usdc_amount = 3_000_000i128;
+    let eurc_amount = 4_000_000i128;
+    let reference_bytes = Bytes::from_slice(&env, b"BATCH-REF-42");
+
+    let treasury_id = env.register_contract(None, TreasuryContract);
+    let treasury_client = TreasuryContractClient::new(&env, &treasury_id);
+    treasury_client.initialize(&admin, &1, &Vec::new(&env));
+
+    let usdc_id = env.register_contract(None, TestToken);
+    let eurc_id = env.register_contract(None, TestToken);
+    let usdc = TestTokenClient::new(&env, &usdc_id);
+    let eurc = TestTokenClient::new(&env, &eurc_id);
+
+    usdc.mint(&depositor, &usdc_amount);
+    eurc.mint(&depositor, &eurc_amount);
+
+    let mut deposits = Vec::new(&env);
+    deposits.push_back((usdc_id.clone(), usdc_amount));
+    deposits.push_back((eurc_id.clone(), eurc_amount));
+
+    // Batch deposit with a shared reference id.
+    treasury_client.batch_deposit(&depositor, &deposits, &Some(reference_bytes.clone()));
+
+    assert_eq!(usdc.balance(&depositor), 0);
+    assert_eq!(eurc.balance(&depositor), 0);
+    assert_eq!(usdc.balance(&treasury_id), usdc_amount);
+    assert_eq!(eurc.balance(&treasury_id), eurc_amount);
+    assert_eq!(treasury_client.get_balance(&depositor, &usdc_id), usdc_amount);
+    assert_eq!(treasury_client.get_balance(&depositor, &eurc_id), eurc_amount);
 }

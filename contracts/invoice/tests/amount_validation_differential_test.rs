@@ -5,7 +5,7 @@
 
 use invoice::{InvoiceContract, InvoiceContractClient, MaybeAddress, MaybeBytes};
 use serde_json::Value;
-use soroban_sdk::{testutils::Address as _, Address, Env};
+use soroban_sdk::{testutils::Address as _, Address, Bytes, Env};
 use std::io::Write;
 use std::process::Command;
 
@@ -88,6 +88,77 @@ fn rust_validate(amount_usdc: i128, gross_usdc: i128) -> bool {
             &MaybeAddress::None,
         )
         .is_ok()
+}
+
+/// Calls the Python reference implementation for payment link hash validation.
+/// Returns (valid, error_name) where valid=true means no error, valid=false means error with error_name.
+fn python_validate_hash(hash_hex: &str) -> (bool, Option<String>) {
+    let input = format!(r#"{{"hash_hex": "{}"}}"#, hash_hex);
+
+    let script = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../scripts/reference_payment_link_hash_validation.py"
+    );
+    let mut child = Command::new("python3")
+        .arg(script)
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .expect("failed to spawn Python process");
+
+    {
+        let stdin = child.stdin.as_mut().expect("failed to open stdin");
+        stdin
+            .write_all(input.as_bytes())
+            .expect("failed to write to stdin");
+    }
+
+    let output = child.wait_with_output().expect("failed to wait on Python");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+
+    let result: Value =
+        serde_json::from_str(&stdout).expect(&format!("failed to parse Python output: {}", stdout));
+
+    let valid = result["valid"].as_bool().expect("missing 'valid' field");
+    let error = if let Some(e) = result["error"].as_str() {
+        Some(e.to_string())
+    } else if result["error"].is_null() {
+        None
+    } else {
+        Some(result["error"].to_string())
+    };
+
+    (valid, error)
+}
+
+/// Attempts to create an invoice with the given payment link hash via the Rust implementation.
+/// Returns true if successful, false if rejected.
+fn rust_validate_hash(hash_bytes: &[u8]) -> bool {
+    let (env, client) = client();
+    let merchant = Address::generate(&env);
+    let hash = Bytes::from_slice(&env, hash_bytes);
+
+    client
+        .try_create_invoice(
+            &merchant,
+            &USDC_FACTOR,
+            &USDC_FACTOR,
+            &3600,
+            &MaybeBytes::Some(hash),
+            &MaybeBytes::None,
+            &0,
+            &MaybeAddress::None,
+        )
+        .is_ok()
+}
+
+fn to_hex(bytes: &[u8]) -> String {
+    let mut s = String::with_capacity(bytes.len() * 2);
+    for b in bytes {
+        s.push_str(&format!("{:02x}", b));
+    }
+    s
 }
 
 #[test]
@@ -191,5 +262,77 @@ fn differential_fuzz_off_by_one() {
                 );
             }
         }
+    }
+}
+
+#[test]
+fn differential_fuzz_payment_link_hash_canonical_cases() {
+    // Canonical payment link hash cases that must be handled identically by
+    // both the Rust validator and the Python reference implementation.
+    let cases: &[&[u8]] = &[
+        // Invalid: empty hash
+        &[],
+        // Invalid: all-zero hash (32 bytes)
+        &[0u8; 32],
+        // Invalid: all-zero hash (1 byte)
+        &[0u8],
+        // Valid: single non-zero byte
+        &[1u8],
+        // Valid: 32-byte hash with a single non-zero byte
+        &[
+            0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+            0, 0, 0, 1,
+        ],
+        // Valid: 32-byte hash with all bytes set
+        &[0xffu8; 32],
+    ];
+
+    for &hash in cases {
+        let rust_ok = rust_validate_hash(hash);
+        let (python_ok, python_error) = python_validate_hash(&to_hex(hash));
+
+        assert_eq!(
+            rust_ok, python_ok,
+            "Differential mismatch for hash={}: Rust said {}, Python said {} ({:?})",
+            to_hex(hash),
+            rust_ok,
+            python_ok,
+            python_error
+        );
+    }
+}
+
+#[test]
+fn differential_fuzz_payment_link_hash_length_boundaries() {
+    // Exercise the maximum-length boundary and one byte past it. The Rust
+    // validator must reject oversized inputs and the Python reference must
+    // agree on the same boundary.
+    let max_len = 32usize;
+
+    let mut at_max = vec![0u8; max_len];
+    at_max[max_len - 1] = 1;
+
+    let mut over_max = vec![0u8; max_len + 1];
+    over_max[max_len] = 1;
+
+    let cases: Vec<Vec<u8>> = vec![
+        vec![1u8; max_len - 1],
+        at_max,
+        over_max,
+        vec![1u8; max_len + 8],
+    ];
+
+    for hash in cases {
+        let rust_ok = rust_validate_hash(&hash);
+        let (python_ok, python_error) = python_validate_hash(&to_hex(&hash));
+
+        assert_eq!(
+            rust_ok, python_ok,
+            "Differential mismatch at length boundary for hash len={}: Rust={}, Python={} ({:?})",
+            hash.len(),
+            rust_ok,
+            python_ok,
+            python_error
+        );
     }
 }
