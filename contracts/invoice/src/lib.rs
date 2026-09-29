@@ -9,16 +9,55 @@
 mod entrypoints;
 mod events;
 mod invoice;
+mod refund;
 mod validation;
 
-pub use events::{EscrowReleasedEvent, InvoiceAmountUpdatedEvent, InvoiceExpiryExtendedEvent};
-use invoice::StatusTransition;
+pub use events::{
+    EscrowReleasedEvent, InvoiceAmountUpdatedEvent, InvoiceExpiryExtendedEvent,
+    RefundProcessedEvent,
+};
+pub use invoice::StatusTransition;
 pub use invoice::{
     BatchInvoiceParams, DataKey, Invoice, InvoiceError, InvoiceStatus, MaybeAddress, MaybeBytes,
-    MAX_BATCH_EXPIRE, MAX_BATCH_SIZE,
+    InvoiceTemplate, MAX_BATCH_EXPIRE, MAX_BATCH_SIZE,
+};
+pub use refund::{
+    calculate_net_refund, refund_recipient, transfer_net_refund, verify_payment_state, NetRefund,
+    BPS_DENOMINATOR, MAX_REFUND_FEE_BPS, REFUND_NETWORK_FEE,
 };
 
-use soroban_sdk::{contract, Env, Vec};
+use soroban_sdk::{contract, BytesN, Env, Vec};
+
+/// Persistent TTL thresholds for active invoices, per `docs/storage-ttl-audit.md`.
+///
+/// `INVOICE_TTL_THRESHOLD` is the minimum remaining TTL (in ledgers) below which
+/// an access extends the entry, and `INVOICE_TTL_EXTEND_TO` is the TTL the entry
+/// is extended to. Both are expressed in ledgers (~5s each).
+const INVOICE_TTL_THRESHOLD: u32 = 30 * 24 * 60 * 12; // ~30 days
+const INVOICE_TTL_EXTEND_TO: u32 = 90 * 24 * 60 * 12; // ~90 days
+
+/// Extend the persistent TTL of an invoice entry when it is accessed.
+///
+/// Only non-terminal invoices are bumped so that terminal invoices
+/// (paid/cancelled/expired) can age out of storage naturally.
+pub(crate) fn bump_invoice_ttl(env: &Env, id: u64) {
+    let key = DataKey::Invoice(id);
+    if !env.storage().persistent().has(&key) {
+        return;
+    }
+    let invoice: Invoice = match env.storage().persistent().get(&key) {
+        Some(inv) => inv,
+        None => return,
+    };
+    if invoice.status.is_terminal() {
+        return;
+    }
+    env.storage().persistent().extend_ttl(
+        &key,
+        INVOICE_TTL_THRESHOLD,
+        INVOICE_TTL_EXTEND_TO,
+    );
+}
 
 /// Maximum number of invoices returned by a single paginated query.
 pub const MAX_PAGE_LIMIT: u32 = 50;

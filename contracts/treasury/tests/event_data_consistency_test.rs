@@ -62,7 +62,7 @@ fn settlement_executed_event_data_matches_storage_at_emission() {
     client.initialize(&admin, &1, &soroban_sdk::Vec::new(&env));
     let token_id = env.register_contract(None, FakeToken);
 
-    let sid = client.propose_settlement(&admin, &merchant, &10_000_000);
+    let sid = client.propose_settlement(&admin, &merchant, &10_000_000, &0_u64);
     client.execute_settlement(&admin, &sid, &token_id);
 
     assert_eq!(
@@ -102,8 +102,8 @@ fn settlement_executed_event_data_matches_storage_for_each_of_several_settlement
 
     let merchant_a = Address::generate(&env);
     let merchant_b = Address::generate(&env);
-    let sid_a = client.propose_settlement(&admin, &merchant_a, &1_000_000);
-    let sid_b = client.propose_settlement(&admin, &merchant_b, &2_000_000);
+    let sid_a = client.propose_settlement(&admin, &merchant_a, &1_000_000, &0_u64);
+    let sid_b = client.propose_settlement(&admin, &merchant_b, &2_000_000, &0_u64);
 
     client.execute_settlement(&admin, &sid_a, &token_id);
     let event_a = Settlement::try_from_val(&env, &last_event_data(&env)).unwrap();

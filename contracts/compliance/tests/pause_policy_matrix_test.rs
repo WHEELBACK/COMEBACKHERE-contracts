@@ -12,8 +12,8 @@
 //! it in `lib.rs`. If an entrypoint's gating changes without this table (and
 //! the doc comment it mirrors) being updated to match, this test fails.
 
-use compliance::{ComplianceContract, ComplianceContractClient, ContractError};
-use soroban_sdk::{testutils::Address as _, Address, Bytes, Env};
+use compliance::{BlockReason, ComplianceContract, ComplianceContractClient, ContractError};
+use soroban_sdk::{testutils::Address as _, Address, Env};
 
 struct Ctx {
     env: Env,
@@ -38,7 +38,7 @@ fn setup() -> Ctx {
 fn entrypoints_documented_as_permitted_while_paused_are_not_blocked() {
     let Ctx { env, admin, client } = setup();
     let addr = Address::generate(&env);
-    client.pause(&admin);
+    client.pause(&admin, &soroban_sdk::symbol_short!("maint"));
 
     // block_address: "permitted while paused (emergency policy)".
     client.block_address(&admin, &addr, &None);
@@ -67,7 +67,7 @@ fn entrypoints_documented_as_permitted_while_paused_are_not_blocked() {
 
     client.set_operator(&new_admin, &Address::generate(&env));
 
-    let swept = client.sweep_expired(&new_admin);
+    let swept = client.sweep_expired(&new_admin, &0);
     assert_eq!(swept, 0);
 }
 
@@ -78,7 +78,7 @@ fn entrypoints_documented_as_permitted_while_paused_are_not_blocked() {
 fn entrypoints_documented_as_pause_gated_are_blocked() {
     let Ctx { env, admin, client } = setup();
     let addr = Address::generate(&env);
-    client.pause(&admin);
+    client.pause(&admin, &soroban_sdk::symbol_short!("maint"));
 
     assert_eq!(
         client.try_allow_address(&admin, &addr),
@@ -117,9 +117,9 @@ fn entrypoints_documented_as_pause_gated_are_blocked() {
 fn block_address_until_with_reason_bypasses_pause() {
     let Ctx { env, admin, client } = setup();
     let addr = Address::generate(&env);
-    client.pause(&admin);
+    client.pause(&admin, &soroban_sdk::symbol_short!("maint"));
 
-    let reason = Bytes::from_slice(&env, b"sanctions-match");
+    let reason = BlockReason::Sanctions;
     client.block_address_until(
         &admin,
         &addr,

@@ -3,7 +3,11 @@ use crate::{
     TreasuryContractArgs, TreasuryContractClient, TreasuryError,
 };
 use multisig::{meets_threshold, record_approval, require_authorized_signer, signer_weight};
-use soroban_sdk::{contractimpl, Address, Env, Symbol, Vec};
+use soroban_sdk::{contractimpl, Address, Env, String, Symbol, Vec};
+
+/// Maximum length (in bytes) accepted for an optional signer label (#568).
+/// Labels are purely informational and are never consulted for authorisation.
+pub(crate) const MAX_SIGNER_LABEL_LEN: u32 = 64;
 
 #[contractimpl]
 impl TreasuryContract {
@@ -43,22 +47,79 @@ impl TreasuryContract {
         Ok(())
     }
 
+    /// Sets (or clears, with an empty string) an optional human-readable label for
+    /// `signer` (admin-only), e.g. "ops-hot-key" or "cfo-ledger" (#568).
+    ///
+    /// Labels exist purely to make governance UIs and audit logs easier to read —
+    /// they are never consulted for authorisation and do not require `signer` to
+    /// already be registered. Length-capped at `MAX_SIGNER_LABEL_LEN` bytes.
+    /// Errors: `LabelTooLong`.
+    /// Emits: `signer_label_set`.
+    pub fn set_signer_label(
+        env: Env,
+        admin: Address,
+        signer: Address,
+        label: String,
+    ) -> Result<(), TreasuryError> {
+        require_admin(&env, &admin);
+        if label.len() > MAX_SIGNER_LABEL_LEN {
+            return Err(TreasuryError::LabelTooLong);
+        }
+        if label.is_empty() {
+            env.storage()
+                .instance()
+                .remove(&DataKey::SignerLabel(signer.clone()));
+        } else {
+            env.storage()
+                .instance()
+                .set(&DataKey::SignerLabel(signer.clone()), &label);
+        }
+        env.events()
+            .publish((Symbol::new(&env, "signer_label_set"), signer), label);
+        Ok(())
+    }
+
     /// Removes `signer` from the active signer registry (admin-only).
     ///
     /// The signer is pruned from storage and excluded from `get_all_signers`.
     /// Existing settlement approval snapshots are not changed, so removing a
     /// signer does not retroactively invalidate in-flight approvals.
+    /// Errors: `QuorumBreak` if removal would reduce total weight below threshold.
     /// Emits: `signer_removed`.
     pub fn remove_signer(env: Env, admin: Address, signer: Address) -> Result<(), TreasuryError> {
         require_admin(&env, &admin);
-        env.storage()
+
+        let threshold: u32 = env.storage().instance().get(&DataKey::Threshold).unwrap_or(0);
+        let signer_weight: u32 = env
+            .storage()
             .instance()
-            .remove(&DataKey::Signer(signer.clone()));
+            .get(&DataKey::Signer(signer.clone()))
+            .unwrap_or(0);
+
         let list: Vec<Address> = env
             .storage()
             .instance()
             .get(&DataKey::SignerList)
             .unwrap_or_else(|| Vec::new(&env));
+
+        let mut total_weight: u32 = 0;
+        for s in list.iter() {
+            let w: u32 = env
+                .storage()
+                .instance()
+                .get(&DataKey::Signer(s.clone()))
+                .unwrap_or(0);
+            total_weight = total_weight.saturating_add(w);
+        }
+
+        let weight_after_removal = total_weight.saturating_sub(signer_weight);
+        if weight_after_removal < threshold {
+            return Err(TreasuryError::QuorumBreak);
+        }
+
+        env.storage()
+            .instance()
+            .remove(&DataKey::Signer(signer.clone()));
         let mut updated = Vec::new(&env);
         for s in list.iter() {
             if s != signer {
@@ -76,8 +137,10 @@ impl TreasuryContract {
         signer_weight(&env, &signer)
     }
 
-    /// Returns all registered signers and their current weights.
-    pub fn get_all_signers(env: Env) -> Vec<(Address, u32)> {
+    /// Returns all registered signers with their current weights and optional
+    /// human-readable labels (#568). `label` is `None` when no label was set via
+    /// `set_signer_label` — labels are informational only and never affect auth.
+    pub fn get_all_signers(env: Env) -> Vec<(Address, u32, Option<String>)> {
         let list: Vec<Address> = env
             .storage()
             .instance()
@@ -90,9 +153,28 @@ impl TreasuryContract {
                 .instance()
                 .get(&DataKey::Signer(signer.clone()))
                 .unwrap_or(0);
-            result.push_back((signer, weight));
+            let label: Option<String> = env
+                .storage()
+                .instance()
+                .get(&DataKey::SignerLabel(signer.clone()));
+            result.push_back((signer, weight, label));
         }
         result
+    }
+
+    /// Returns the ledger timestamp of the most recent approval recorded for
+    /// `signer`, or `None` if the signer has never submitted an approval (#587).
+    ///
+    /// The timestamp is updated by `record_approval` on every approval path
+    /// (settlement proposals and approvals, dispute votes, signer rotations)
+    /// so this value reflects the last time the key was actively used.
+    /// Operators can use this to detect inactive keys early and rotate them
+    /// before it becomes a quorum risk — e.g. flag any signer that has not
+    /// approved anything in the last 90 days.
+    pub fn get_signer_last_active(env: Env, signer: Address) -> Option<u64> {
+        env.storage()
+            .instance()
+            .get(&DataKey::SignerLastActive(signer))
     }
 
     /// Proposes replacing `old_signer` with `new_signer` in the authorised signer set.

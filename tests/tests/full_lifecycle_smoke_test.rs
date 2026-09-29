@@ -175,7 +175,7 @@ fn full_lifecycle_happy_path() {
     assert_eq!(inv.status, InvoiceStatus::Paid);
     let settlement_id = ctx
         .treasury
-        .propose_settlement(&ctx.admin, &ctx.merchant, &10_000_000);
+        .propose_settlement(&ctx.admin, &ctx.merchant, &10_000_000, &0_u64);
     let settlement = ctx.treasury.get_settlement(&settlement_id);
     assert_eq!(settlement.status, SettlementStatus::Pending);
 
@@ -246,7 +246,7 @@ fn full_lifecycle_rejected_when_compliance_fails() {
 
     let settlement_id = ctx
         .treasury
-        .propose_settlement(&ctx.admin, &ctx.merchant, &10_000_000);
+        .propose_settlement(&ctx.admin, &ctx.merchant, &10_000_000, &0_u64);
     ctx.treasury.approve_settlement(&ctx.admin, &settlement_id);
 
     let wf_id = ctx._env.register_contract(None, ComplianceGatedSettlement);
@@ -316,7 +316,7 @@ fn full_lifecycle_budget_baseline() {
 
     let settlement_id = ctx
         .treasury
-        .propose_settlement(&ctx.admin, &ctx.merchant, &10_000_000);
+        .propose_settlement(&ctx.admin, &ctx.merchant, &10_000_000, &0_u64);
     ctx.treasury.approve_settlement(&ctx.admin, &settlement_id);
 
     let wf_id = ctx._env.register_contract(None, ComplianceGatedSettlement);
