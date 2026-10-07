@@ -15,6 +15,7 @@
     "clear_address",
     "export_snapshot",
     "export_snapshot_page",
+    "get_address_history",
     "get_address_tier",
     "get_allow_expiry",
     "get_block_placer",
