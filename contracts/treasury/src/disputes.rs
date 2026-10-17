@@ -71,6 +71,16 @@ impl TreasuryContract {
             .persistent()
             .set(&DataKey::Dispute(id), &dispute);
         env.storage().instance().set(&DataKey::DisputeCount, &id);
+        let mut by_settlement: Vec<u64> = env
+            .storage()
+            .persistent()
+            .get(&DataKey::SettlementDisputes(settlement_id))
+            .unwrap_or_else(|| Vec::new(&env));
+        by_settlement.push_back(id);
+        env.storage().persistent().set(
+            &DataKey::SettlementDisputes(settlement_id),
+            &by_settlement,
+        );
         env.events()
             .publish((Symbol::new(&env, "dispute_raised"), id), dispute);
         Ok(id)
@@ -115,6 +125,28 @@ impl TreasuryContract {
             .persistent()
             .get(&DataKey::Dispute(dispute_id))
             .ok_or(TreasuryError::DisputeNotFound)
+    }
+
+    /// Returns every dispute raised against `settlement_id`, in the order they were
+    /// raised. Bounded by the (small) number of disputes a single settlement can
+    /// accumulate; returns an empty `Vec` when none have been raised.
+    pub fn get_disputes_by_settlement(env: Env, settlement_id: u64) -> Vec<Dispute> {
+        let ids: Vec<u64> = env
+            .storage()
+            .persistent()
+            .get(&DataKey::SettlementDisputes(settlement_id))
+            .unwrap_or_else(|| Vec::new(&env));
+        let mut disputes = Vec::new(&env);
+        for id in ids.iter() {
+            if let Some(dispute) = env
+                .storage()
+                .persistent()
+                .get::<DataKey, Dispute>(&DataKey::Dispute(id))
+            {
+                disputes.push_back(dispute);
+            }
+        }
+        disputes
     }
 
     /// Resolves an open dispute in favour of claimant or counterparty (admin-only).

@@ -166,6 +166,15 @@ impl TreasuryContract {
         result
     }
 
+    /// Returns the signer-rotation proposal with the given `rotation_id`, or `None`
+    /// if it does not exist. Works for pending, executed and cancelled proposals
+    /// alike so signers can confirm exactly what they are approving (or have approved).
+    pub fn get_rotation(env: Env, rotation_id: u64) -> Option<SignerRotationProposal> {
+        env.storage()
+            .persistent()
+            .get(&DataKey::SignerRotation(rotation_id))
+    }
+
     /// Returns the ledger timestamp of the most recent approval recorded for
     /// `signer`, or `None` if the signer has never submitted an approval (#587).
     ///
