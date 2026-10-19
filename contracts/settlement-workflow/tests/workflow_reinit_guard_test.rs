@@ -6,7 +6,7 @@
 //! no-op compliance stub that approves everything, and a treasury they own — and
 //! the compliance check would become decorative. The guard in
 //! `contracts/settlement-workflow/src/lib.rs` already rejects a repeat call with
-//! `TreasuryError::AlreadyInitialized`; this file pins that behaviour down so a
+//! `WorkflowError::AlreadyInitialized`; this file pins that behaviour down so a
 //! later refactor cannot quietly drop it.
 //!
 //! The existing coverage in `settlement_workflow_test.rs`
@@ -19,7 +19,7 @@
 //! to.
 
 use compliance::{ComplianceContract, ComplianceContractClient};
-use settlement_workflow::{DataKey, SettlementWorkflowContract, SettlementWorkflowContractClient};
+use settlement_workflow::{DataKey, SettlementWorkflowContract, SettlementWorkflowContractClient, WorkflowError};
 use soroban_sdk::{testutils::Address as _, token, Address, Env};
 use treasury::{TreasuryContract, TreasuryContractClient, TreasuryError};
 
@@ -130,7 +130,7 @@ fn second_initialize_with_different_arguments_fails_with_typed_error() {
         .try_initialize(&f.attacker, &f.second.compliance_id, &f.second.treasury_id)
         .unwrap_err()
         .unwrap();
-    assert_eq!(err, TreasuryError::AlreadyInitialized.into());
+    assert_eq!(err, WorkflowError::AlreadyInitialized.into());
 }
 
 /// The rejected re-initialisation must not have written any of the three stored
@@ -190,7 +190,7 @@ fn reinit_leaves_admin_authority_with_the_original_admin() {
         .try_transfer_admin(&f.attacker, &f.attacker)
         .unwrap_err()
         .unwrap();
-    assert_eq!(err, TreasuryError::Unauthorized.into());
+    assert_eq!(err, WorkflowError::Unauthorized.into());
 }
 
 /// Behavioural counterpart to the storage assertion above: a merchant the
@@ -271,7 +271,7 @@ fn repeated_reinit_attempts_are_all_rejected() {
             .try_initialize(&f.attacker, &f.second.compliance_id, &f.second.treasury_id)
             .unwrap_err()
             .unwrap();
-        assert_eq!(err, TreasuryError::AlreadyInitialized.into());
+        assert_eq!(err, WorkflowError::AlreadyInitialized.into());
     }
 
     let merchant = Address::generate(&f.env);

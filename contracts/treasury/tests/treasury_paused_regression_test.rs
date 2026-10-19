@@ -81,5 +81,5 @@ fn paused_rejects_raise_dispute() {
 fn paused_rejects_resolve_dispute() {
     let env = Env::default();
     let (client, admin) = paused_setup(&env);
-    client.resolve_dispute(&admin, &1, &true);
+    client.resolve_dispute(&admin, &1, &true, &None);
 }

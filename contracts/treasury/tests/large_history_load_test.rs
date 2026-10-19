@@ -316,7 +316,7 @@ fn resolve_dispute_cost_with_1000_plus_settlement_history() {
     );
 
     env.cost_estimate().budget().reset_tracker();
-    client.resolve_dispute(&admin, &did, &true);
+    client.resolve_dispute(&admin, &did, &true, &None);
     let instructions = env.cost_estimate().budget().cpu_instruction_cost();
 
     eprintln!(

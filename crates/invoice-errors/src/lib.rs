@@ -52,5 +52,28 @@ declare_contract_error! {
         // Appended for #71: refund fee arithmetic (`gross_amount * fee_bps`)
         // overflowed, so the net payout cannot be computed.
         ArithmeticOverflow = 28,
+        // Appended for #708: a discount amount that is larger than the invoice
+        // amount, which would make the effective price negative or zero.
+        DiscountExceedsAmount = 29,
+        // Appended for #708: a discount early-pay deadline that falls after the
+        // invoice expiry, making it impossible to honour the discount window.
+        DiscountDeadlineAfterExpiry = 30,
+        // Appended for #709: the memo field supplied to create_invoice exceeds
+        // MAX_MEMO_BYTES, which would waste storage and make deserialization
+        // unpredictable for off-chain consumers.
+        MemoTooLong = 31,
+        // Appended for #702: request_refund was called after the configurable
+        // refund window (paid_at + refund_window_secs) has elapsed. Zero means
+        // no limit, preserving the current behaviour.
+        RefundWindowClosed = 32,
+        // Appended for #717: mark_paid called with payer == the invoice's
+        // merchant (self-pay), which could inflate volume metrics.
+        SelfPayNotAllowed = 33,
+        // Appended for #694: generate_from_template was called on a template
+        // that has been deactivated.
+        TemplateDisabled = 34,
+        // Appended for #704: set_late_fee_bps called with more than 10_000 bps
+        // (100% of the net amount).
+        InvalidLateFee = 35,
     }
 }

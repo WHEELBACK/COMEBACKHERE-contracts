@@ -52,7 +52,7 @@ proptest! {
             match op {
                 Op::Deposit(who, amt) => {
                     let user = &users[(who % 4) as usize];
-                    client.deposit(user, &token_id, &amt);
+                    client.deposit(user, &token_id, &amt, &None);
                     tracked_total += amt;
                 }
                 Op::BatchDeposit(who, a, b) => {
@@ -60,12 +60,12 @@ proptest! {
                     let mut deposits = soroban_sdk::Vec::new(&env);
                     deposits.push_back((token_id.clone(), a));
                     deposits.push_back((token_id.clone(), b));
-                    client.batch_deposit(user, &deposits);
+                    client.batch_deposit(user, &deposits, &None);
                     tracked_total += a + b;
                 }
                 Op::Withdraw(who, amt) => {
                     let user = &users[(who % 4) as usize];
-                    let current: i128 = client.get_balance(user);
+                    let current: i128 = client.get_balance(user, &token_id);
                     if amt <= current {
                         client.withdraw(user, &token_id, &amt);
                         tracked_total -= amt;
@@ -79,7 +79,7 @@ proptest! {
         }
 
         let contract_token_balance = token_client.balance(&contract_id);
-        let tracked_sum: i128 = users.iter().map(|u| client.get_balance(u)).sum();
+        let tracked_sum: i128 = users.iter().map(|u| client.get_balance(u, &token_id)).sum();
 
         prop_assert_eq!(contract_token_balance, tracked_sum);
         prop_assert_eq!(tracked_sum, tracked_total);

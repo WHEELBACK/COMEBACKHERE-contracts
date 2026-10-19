@@ -13,7 +13,7 @@
 //!    writing one variant's slot is invisible to the entrypoint that reads
 //!    another.
 
-use compliance::{ComplianceContract, ComplianceContractClient, ContractError};
+use compliance::{ComplianceContract, ComplianceContractClient, ComplianceError};
 use invoice::{
     DataKey as InvoiceDataKey, InvoiceContract, InvoiceContractClient, InvoiceError, InvoiceStatus,
     MaybeAddress, MaybeBytes, StatusTransition,
@@ -60,7 +60,7 @@ fn identical_variant_names_are_isolated_per_contract() {
     );
     assert_eq!(
         compliance.try_pause_with_reason(&treasury_admin, &symbol_short!("test")),
-        Err(Ok(ContractError::Unauthorized)),
+        Err(Ok(ComplianceError::Unauthorized)),
         "treasury's admin must not authorize the compliance contract"
     );
     assert_eq!(

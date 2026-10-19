@@ -52,9 +52,15 @@ docs: expand CONTRIBUTING.md with branch, commit, and PR guidelines
 ### Before opening a PR
 
 - [ ] Pre-commit hooks pass locally (`pre-commit run --all-files`)
+- [ ] Full workspace check passes (`cargo check --workspace --all-targets`)
 - [ ] All tests pass (`cargo test`)
 - [ ] Clippy is clean (`cargo clippy -- -D warnings`)
 - [ ] ABI snapshots regenerated if contract interfaces changed
+
+> **Required CI check**: every PR to `main` must pass the `cargo-check` job in
+> `.github/workflows/check.yml`, which runs `cargo check --workspace --all-targets`.
+> This job catches declared-but-missing modules and test-only breakage before they
+> land on `main`. Branch protection must be configured to require this check.
 
 ### PR description template
 

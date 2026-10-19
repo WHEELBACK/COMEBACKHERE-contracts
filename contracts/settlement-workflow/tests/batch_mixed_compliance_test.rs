@@ -14,7 +14,9 @@
 //!    so the batch is partial — funds move only for the items that actually
 //!    executed, and the per-item plus summary events describe exactly that.
 use compliance::{ComplianceContract, ComplianceContractClient};
-use settlement_workflow::{SettlementWorkflowContract, SettlementWorkflowContractClient};
+use settlement_workflow::{
+    SettlementBatchResult, SettlementWorkflowContract, SettlementWorkflowContractClient,
+};
 use soroban_sdk::{
     testutils::{Address as _, Events},
     token, Address, Env, FromVal, Symbol, TryFromVal, Vec,
@@ -255,7 +257,13 @@ fn batch_executes_after_the_merchant_passes_the_gate_again() {
     let executed = f
         .workflow
         .execute_with_compliance_batch(&batch, &f.token_id, &f.merchant);
-    assert_eq!(executed, Vec::from_array(&f.env, [s1, s2]));
+    assert_eq!(
+        executed,
+        soroban_sdk::Vec::from_array(
+            &f.env,
+            [SettlementBatchResult::Executed, SettlementBatchResult::Executed]
+        )
+    );
     assert_eq!(f.balance(&f.merchant), 5_000_000);
 }
 
@@ -284,7 +292,18 @@ fn batch_skips_unsettleable_items_and_settles_the_rest() {
         &f.merchant,
     );
 
-    assert_eq!(executed, Vec::from_array(&f.env, [first, second]));
+    assert_eq!(
+        executed,
+        soroban_sdk::Vec::from_array(
+            &f.env,
+            [
+                SettlementBatchResult::Executed,
+                SettlementBatchResult::SkippedNotFound,
+                SettlementBatchResult::SkippedOnHold,
+                SettlementBatchResult::Executed,
+            ]
+        )
+    );
     // Only the two executable settlements moved funds.
     assert_eq!(f.balance(&f.merchant), 4_000_000);
     assert_eq!(f.status(first), SettlementStatus::Executed);
@@ -372,7 +391,16 @@ fn previously_skipped_settlement_executes_in_a_later_batch() {
     let executed =
         f.workflow
             .execute_with_compliance_batch(&f.ids(&[first, held]), &f.token_id, &f.merchant);
-    assert_eq!(executed, Vec::from_array(&f.env, [first]));
+    assert_eq!(
+        executed,
+        soroban_sdk::Vec::from_array(
+            &f.env,
+            [
+                SettlementBatchResult::Executed,
+                SettlementBatchResult::SkippedOnHold,
+            ]
+        )
+    );
     assert_eq!(f.balance(&f.merchant), 1_000_000);
 
     f.treasury.release_hold(&f.admin, &held);
@@ -380,7 +408,10 @@ fn previously_skipped_settlement_executes_in_a_later_batch() {
     let executed =
         f.workflow
             .execute_with_compliance_batch(&f.ids(&[held]), &f.token_id, &f.merchant);
-    assert_eq!(executed, Vec::from_array(&f.env, [held]));
+    assert_eq!(
+        executed,
+        soroban_sdk::Vec::from_array(&f.env, [SettlementBatchResult::Executed])
+    );
     assert_eq!(f.balance(&f.merchant), 3_000_000);
 }
 
@@ -403,7 +434,16 @@ fn replayed_batch_executes_nothing_and_pays_nothing_twice() {
     let executed = f
         .workflow
         .execute_with_compliance_batch(&batch, &f.token_id, &f.merchant);
-    assert_eq!(executed, Vec::from_array(&f.env, []));
+    assert_eq!(
+        executed,
+        soroban_sdk::Vec::from_array(
+            &f.env,
+            [
+                SettlementBatchResult::SkippedAlreadyExecuted,
+                SettlementBatchResult::SkippedAlreadyExecuted,
+            ]
+        )
+    );
 
     let (_, _, summary) = f
         .env
@@ -445,7 +485,10 @@ fn allowed_merchant_is_unaffected_by_another_blocked_merchant() {
     let executed =
         f.workflow
             .execute_with_compliance_batch(&f.ids(&[allowed_id]), &f.token_id, &f.merchant);
-    assert_eq!(executed, Vec::from_array(&f.env, [allowed_id]));
+    assert_eq!(
+        executed,
+        soroban_sdk::Vec::from_array(&f.env, [SettlementBatchResult::Executed])
+    );
     assert_eq!(f.balance(&f.merchant), 1_500_000);
 
     // Blocked recipient: rejected, receives nothing.

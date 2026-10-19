@@ -47,6 +47,7 @@ Source: `src/entrypoints/admin.rs`, `src/entrypoints/lifecycle.rs`, `src/entrypo
 | `get_invoice_status` | none | Permissionless (read-only) |
 | `batch_get_invoice_status` | none (delegates to `get_invoice_status`) | Permissionless (read-only) |
 | `get_invoices_page` | none | Permissionless (read-only) |
+| `get_invoice_summary` | none | Permissionless (read-only) |
 | `get_invoice_count` | none | Permissionless (read-only) |
 | `get_pending_ids` | none | Permissionless (read-only) |
 | `cancel_invoice` | `caller.require_auth()`, then in-body check `caller == invoice.merchant \|\| caller == admin` | Self-auth + ownership check |
@@ -55,6 +56,7 @@ Source: `src/entrypoints/admin.rs`, `src/entrypoints/lifecycle.rs`, `src/entrypo
 | `approve_refund` | `require_admin(&env, &admin)?` | Admin-only |
 | `reject_refund` | `require_admin(&env, &admin)?` | Admin-only |
 | `get_invoices_by_merchant` | none | Permissionless (read-only) |
+| `get_invoices_by_payer` | none | Permissionless (read-only) |
 | `batch_create_invoice` | `merchant.require_auth()` | Self-auth (role) |
 | `batch_expire` | `require_admin(&env, &admin)?` | Admin-only |
 

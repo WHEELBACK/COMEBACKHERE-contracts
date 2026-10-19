@@ -216,3 +216,15 @@ Before submitting a pull request, make sure to:
 # License
 
 This project is licensed under the **MIT License**.
+
+## Handsoff notes
+
+<!-- handsoff-issue-751 -->
+- #751: Validate jurisdiction codes as ISO 3166-1 alpha-2
+
+<!-- handsoff-issue-752 -->
+- #752: Add `get_addresses_by_jurisdiction` paginated read
+<!-- handsoff-issue-760 -->
+- #760: Emit event on `set_blocklist_root`
+<!-- handsoff-issue-748 -->
+- #748: Split `contracts/compliance/src/lib.rs` (1,677 lines) into submodules

@@ -75,7 +75,7 @@ fn bench_resolve_dispute_cost(historical_disputes: u64) -> (u64, u64) {
     assert_eq!(client.get_settlement(&sid).status, SettlementStatus::OnHold);
 
     env.cost_estimate().budget().reset_tracker();
-    client.resolve_dispute(&admin, &did, &true);
+    client.resolve_dispute(&admin, &did, &true, &None);
     let instructions = env.cost_estimate().budget().cpu_instruction_cost();
 
     assert_eq!(

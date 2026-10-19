@@ -796,6 +796,7 @@ fn test_abi_snapshot_matches_contract() {
         "mark_paid",
         "get_invoice",
         "get_invoice_status",
+        "get_invoice_summary",
         "batch_get_invoice_status",
         "get_invoices_page",
         "cancel_invoice",
@@ -816,6 +817,7 @@ fn test_abi_snapshot_matches_contract() {
         "extend_expiry",
         "get_invoice_count",
         "get_invoices_by_merchant",
+        "get_invoices_by_payer",
         "get_pending_ids",
         "transfer_admin",
     ]

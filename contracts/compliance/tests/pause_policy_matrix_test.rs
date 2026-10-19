@@ -12,7 +12,7 @@
 //! it in `lib.rs`. If an entrypoint's gating changes without this table (and
 //! the doc comment it mirrors) being updated to match, this test fails.
 
-use compliance::{BlockReason, ComplianceContract, ComplianceContractClient, ContractError};
+use compliance::{BlockReason, ComplianceContract, ComplianceContractClient, ComplianceError};
 use soroban_sdk::{testutils::Address as _, Address, Env};
 
 struct Ctx {
@@ -73,7 +73,7 @@ fn entrypoints_documented_as_permitted_while_paused_are_not_blocked() {
 
 /// Documented as gated behind `require_not_paused` — every allow-side mutation
 /// that grants or extends access. All of these must return
-/// `ContractError::ContractPaused` while paused.
+/// `ComplianceError::ContractPaused` while paused.
 #[test]
 fn entrypoints_documented_as_pause_gated_are_blocked() {
     let Ctx { env, admin, client } = setup();
@@ -82,25 +82,25 @@ fn entrypoints_documented_as_pause_gated_are_blocked() {
 
     assert_eq!(
         client.try_allow_address(&admin, &addr),
-        Err(Ok(ContractError::ContractPaused))
+        Err(Ok(ComplianceError::ContractPaused))
     );
     assert_eq!(
         client.try_allow_address_with_tier(&admin, &addr, &1),
-        Err(Ok(ContractError::ContractPaused))
+        Err(Ok(ComplianceError::ContractPaused))
     );
     assert_eq!(
         client.try_allow_address_until(&admin, &addr, &(env.ledger().timestamp() + 1000)),
-        Err(Ok(ContractError::ContractPaused))
+        Err(Ok(ComplianceError::ContractPaused))
     );
     let mut batch = soroban_sdk::Vec::new(&env);
     batch.push_back(addr.clone());
     assert_eq!(
         client.try_bulk_allow_addresses(&admin, &batch),
-        Err(Ok(ContractError::ContractPaused))
+        Err(Ok(ComplianceError::ContractPaused))
     );
     assert_eq!(
         client.try_revoke_allow(&admin, &addr),
-        Err(Ok(ContractError::ContractPaused))
+        Err(Ok(ComplianceError::ContractPaused))
     );
 
     // Confirm the pause is real and not a setup mistake: the same calls

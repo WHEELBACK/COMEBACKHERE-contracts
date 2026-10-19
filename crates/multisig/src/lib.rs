@@ -1,5 +1,5 @@
 #![no_std]
-use soroban_sdk::{contracterror, contracttype, Address, BytesN, Env, Vec};
+use soroban_sdk::{contracterror, contracttype, Address, Bytes, BytesN, Env, String, Vec};
 
 /// Error codes for all treasury contract operations. Variants are append-only
 /// and must never be renumbered, as discriminants are stored on-chain and
@@ -86,6 +86,19 @@ pub enum TreasuryError {
     NoPendingAdmin = 46,
     // Appended for signer labels: label exceeds the maximum length.
     LabelTooLong = 47,
+    // Appended for #732: a proposed timelock delay falls outside the admin-
+    // configurable [MIN_TIMELOCK_DELAY_SECS, MAX_TIMELOCK_DELAY_SECS] bounds.
+    InvalidTimelockDelay = 48,
+    // Appended for #747: a deposit reference id was reused within its TTL window.
+    DuplicateReferenceId = 49,
+    // Appended for #742: `remove_allowed_token` called while depositors still hold
+    // balances in that token.
+    //
+    // NOTE: Soroban caps a `#[contracterror]` enum at 50 cases, so this is the last
+    // free slot. New failure modes must reuse an existing variant (as #739, #741 and
+    // #744 do with `InvalidAmount`, `NoPendingAdmin` and `LabelTooLong`) or move to a
+    // second error type.
+    TokenHasBalance = 50,
 }
 
 // Issue #48: reason codes attached to a held settlement; None means not on hold
@@ -183,6 +196,8 @@ pub struct Dispute {
     /// none. Purely a verifiable pointer for signers/audits — never itself verified
     /// on-chain.
     pub evidence_hash: Option<BytesN<32>>,
+    /// Optional bounded rationale recorded when the dispute is resolved (#744).
+    pub resolution_memo: Option<String>,
 }
 
 /// Lifecycle state of a signer-rotation proposal.
@@ -233,6 +248,11 @@ pub enum SignerChangeKind {
     RemoveSigner(Address),
     /// Change the multisig approval threshold.
     UpdateThreshold(u32),
+    /// Change the signer/threshold-change timelock delay itself (#732), in seconds.
+    /// Must fall within [MIN_TIMELOCK_DELAY_SECS, MAX_TIMELOCK_DELAY_SECS]; enforced
+    /// again at execution time so the bound cannot be bypassed even if it changes
+    /// between proposal and execution.
+    UpdateTimelockDelay(u64),
 }
 
 /// Lifecycle state of a `SignerChangeProposal`.
@@ -320,6 +340,8 @@ pub enum DataKey {
     WithdrawalAllowlist,
     LastRotationProposal(Address),
     PartialApprovedTotal(u64),
+    /// Bounded per-merchant index of settlement IDs, newest last (#727).
+    MerchantSettlements(Address),
     /// Admin-configured max amount withdrawable per rolling window; `0` means uncapped (#455).
     WithdrawalLimitPerWindow,
     /// Window length (seconds) paired with `WithdrawalLimitPerWindow`.
@@ -332,10 +354,24 @@ pub enum DataKey {
     SignerChangeCount,
     /// Persistent storage for a timelocked signer/threshold-change proposal (#447).
     SignerChange(u64),
+    /// Cumulative executed amount across all `partially_execute_settlement` calls for a
+    /// given settlement id (#578). Used to guard against overflow when accumulating
+    /// partial execution amounts over multiple calls.
+    PartialExecutedTotal(u64),
+    /// Bounded history of merchant payout address changes for audit purposes (#579).
+    /// Stores a `Vec<(Address, u64)>` of `(new_address, timestamp)` pairs, capped at
+    /// `MAX_PAYOUT_HISTORY` entries (oldest entries are dropped when the cap is reached).
+    PayoutAddressHistory(Address),
     /// Optional UNIX timestamp after which a settlement hold automatically lapses (#592).
     /// Stored separately from `Settlement` to avoid breaking the ABI snapshot.
     /// Absent means the hold has no expiry.
     HoldExpiry(u64),
+    /// Pending two-step admin handover: `(new_admin, expires_at)` (#741).
+    PendingAdmin,
+    /// Aggregate of all depositor balances held in a token (#742).
+    TokenTotal(Address),
+    /// Marker for a deposit reference id seen within its TTL window (#747).
+    DepositRef(Bytes),
     /// Ledger timestamp of a signer's most recent approval (#587).
     SignerLastActive(Address),
     /// Compact index of settlement ids currently in `Pending` status (#572), kept in
@@ -350,6 +386,13 @@ pub enum DataKey {
     /// Optional human-readable label for a signer (#568), e.g. "ops-hot-key".
     /// Purely informational — never consulted for authorisation decisions.
     SignerLabel(Address),
+    /// Bounded list of dispute ids raised against a given settlement id (#729),
+    /// kept in sync by `raise_dispute` so `get_disputes_by_settlement` costs
+    /// proportional to the disputes on that settlement rather than total dispute history.
+    SettlementDisputes(u64),
+    /// Admin-configurable signer/threshold-change timelock delay in seconds (#732).
+    /// Absent means the hard-coded default (`SIGNER_CHANGE_TIMELOCK_SECS`) applies.
+    TimelockDelaySecs,
 }
 
 /// Returns the approval weight assigned to `signer`, or `0` if not registered.

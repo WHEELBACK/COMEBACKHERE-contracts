@@ -29,3 +29,4 @@ soroban-sdk = { workspace = true, features = ["testutils"] }
 compliance = { package = "comebackhere-compliance", path = "../compliance" }
 treasury = { package = "comebackhere-treasury", path = "../treasury" }
 comebackhere-tests = { path = "../../tests" }
+hex = "0.4"

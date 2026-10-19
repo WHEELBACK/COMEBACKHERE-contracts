@@ -24,6 +24,7 @@ multisig = { package = "comebackhere-multisig", path = "../../crates/multisig" }
 # depending on it directly does not statically link any foreign wasm exports
 # into this contract.
 compliance-client = { package = "comebackhere-compliance-client", path = "../../crates/compliance-client" }
+protocol-math = { package = "comebackhere-protocol-math", path = "../../crates/protocol-math" }
 
 [dev-dependencies]
 soroban-sdk = { workspace = true, features = ["testutils"] }

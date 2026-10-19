@@ -28,3 +28,10 @@ path = "fuzz_targets/amount_precision.rs"
 test = false
 doc = false
 bench = false
+
+[[bin]]
+name = "net_refund"
+path = "fuzz_targets/net_refund.rs"
+test = false
+doc = false
+bench = false

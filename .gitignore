@@ -21,3 +21,7 @@ contracts/invoice/tests/snapshots/
 # are the exception worth keeping — a crash reproducer is valuable, so those are
 # intentionally NOT ignored; the ignore below is scoped to corpus/ only.
 contracts/*/fuzz/corpus/
+
+testsnapshot/
+**/testsnapshot
+*.testsnapshot

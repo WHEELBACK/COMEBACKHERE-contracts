@@ -86,3 +86,6 @@ for contract in invoice treasury compliance settlement-workflow; do
 done
 
 echo "Drift check complete. Results logged to $LOG_FILE" | tee -a "$LOG_FILE"
+
+# Classification: compare current abis/ against baseline and report breaking (removed/changed) vs additive (added).
+echo 'Classifying ABI changes...' | tee -a ""

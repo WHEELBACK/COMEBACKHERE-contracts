@@ -1,13 +1,18 @@
 #![no_std]
 
-pub use admin::EmergencyWithdrawProposal;
+/// Protocol-wide basis-point denominator (10 000 = 100.00%) and typed helpers,
+/// re-exported from `crates/protocol-math` so clients building against the
+/// treasury resolve ratios against the same value the contract validates them
+/// with (#707).
+pub use protocol_math::{apply_bps_i128, is_valid_bps, split_bps_i128, BPS_DENOMINATOR};
+
 pub use multisig::{
     DataKey, Dispute, DisputeStatus, MaybeAddress, RotationStatus, Settlement,
     SettlementHoldReason, SettlementStatus, SignerChangeKind, SignerChangeProposal,
     SignerChangeStatus, SignerRotationProposal, TreasuryError,
 };
 
-use soroban_sdk::{contract, contractimpl, Address, Env, Symbol, Vec};
+use soroban_sdk::{contract, contractimpl, Address, Bytes, Env, IntoVal, Symbol, Vec};
 
 mod admin;
 mod deposits;
@@ -77,6 +82,9 @@ impl TreasuryContract {
 /// Maximum number of tokens allowed in the allowlist to prevent unbounded storage growth.
 pub(crate) const MAX_ALLOWED_TOKENS: u32 = 20;
 
+/// Default TTL (in ledgers) for a deposit reference id before it can be reused (#747).
+pub(crate) const DEPOSIT_REF_TTL_LEDGERS: u32 = 30 * 24 * 60 * 60 / 5;
+
 pub(crate) fn require_admin(env: &Env, admin: &Address) {
     admin.require_auth();
     // An uninitialized contract has no admin, so it fails closed as Unauthorized.
@@ -97,6 +105,36 @@ pub(crate) fn require_not_paused(env: &Env) {
     }
 }
 
+/// Enforces the recipient's compliance tier transaction limit before a settlement
+/// transfers funds (#757). Calls `is_allowed_for_amount` on the configured
+/// `compliance-client` contract; if the recipient is not allowed for `amount` the
+/// settlement execution fails closed with `TreasuryError::ComplianceCheckFailed`.
+///
+/// When no compliance client is configured the check is skipped so existing
+/// deployments without compliance keep working.
+pub(crate) fn require_compliance_allowed(
+    env: &Env,
+    recipient: &Address,
+    amount: i128,
+) -> Result<(), TreasuryError> {
+    let client: Option<Address> = env
+        .storage()
+        .instance()
+        .get(&DataKey::ComplianceId);
+    let Some(compliance) = client else {
+        return Ok(());
+    };
+    let allowed: bool = env.invoke_contract(
+        &compliance,
+        &Symbol::new(env, "is_allowed_for_amount"),
+        soroban_sdk::vec![env, recipient.into_val(env), amount.into_val(env)],
+    );
+    if !allowed {
+        return Err(TreasuryError::ComplianceCheckFailed);
+    }
+    Ok(())
+}
+
 /// Writes `settlement` to storage and keeps `DataKey::PendingSettlementIndex` in sync
 /// with its `status` (#572). This is the *only* place a `Settlement` should be persisted
 /// in this crate — every write site (propose, approve, execute, cancel, expire, hold,
@@ -113,6 +151,13 @@ pub(crate) fn write_settlement(env: &Env, id: u64, settlement: &Settlement) {
         .instance()
         .get(&DataKey::PendingSettlementIndex)
         .unwrap_or_else(|| Vec::new(env));
+    if matches!(
+        settlement.status,
+        SettlementStatus::Executed | SettlementStatus::Cancelled | SettlementStatus::Expired
+    ) {
+        clear_hold_state(env, id);
+    }
+
     let is_pending = settlement.status == SettlementStatus::Pending;
     let already_indexed = index.contains(id);
 
@@ -132,6 +177,30 @@ pub(crate) fn write_settlement(env: &Env, id: u64, settlement: &Settlement) {
             .instance()
             .set(&DataKey::PendingSettlementIndex, &updated);
     }
+}
+
+/// Clears any hold-related storage for `id` (#745). Called by `write_settlement`
+/// on every terminal settlement transition (execute, cancel, expire, force-cancel)
+/// so a held settlement never leaves a `HoldExpiry` entry behind once it is no
+/// longer live. Idempotent: safe to call when no hold was ever set.
+pub(crate) fn clear_hold_state(env: &Env, id: u64) {
+    env.storage().persistent().remove(&DataKey::HoldExpiry(id));
+}
+
+/// Rejects a deposit whose reference id was already seen within the TTL window
+/// (#747). Records `ref_id` with a TTL so storage stays bounded and the id can
+/// be reused once the entry expires.
+/// Errors: `DuplicateReferenceId`.
+pub(crate) fn record_deposit_reference(env: &Env, ref_id: &Bytes) -> Result<(), TreasuryError> {
+    let key = DataKey::DepositRef(ref_id.clone());
+    if env.storage().temporary().has(&key) {
+        return Err(TreasuryError::DuplicateReferenceId);
+    }
+    env.storage().temporary().set(&key, &true);
+    env.storage()
+        .temporary()
+        .extend_ttl(&key, DEPOSIT_REF_TTL_LEDGERS, DEPOSIT_REF_TTL_LEDGERS);
+    Ok(())
 }
 
 #[cfg(test)]
