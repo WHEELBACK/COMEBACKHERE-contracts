@@ -7,7 +7,7 @@ check found in each function's body — not what a doc comment claims, since
 doc comments can lag behind implementation (see #14/#55-style precedent).
 It exists to support #117's planned external audit and to give an
 auditor, new contributor, or reviewer a single place to check "who can call
-this?" without reading all five source files.
+this?" without reading all source files.
 
 Each entry was verified by reading the function body directly. Where a doc
 comment's stated auth requirement did not match the code, it is called out
@@ -23,26 +23,41 @@ silently reconciled.
 | **Authorized signer** | `require_authorized_signer(...)`: caller must authenticate and hold non-zero weight in the multisig signer registry. |
 | **Self-auth (role)** | The function calls `<param>.require_auth()` on a specific parameter (e.g. `merchant`, `claimant`, `payer`, `to`, `from`, `new_admin`) — anyone can call it, but only *as* that address, which they must be able to sign for. |
 | **Self-auth + ownership check** | Self-auth as above, plus an additional in-body check that the authenticated caller matches a stored value (e.g. the invoice's recorded merchant) before the mutation proceeds. |
+| **Self-auth (bootstrap)** | One-shot `admin.require_auth()` during `initialize`; no stored admin exists yet. |
 | **Permissionless (read-only)** | No auth call anywhere in the function; it only reads storage. |
 | **Permissionless (mutating)** | No auth call anywhere in the function, yet it mutates state or moves funds. Flagged for extra scrutiny. |
 
 ## `contracts/invoice`
 
-Source: `src/entrypoints/admin.rs`, `src/entrypoints/lifecycle.rs`, `src/entrypoints/batch.rs`.
+Source: `src/entrypoints/admin.rs`, `src/entrypoints/lifecycle.rs`,
+`src/entrypoints/batch.rs`, `src/entrypoints/refund.rs`,
+`src/entrypoints/template.rs`, `src/entrypoints/transfer.rs`.
 
 | Entrypoint | Auth check in source | Category |
 |---|---|---|
 | `initialize` | `admin.require_auth()`; only succeeds once (`AlreadyInitialized` guard) | Self-auth (bootstrap) |
 | `set_grace_window` | `require_admin(&env, &admin)?` | Admin-only |
 | `get_grace_window` | none | Permissionless (read-only) |
+| `set_max_open_invoices` | `require_admin(&env, &admin)?` | Admin-only |
+| `get_max_open_invoices` | none | Permissionless (read-only) |
+| `set_merchant_max_open_invoices` | `require_admin(&env, &admin)?` | Admin-only |
+| `get_max_open_invoices_for` | none | Permissionless (read-only) |
+| `set_late_fee_bps` | `require_admin(&env, &admin)?` | Admin-only |
+| `get_late_fee_bps` | none | Permissionless (read-only) |
+| `set_refund_window` | `require_admin(&env, &admin)?` | Admin-only |
+| `get_refund_window` | none | Permissionless (read-only) |
+| `set_refund_network_fee` | `require_admin(&env, &admin)?` | Admin-only |
+| `get_refund_network_fee` | none | Permissionless (read-only) |
 | `transfer_admin` | `require_admin(&env, &admin)?` | Admin-only |
 | `accept_admin` | `new_admin.require_auth()`; checked against stored `PendingAdmin` | Self-auth (role) |
+| `get_admin` | none | Permissionless (read-only) |
 | `pause` | `require_admin(&env, &admin)?` | Admin-only |
 | `unpause` | `require_admin(&env, &admin)?` | Admin-only |
+| `is_paused` | none | Permissionless (read-only) |
 | `extend_expiry` | `require_admin(&env, &admin)?` | Admin-only |
-| `create_invoice` | `merchant.require_auth()` | Self-auth (role) |
-| `mark_paid` | `require_admin(&env, &admin)?` | Admin-only |
-| `release_escrow` | `require_admin(&env, &admin)?` | Admin-only |
+| `create_invoice` | `merchant.require_auth()` + `require_not_paused` | Self-auth (role) |
+| `mark_paid` | `require_admin(&env, &admin)?` + `require_not_paused` | Admin-only |
+| `release_escrow` | `require_admin(&env, &admin)?` + `require_not_paused` | Admin-only |
 | `get_invoice` | none | Permissionless (read-only) |
 | `get_invoice_status` | none | Permissionless (read-only) |
 | `batch_get_invoice_status` | none (delegates to `get_invoice_status`) | Permissionless (read-only) |
@@ -50,19 +65,33 @@ Source: `src/entrypoints/admin.rs`, `src/entrypoints/lifecycle.rs`, `src/entrypo
 | `get_invoice_summary` | none | Permissionless (read-only) |
 | `get_invoice_count` | none | Permissionless (read-only) |
 | `get_pending_ids` | none | Permissionless (read-only) |
-| `cancel_invoice` | `caller.require_auth()`, then in-body check `caller == invoice.merchant \|\| caller == admin` | Self-auth + ownership check |
-| `amend_invoice` | `merchant.require_auth()`, then in-body check `invoice.merchant == merchant` | Self-auth + ownership check |
-| `request_refund` | `payer.require_auth()`, then in-body check `invoice.payer == Some(payer)` | Self-auth + ownership check |
-| `approve_refund` | `require_admin(&env, &admin)?` | Admin-only |
-| `reject_refund` | `require_admin(&env, &admin)?` | Admin-only |
+| `cancel_invoice` | `caller.require_auth()` + `require_not_paused`, then in-body check `caller == invoice.merchant \|\| caller == admin` | Self-auth + ownership check |
+| `amend_invoice` | `merchant.require_auth()` + `require_not_paused`, then in-body check `invoice.merchant == merchant` | Self-auth + ownership check |
+| `request_refund` | `payer.require_auth()` + `require_not_paused`, then in-body check `invoice.payer == Some(payer)` | Self-auth + ownership check |
+| `approve_refund` | `require_admin(&env, &admin)?` + `require_not_paused` | Admin-only |
+| `reject_refund` | `require_admin(&env, &admin)?` + `require_not_paused` | Admin-only |
+| `process_refund` | `require_admin(&env, &admin)?` + `require_not_paused` | Admin-only |
+| `calculate_net_refund` | none (pure fee quote; deliberately not pause-gated) | Permissionless (read-only) |
+| `get_refund_breakdown` | none | Permissionless (read-only) |
+| `get_refund_status` | none | Permissionless (read-only) |
+| `transfer_invoice` | `from.require_auth()` + `require_not_paused`, then in-body check `invoice.payer == from` and `status == Paid` | Self-auth + ownership check |
+| `create_template` | `merchant.require_auth()` + `require_not_paused` | Self-auth (role) |
+| `get_invoice_template` | none | Permissionless (read-only) |
+| `list_templates_by_merchant` | none | Permissionless (read-only) |
+| `set_template_active` | `caller.require_auth()`; only the template merchant or admin may toggle | Self-auth + ownership check |
+| `generate_from_template` | `merchant.require_auth()` + `require_not_paused` | Self-auth (role) |
+| `get_template_count` | none | Permissionless (read-only) |
+| `generate_due_invoices` | `require_not_paused` only (permissionless keeper sweep over due templates) | Permissionless (mutating) |
 | `get_invoices_by_merchant` | none | Permissionless (read-only) |
 | `get_invoices_by_payer` | none | Permissionless (read-only) |
-| `batch_create_invoice` | `merchant.require_auth()` | Self-auth (role) |
-| `batch_expire` | `require_admin(&env, &admin)?` | Admin-only |
+| `batch_create_invoice` | `merchant.require_auth()` + `require_not_paused` | Self-auth (role) |
+| `batch_expire` | `require_admin(&env, &admin)?` + `require_not_paused` | Admin-only |
+| `batch_cancel_invoices` | `merchant.require_auth()` + `require_not_paused` | Self-auth (role) |
 
 ## `contracts/treasury`
 
-Source: `src/lib.rs`, `src/deposits.rs`, `src/settlements.rs`, `src/disputes.rs`, `src/holds.rs`, `src/signers.rs`.
+Source: `src/lib.rs`, `src/admin.rs`, `src/deposits.rs`, `src/settlements.rs`,
+`src/disputes.rs`, `src/holds.rs`, `src/signers.rs`, `src/timelock.rs`.
 
 | Entrypoint | Auth check in source | Category |
 |---|---|---|
@@ -70,18 +99,37 @@ Source: `src/lib.rs`, `src/deposits.rs`, `src/settlements.rs`, `src/disputes.rs`
 | `update_threshold` | `require_admin(&env, &admin)` | Admin-only |
 | `pause` | `require_admin(&env, &admin)` | Admin-only |
 | `unpause` | `require_admin(&env, &admin)` | Admin-only |
+| `get_threshold` | none | Permissionless (read-only) |
+| `is_paused` | none | Permissionless (read-only) |
+| `get_admin` | none | Permissionless (read-only) |
+| `set_withdrawal_limit` | `require_admin(&env, &admin)` | Admin-only |
+| `get_withdrawal_limit` | none | Permissionless (read-only) |
+| `set_settlement_expiry` | `require_admin(&env, &admin)` | Admin-only |
+| `get_settlement_expiry` | none | Permissionless (read-only) |
+| `set_compliance_id` | `require_admin(&env, &admin)` | Admin-only |
+| `get_compliance_id` | none | Permissionless (read-only) |
+| `transfer_admin` | `require_admin(&env, &admin)` (timelocked handover, `expiry_secs`) | Admin-only |
+| `accept_admin` | `new_admin.require_auth()`; checked against stored `PendingAdmin` + expiry | Self-auth (role) |
+| `cancel_transfer_admin` | `require_admin(&env, &admin)` | Admin-only |
+| `get_pending_admin` | none | Permissionless (read-only) |
 | `deposit` | `from.require_auth()` | Self-auth (role) |
 | `batch_deposit` | `from.require_auth()` | Self-auth (role) |
 | `withdraw` | `to.require_auth()` | Self-auth (role) |
 | `get_balance` | none | Permissionless (read-only) |
+| `get_all_balances` | none | Permissionless (read-only) |
 | `withdraw_all` | `require_admin(&env, &admin)`, plus explicit `paused` check (panics `NotPaused` if not paused) | Admin-only |
+| `emergency_withdraw` | `require_auth` from **all** registered signers (unanimous, pause-gated) | Authorized signer (unanimous) |
 | `propose_settlement` | `require_authorized_signer(&env, &signer)` | Authorized signer |
+| `propose_settlement_with_token` | `require_authorized_signer(&env, &signer)` | Authorized signer |
 | `propose_partial_settlement` | delegates to `propose_settlement` | Authorized signer |
 | `approve_settlement` | `require_authorized_signer(&env, &signer)` | Authorized signer |
+| `revoke_approval` | `require_authorized_signer(&env, &signer)` | Authorized signer |
 | `batch_approve_settlements` | `require_authorized_signer(&env, &signer)` | Authorized signer |
 | `approve_partial_settlement` | `require_authorized_signer(&env, &signer)` | Authorized signer |
 | `execute_settlement` | `require_authorized_signer(&env, &signer)` | Authorized signer |
+| `batch_execute_settlements` | `require_authorized_signer(&env, &signer)` | Authorized signer |
 | `partially_execute_settlement` | `require_authorized_signer(&env, &signer)` | Authorized signer |
+| `get_partial_progress` | none | Permissionless (read-only) |
 | `cancel_settlement` | `require_authorized_signer(&env, &signer)` | Authorized signer |
 | `batch_cancel_settlements` | `require_admin(&env, &admin)` | Admin-only |
 | `force_cancel_settlement` | `require_admin(&env, &admin)` | Admin-only |
@@ -89,6 +137,9 @@ Source: `src/lib.rs`, `src/deposits.rs`, `src/settlements.rs`, `src/disputes.rs`
 | `get_pending_settlements_page` | none | Permissionless (read-only) |
 | `get_pending_metrics` | none | Permissionless (read-only) |
 | `get_settlement` | none | Permissionless (read-only) |
+| `get_settlements_by_merchant` | none | Permissionless (read-only) |
+| `get_approvals` | none | Permissionless (read-only) |
+| `get_payout_address_history` | none | Permissionless (read-only) |
 | `expire_settlement` | `require_admin(&env, &admin)` | Admin-only |
 | `update_merchant_payout_address` | `merchant.require_auth()` | Self-auth (role) |
 | `get_merchant_payout_address` | none | Permissionless (read-only) |
@@ -98,25 +149,30 @@ Source: `src/lib.rs`, `src/deposits.rs`, `src/settlements.rs`, `src/disputes.rs`
 | `raise_dispute` | `claimant.require_auth()` | Self-auth (role) |
 | `expire_dispute` | `require_admin(&env, &admin)` | Admin-only |
 | `get_dispute` | none | Permissionless (read-only) |
+| `get_disputes_by_settlement` | none | Permissionless (read-only) |
 | `resolve_dispute` | `require_admin(&env, &admin)` | Admin-only |
+| `resolve_dispute_split` | `require_admin(&env, &admin)` | Admin-only |
 | `vote_dispute_resolution` | `require_authorized_signer(&env, &signer)` | Authorized signer |
 | `hold_settlement` | `require_admin(&env, &admin)` | Admin-only |
 | `get_hold_reason` | none | Permissionless (read-only) |
+| `get_hold_expiry` | none | Permissionless (read-only) |
 | `release_hold` | `require_admin(&env, &admin)` | Admin-only |
 | `set_signer` | `require_admin(&env, &admin)` | Admin-only |
+| `set_signer_label` | `require_admin(&env, &admin)` — no pause check (role management) | Admin-only |
 | `remove_signer` | `require_admin(&env, &admin)` | Admin-only |
 | `get_signer_weight` | none | Permissionless (read-only) |
 | `get_all_signers` | none | Permissionless (read-only) |
+| `get_rotation` | none | Permissionless (read-only) |
+| `get_signer_last_active` | none | Permissionless (read-only) |
 | `propose_signer_rotation` | `require_authorized_signer(&env, &proposer)` | Authorized signer |
 | `approve_signer_rotation` | `require_authorized_signer(&env, &approver)` | Authorized signer |
 | `cancel_rotation` | `require_admin(&env, &admin)` | Admin-only |
-| `set_withdrawal_limit` | `require_admin(&env, &admin)` | Admin-only |
-| `get_withdrawal_limit` | none | Permissionless (read-only) |
-| `resolve_dispute_split` | `require_admin(&env, &admin)` | Admin-only |
-| `propose_signer_change` | `require_admin(&env, &admin)` | Admin-only |
-| `execute_signer_change` | `require_admin(&env, &admin)` | Admin-only |
-| `cancel_signer_change` | `require_admin(&env, &admin)` | Admin-only |
+| `propose_signer_change` | `require_admin(&env, &admin)` — timelocked (`executable_at = now + delay`) | Admin-only |
+| `execute_signer_change` | `require_admin(&env, &admin)` — only after `executable_at` (`SignerChangeTooEarly` otherwise) | Admin-only |
+| `cancel_signer_change` | `require_admin(&env, &admin)` — `Pending` only (`SignerChangeAlreadyFinalised` otherwise) | Admin-only |
 | `get_signer_change` | none | Permissionless (read-only) |
+| `list_pending_signer_changes` | none (capped at `MAX_SIGNER_CHANGE_PAGE`) | Permissionless (read-only) |
+| `get_timelock_delay` | none (defaults to 24h) | Permissionless (read-only) |
 
 ## `contracts/compliance`
 
@@ -130,27 +186,48 @@ entrypoint calls them.
 | `initialize` | `admin.require_auth()`; only succeeds once (`AlreadyInitialized` guard) | Self-auth (bootstrap) |
 | `bulk_allow_addresses` | `Self::require_admin(&env, &admin)?` + `require_not_paused` | Admin-only |
 | `bulk_check_addresses` | none (delegates to `is_allowed` per address) | Permissionless (read-only) |
+| `bulk_get_address_status` | none (bounded by `MAX_BATCH_SIZE`) | Permissionless (read-only) |
 | `is_allowed` | none | Permissionless (read-only) |
+| `is_allowed_for_amount` | none (delegates to `is_allowed` + `get_tier_limit`) | Permissionless (read-only) |
 | `is_blocked` | none | Permissionless (read-only) |
+| `is_blocked_with_proof` | none — permissionless read that walks the Merkle proof against the stored root | Permissionless (read-only) |
 | `allow_address` | `Self::require_admin(&env, &admin)?` + `require_not_paused` | Admin-only |
 | `allow_address_with_tier` | `Self::require_admin(&env, &admin)?` + `require_not_paused` | Admin-only |
+| `allow_address_until` | `Self::require_admin(&env, &admin)?` + `require_not_paused` | Admin-only |
+| `revoke_allow` | `Self::require_admin(&env, &admin)?` + `require_not_paused` | Admin-only |
 | `get_address_tier` | none | Permissionless (read-only) |
+| `set_tier_limit` | `Self::require_admin(&env, &admin)?` — no pause check | Admin-only |
+| `get_tier_limit` | none | Permissionless (read-only) |
+| `set_jurisdiction` | `Self::require_admin(&env, &admin)?` — no pause check | Admin-only |
+| `get_jurisdiction` | none | Permissionless (read-only) |
 | `bulk_block_addresses` | `Self::require_admin(&env, &admin)?` — **no** `require_not_paused` call. Records the admin as each block's placer (#604). | Admin-only (see discrepancy below) |
 | `block_address` | `Self::require_admin_or_operator(&env, &caller)?` — no pause check (documented: "permitted while paused"). Records the caller in `DataKey::BlockedBy` (#604). | Admin or operator |
 | `block_address_until` | `Self::require_admin_or_operator(&env, &caller)?` — no pause check. Records the caller in `DataKey::BlockedBy` (#604). | Admin or operator |
 | `get_block_reason` | none | Permissionless (read-only) |
 | `get_block_placer` | none | Permissionless (read-only) |
 | `get_schema_version` | none | Permissionless (read-only) |
-| `allow_address_until` | `Self::require_admin(&env, &admin)?` + `require_not_paused` | Admin-only |
+| `migrate` | `Self::require_admin(&env, &admin)?` — permitted while paused | Admin-only |
 | `transfer_admin` | `Self::require_admin(&env, &admin)?` | Admin-only |
+| `cancel_admin_transfer` | `Self::require_admin(&env, &admin)?` | Admin-only |
 | `accept_admin` | `new_admin.require_auth()`; checked against stored `PendingAdmin` | Self-auth (role) |
+| `get_admin` | none | Permissionless (read-only) |
+| `get_pending_admin` | none | Permissionless (read-only) |
 | `clear_address` | `Self::require_admin_or_operator(&env, &caller)?` — no pause check (documented: "permitted while paused"). An operator caller must additionally pass `require_operator_placed_block`, which refuses unless `DataKey::BlockedBy[address] == caller`; an admin caller clears any block (#604). | Admin, or operator for an operator-placed block only |
-| `revoke_allow` | `Self::require_admin(&env, &admin)?` + `require_not_paused` | Admin-only |
 | `pause` | `Self::require_admin(&env, &admin)?` | Admin-only |
+| `pause_with_reason` | `Self::require_admin(&env, &admin)?` — also stores a `Symbol` reason readable via `get_pause_reason` | Admin-only |
+| `get_pause_reason` | none | Permissionless (read-only) |
 | `unpause` | `Self::require_admin(&env, &admin)?` | Admin-only |
-| `set_operator` | `Self::require_admin(&env, &admin)?` | Admin-only |
+| `is_paused` | none | Permissionless (read-only) |
+| `set_operator` | `Self::require_admin(&env, &admin)?` — legacy single-operator slot; no pause check | Admin-only |
+| `get_operator` | none | Permissionless (read-only) |
+| `add_operator` | `Self::require_admin(&env, &admin)?` — multi-operator set (max `MAX_OPERATORS`); no pause check | Admin-only |
+| `remove_operator` | `Self::require_admin(&env, &admin)?` — no pause check | Admin-only |
+| `get_operators` | none | Permissionless (read-only) |
+| `set_blocklist_root` | `Self::require_admin(&env, &admin)?` — permitted while paused (emergency policy) | Admin-only |
+| `get_blocklist_root` | none | Permissionless (read-only) |
 | `get_allow_expiry` | none | Permissionless (read-only) |
-| `sweep_expired` | `Self::require_admin(&env, &admin)?` | Admin-only |
+| `get_address_history` | none (bounded by `MAX_STATUS_HISTORY`) | Permissionless (read-only) |
+| `sweep_expired` | `Self::require_admin_or_operator(&env, &admin)?` — not pause-gated (bookkeeping) | Admin or operator |
 | `export_snapshot` | `Self::require_admin(&env, &admin).unwrap()` (panics rather than returning `Err` on failure) | Admin-only |
 | `export_snapshot_page` | `Self::require_admin(&env, &admin).unwrap()` (panics rather than returning `Err` on failure) | Admin-only |
 | `address_status` | `Self::require_admin_or_operator(&env, &caller)?` | Admin or operator |
@@ -161,11 +238,23 @@ Source: `src/lib.rs`.
 
 | Entrypoint | Auth check in source | Category |
 |---|---|---|
-| `execute_with_compliance` | **none directly in this function.** It calls `Compliance::is_allowed` (no auth required by that call) and, if it passes, `Treasury::execute_settlement` using `env.current_contract_address()` as the signer. Soroban auto-authorizes a contract's own outgoing calls, and `Treasury::execute_settlement`'s `require_authorized_signer` check is satisfied purely because this contract's address was pre-registered as a treasury signer via `set_signer`. | **Permissionless (mutating)** — see discrepancy below |
-| `execute_with_compliance_batch` | none directly; loops through the same compliance and treasury call path as `execute_with_compliance` for each settlement ID. | **Permissionless (mutating)** — same invariant as above |
 | `initialize` | `admin.require_auth()` on the `admin` parameter, then stores it along with the pinned compliance/treasury IDs. Guarded against re-entry by an `AlreadyInitialized` panic when a compliance ID is already stored. | **Self-auth (role)** — one-shot; the caller must be the admin it installs |
+| `update_contract_ids` | `require_admin(&env, &admin)?` | Admin-only |
 | `transfer_admin` | `require_admin(...)`: the `admin` parameter must authenticate *and* match the stored `DataKey::Admin`. Nomination only — the role does not move until the nominee accepts. | **Admin-only** |
 | `accept_admin` | `new_admin.require_auth()` on the `new_admin` parameter, plus an in-body check that it matches the stored `DataKey::PendingAdmin`. Returns `Unauthorized` on a mismatch and `NoPendingAdmin` when nothing is outstanding. | **Self-auth (role)** |
+| `get_admin` | none (returns `Err(Unauthorized)` if never initialized) | Permissionless (read-only) |
+| `pause` | `require_admin(&env, &admin)?` | Admin-only |
+| `unpause` | `require_admin(&env, &admin)?` | Admin-only |
+| `is_paused` | none | Permissionless (read-only) |
+| `execute_with_compliance` | **none directly in this function.** It calls `Compliance::is_allowed` (no auth required by that call) and, if it passes, `Treasury::execute_settlement` using `env.current_contract_address()` as the signer. Soroban auto-authorizes a contract's own outgoing calls, and `Treasury::execute_settlement`'s `require_authorized_signer` check is satisfied purely because this contract's address was pre-registered as a treasury signer via `set_signer`. | **Permissionless (mutating)** — see discrepancy below |
+| `simulate_with_compliance` | none — read-only preview (`WouldSucceed` / `WouldFail`) | Permissionless (read-only) |
+| `execute_with_compliance_batch` | none directly; loops through the same compliance and treasury call path as `execute_with_compliance` for each settlement ID. | **Permissionless (mutating)** — same invariant as above |
+| `initialize_emergency_pause` | `admin.require_auth()` + rejects reconfiguration while `EmergencyPausedAt` is set (`EmergencyPauseActive`); validates non-empty, `<= MAX_PAUSE_TARGETS`, no duplicates, no self-target | Self-auth (role) — one-shot wiring; reconfiguration only while no incident is open |
+| `emergency_pause_all` | `admin.require_auth()` + `require_pause_admin` (must match `EmergencyPauseAdmin`). All-or-nothing fan-out; `PauseTargetFailed` reverts partial pauses. | Admin-only (emergency pause admin) |
+| `resume_all` | `admin.require_auth()` + `require_pause_admin`. Guards: `NotEmergencyPaused` if `EmergencyPausedAt` absent; `ResumeTooEarly` if `now < paused_at + min_delay_secs` (#780). Reverse-order fan-out; `UnpauseTargetFailed` reverts partial resumes. | Admin-only (emergency pause admin) |
+| `get_emergency_pause_targets` | none (`NotConfigured` if never wired) | Permissionless (read-only) |
+| `get_emergency_pause_admin` | none (`NotConfigured` if never wired) | Permissionless (read-only) |
+| `get_emergency_paused_at` | none (`None` while no incident is open) | Permissionless (read-only) |
 
 ## Discrepancies found
 
