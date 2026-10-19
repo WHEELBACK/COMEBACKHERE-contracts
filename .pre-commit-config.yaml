@@ -21,6 +21,11 @@ repos:
         entry: scripts/check-enum-doc-comments.sh
         language: script
         pass_filenames: false
+      - id: check-mod-files
+        name: Check mod file existence
+        entry: scripts/check-mod-files.sh
+        language: script
+        pass_filenames: false
       - id: check-workflow-version-pins
         name: Check centralized workflow version pins
         entry: scripts/check-workflow-version-pins.sh

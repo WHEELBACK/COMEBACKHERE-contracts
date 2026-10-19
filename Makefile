@@ -1,4 +1,4 @@
-.PHONY: build test test-integration fmt lint check audit check-enum-ordering mutants-treasury precommit
+.PHONY: build test test-integration fmt lint check audit check-enum-ordering mutants-treasury precommit check-mod-files
 
 build:
 	cargo build
@@ -37,3 +37,6 @@ precommit:
 	./scripts/check-enum-ordering.sh
 	./scripts/check-enum-doc-comments.sh
 	@echo "✓ Pre-commit checks passed"
+
+check-mod-files:
+	./scripts/check-mod-files.sh
