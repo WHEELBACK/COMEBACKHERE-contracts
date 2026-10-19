@@ -9,6 +9,14 @@
 //! **not** exist in this crate — this file is the sole source of truth. Do not create a
 //! stub `allowlist.rs` without completing the migration described in #43.
 //!
+
+//! All types, storage keys, error codes, and entrypoint logic live in this single file.
+//! A refactor to split the data types and `DataKey` variants into a dedicated `allowlist.rs`
+//! submodule was drafted (see issue #43 / branch `docs/protocol-glossary-and-compliance-stub-intent`)
+//! but has been deferred pending owner sign-off. Until that split lands, `allowlist.rs` does
+//! **not** exist in this crate — this file is the sole source of truth. Do not create a
+//! stub `allowlist.rs` without completing the migration described in #43.
+//!
 //! # Contract responsibilities
 //!
 //! - Maintain a per-address allow/block state under [`DataKey::Allowed`] / [`DataKey::Blocked`].
