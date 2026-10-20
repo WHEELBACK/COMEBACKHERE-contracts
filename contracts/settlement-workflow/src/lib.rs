@@ -592,15 +592,32 @@ impl SettlementWorkflowContract {
     /// to unpause a protocol somebody else paused through their own admin key:
     /// the orchestrator only ever reverses its own sweep.
     ///
+    /// `min_delay_secs` enforces a minimum cooling-off period between the
+    /// emergency pause and this resume call (#780). When non-zero, `resume_all`
+    /// returns [`WorkflowError::ResumeTooEarly`] if fewer than `min_delay_secs`
+    /// seconds have elapsed since `EmergencyPausedAt`. A value of `0` means no
+    /// delay is required and the call proceeds immediately — preserving full
+    /// backward compatibility with callers that pass `0`.
+    ///
     /// Errors: `Unauthorized`, `NotConfigured`, `NotEmergencyPaused`,
-    /// `UnpauseTargetFailed`.
+    /// `ResumeTooEarly`, `UnpauseTargetFailed`.
     /// Emits: `emergency_pause_resumed`.
-    pub fn resume_all(env: Env, admin: Address) -> Result<Vec<Address>, WorkflowError> {
+    pub fn resume_all(
+        env: Env,
+        admin: Address,
+        min_delay_secs: u64,
+    ) -> Result<Vec<Address>, WorkflowError> {
         admin.require_auth();
         Self::require_pause_admin(&env, &admin)?;
 
-        if Self::emergency_paused_at(&env).is_none() {
-            return Err(WorkflowError::NotEmergencyPaused);
+        let paused_at = Self::emergency_paused_at(&env).ok_or(WorkflowError::NotEmergencyPaused)?;
+
+        if min_delay_secs > 0 {
+            let now = env.ledger().timestamp();
+            let earliest_resume = paused_at.saturating_add(min_delay_secs);
+            if now < earliest_resume {
+                return Err(WorkflowError::ResumeTooEarly);
+            }
         }
 
         let targets = Self::pause_targets(&env)?;
