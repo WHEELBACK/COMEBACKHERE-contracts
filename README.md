@@ -228,3 +228,6 @@ This project is licensed under the **MIT License**.
 - #760: Emit event on `set_blocklist_root`
 <!-- handsoff-issue-748 -->
 - #748: Split `contracts/compliance/src/lib.rs` (1,677 lines) into submodules
+
+<!-- handsoff-issue-806 -->
+- #806: Update error-code tables in ARCHITECTURE.md after multisig renumber
