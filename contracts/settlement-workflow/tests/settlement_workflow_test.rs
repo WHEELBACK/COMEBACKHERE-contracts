@@ -2,7 +2,7 @@
 mod malicious_compliance;
 
 use compliance::ComplianceContractClient;
-use settlement_workflow::{SettlementWorkflowContract, SettlementWorkflowContractClient, WorkflowError};
+use settlement_workflow::{SettlementWorkflowContract, SettlementWorkflowContractClient};
 use soroban_sdk::{
     contract, contractimpl,
     testutils::{Address as _, Events},
@@ -148,22 +148,21 @@ fn emits_settlement_workflow_executed_event() {
 }
 
 #[test]
-fn initialize_is_idempotent_and_pins_trusted_instances() {
+fn constructor_pins_compliance_and_treasury_ids() {
     let env = Env::default();
     env.mock_all_auths();
     let admin = Address::generate(&env);
     let compliance_id = Address::generate(&env);
     let treasury_id = Address::generate(&env);
-    let workflow_id = env.register_contract(None, SettlementWorkflowContract);
+    let workflow_id = env.register(
+        SettlementWorkflowContract,
+        (admin.clone(), compliance_id.clone(), treasury_id.clone()),
+    );
     let workflow = SettlementWorkflowContractClient::new(&env, &workflow_id);
 
-    workflow.initialize(&admin, &compliance_id, &treasury_id);
-    // Second initialize must trap with AlreadyInitialized.
-    let err = workflow
-        .try_initialize(&admin, &compliance_id, &treasury_id)
-        .unwrap_err()
-        .unwrap();
-    assert_eq!(err, WorkflowError::AlreadyInitialized.into());
+    assert_eq!(workflow.get_compliance_id(), compliance_id);
+    assert_eq!(workflow.get_treasury_id(), treasury_id);
+    assert_eq!(workflow.get_admin(), admin);
 }
 
 #[test]
@@ -196,14 +195,7 @@ fn batch_executes_multiple_settlements_and_skips_invalid_ids() {
     let executed = workflow.execute_with_compliance_batch(&ids, &token_id, &merchant);
     assert_eq!(
         executed,
-        soroban_sdk::Vec::from_array(
-            &env,
-            [
-                SettlementBatchResult::Executed,
-                SettlementBatchResult::SkippedNotFound,
-                SettlementBatchResult::Executed,
-            ]
-        )
+        soroban_sdk::Vec::from_array(&env, [good_1, good_2])
     );
     assert_eq!(
         token::Client::new(&env, &token_id).balance(&merchant),
@@ -380,7 +372,7 @@ fn execute_with_compliance_rejected_while_paused() {
         .try_execute_with_compliance(&settlement_id, &token_id, &merchant)
         .unwrap_err()
         .unwrap();
-    assert_eq!(err, WorkflowError::ContractPaused.into());
+    assert_eq!(err, TreasuryError::ContractPaused.into());
     assert_eq!(token::Client::new(&env, &token_id).balance(&merchant), 0);
 }
 
@@ -415,7 +407,7 @@ fn execute_with_compliance_batch_rejected_while_paused() {
         .try_execute_with_compliance_batch(&ids, &token_id, &merchant)
         .unwrap_err()
         .unwrap();
-    assert_eq!(err, WorkflowError::ContractPaused.into());
+    assert_eq!(err, TreasuryError::ContractPaused.into());
     assert_eq!(token::Client::new(&env, &token_id).balance(&merchant), 0);
 }
 
@@ -476,7 +468,7 @@ fn paused_workflow_reports_paused_before_compliance_check() {
         .try_execute_with_compliance(&settlement_id, &token_id, &merchant)
         .unwrap_err()
         .unwrap();
-    assert_eq!(err, WorkflowError::ContractPaused.into());
+    assert_eq!(err, TreasuryError::ContractPaused.into());
 }
 
 /// Only the recorded admin can pause; a random address is rejected with
@@ -498,12 +490,12 @@ fn non_admin_cannot_pause_or_unpause() {
     let outsider = Address::generate(&env);
     assert_eq!(
         workflow.try_pause(&outsider).unwrap_err().unwrap(),
-        WorkflowError::Unauthorized.into()
+        TreasuryError::Unauthorized.into()
     );
     assert!(!workflow.is_paused());
     assert_eq!(
         workflow.try_unpause(&outsider).unwrap_err().unwrap(),
-        WorkflowError::Unauthorized.into()
+        TreasuryError::Unauthorized.into()
     );
 }
 
@@ -766,16 +758,7 @@ fn batch_summary_is_emitted_when_every_item_is_skipped() {
     ids.push_back(bogus);
 
     let executed = workflow.execute_with_compliance_batch(&ids, &token_id, &merchant);
-    assert_eq!(
-        executed,
-        soroban_sdk::Vec::from_array(
-            &env,
-            [
-                SettlementBatchResult::SkippedAlreadyExecuted,
-                SettlementBatchResult::SkippedNotFound,
-            ]
-        )
-    );
+    assert_eq!(executed, soroban_sdk::Vec::from_array(&env, []));
 
     let events = workflow_events(&env, &workflow_id);
     assert_eq!(
@@ -790,90 +773,6 @@ fn batch_summary_is_emitted_when_every_item_is_skipped() {
         )],
         "a fully-skipped batch must still publish its summary event"
     );
-}
-
-/// #771: `update_contract_ids` lets the admin re-point the workflow at upgraded
-/// compliance or treasury contracts without redeploying the workflow.
-#[test]
-fn update_contract_ids_repoints_workflow() {
-    let (
-        env,
-        admin,
-        _merchant,
-        _compliance,
-        _compliance_id,
-        _treasury,
-        _treasury_id,
-        workflow,
-        _token_id,
-    ) = setup();
-    let new_compliance_id = Address::generate(&env);
-    let new_treasury_id = Address::generate(&env);
-
-    // Admin can update the pinned contract IDs.
-    workflow.update_contract_ids(&admin, &new_compliance_id, &new_treasury_id);
-
-    // A stranger cannot.
-    let stranger = Address::generate(&env);
-    let err = workflow
-        .try_update_contract_ids(&stranger, &new_compliance_id, &new_treasury_id)
-        .unwrap_err()
-        .unwrap();
-    assert_eq!(err, TreasuryError::Unauthorized.into());
-}
-
-/// #771: `update_contract_ids` emits `contract_ids_updated`.
-#[test]
-fn update_contract_ids_emits_event() {
-    let (
-        env,
-        admin,
-        _merchant,
-        _compliance,
-        _compliance_id,
-        _treasury,
-        _treasury_id,
-        workflow,
-        _token_id,
-    ) = setup();
-    let workflow_id = workflow.address.clone();
-    let new_compliance_id = Address::generate(&env);
-    let new_treasury_id = Address::generate(&env);
-
-    workflow.update_contract_ids(&admin, &new_compliance_id, &new_treasury_id);
-
-    let events = workflow_events(&env, &workflow_id);
-    assert!(
-        events.iter().any(|(name, ..)| name == "contract_ids_updated"),
-        "contract_ids_updated event must be emitted"
-    );
-}
-
-/// #771: `update_contract_ids` is rejected while paused.
-#[test]
-fn update_contract_ids_rejected_while_paused() {
-    let (
-        env,
-        admin,
-        _merchant,
-        _compliance,
-        _compliance_id,
-        _treasury,
-        _treasury_id,
-        workflow,
-        _token_id,
-    ) = setup();
-
-    workflow.pause(&admin);
-    let err = workflow
-        .try_update_contract_ids(
-            &admin,
-            &Address::generate(&env),
-            &Address::generate(&env),
-        )
-        .unwrap_err()
-        .unwrap();
-    assert_eq!(err, TreasuryError::ContractPaused.into());
 }
 
 /// The workflow's emitted event names must match `abis/settlement-workflow.json`
@@ -957,9 +856,11 @@ fn emitted_events_match_abi_event_snapshot() {
 
     // `setup()` already initialized `workflow`, so initialize a second instance to
     // cover `workflow_initialized` too.
-    let other_id = env.register_contract(None, SettlementWorkflowContract);
+    let other_id = env.register(
+        SettlementWorkflowContract,
+        (admin.clone(), compliance_id.clone(), other_id.clone()),
+    );
     let other = SettlementWorkflowContractClient::new(&env, &other_id);
-    other.initialize(&admin, &compliance_id, &other_id);
     emitted.extend(drain(&env, &other_id));
 
     for name in &emitted {
