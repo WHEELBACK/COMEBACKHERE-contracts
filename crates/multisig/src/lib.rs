@@ -1,9 +1,32 @@
 #![no_std]
 use soroban_sdk::{contracterror, contracttype, Address, Bytes, BytesN, Env, String, Vec};
 
-/// Error codes for all treasury contract operations. Variants are append-only
-/// and must never be renumbered, as discriminants are stored on-chain and
-/// matched by off-chain systems; see `scripts/check-enum-ordering.sh`.
+/// Error codes for all treasury contract operations.
+///
+/// # Crate ownership
+///
+/// `TreasuryError` is intentionally defined here in `crates/multisig` — **not**
+/// in `contracts/treasury` — because `crates/multisig` is the canonical shared
+/// error authority for all treasury operations. The multisig crate contains the
+/// quorum primitives (`record_approval`, `require_authorized_signer`, etc.) that
+/// every treasury entrypoint depends on, and centralising the error type here
+/// ensures those primitives can raise typed errors without a circular dependency
+/// on the full treasury contract crate.
+///
+/// `contracts/treasury` re-exports `TreasuryError` via `pub use` so external
+/// consumers can import it from either path:
+/// ```rust,ignore
+/// // from the multisig crate (canonical source):
+/// use comebackhere_multisig::TreasuryError;
+/// // or from the treasury contract crate (re-export):
+/// use comebackhere_treasury::TreasuryError;
+/// ```
+///
+/// # Stability
+///
+/// Variants are append-only and must never be renumbered, as discriminants are
+/// stored on-chain and matched by off-chain systems; see
+/// `scripts/check-enum-ordering.sh`.
 #[contracterror]
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 #[repr(u32)]

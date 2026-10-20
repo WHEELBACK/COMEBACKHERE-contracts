@@ -86,6 +86,26 @@ Closes #<issue_id>
 
 The `Closes #<issue_id>` line is required. PRs without a linked issue will not be merged.
 
+## Required status checks
+
+The following CI checks are required to pass before any pull request can be merged into `main`. These are enforced as branch protection rules and cannot be bypassed:
+
+| Check | Command |
+|-------|---------|
+| Tests | `cargo test --workspace` |
+| Lints | `cargo clippy -- -D warnings` |
+| Formatting | `cargo fmt --all -- --check` |
+
+A PR that causes any of these checks to fail will be blocked from merging until the failures are resolved. Run all three locally before pushing to catch issues early:
+
+```sh
+cargo fmt --all -- --check
+cargo clippy -- -D warnings
+cargo test --workspace
+```
+
+You can also run the `just precommit` or `make precommit` target, which mirrors the exact command sequence the Pre-commit CI job runs.
+
 ## Code review
 
 - Reviewers aim to respond within **2 business days**.

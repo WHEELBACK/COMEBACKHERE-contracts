@@ -11,9 +11,16 @@ lcov.info
 # ── Test snapshots ───────────────────────────────────────────────────────────
 **/test_snapshots/
 contracts/invoice/tests/snapshots/
+contracts/treasury/tests/snapshots/
 **/*.snap.new
+**/*.snap
 .DS_Store
 **/__pycache__/
+
+# ── Local draft and notes files ───────────────────────────────────────────────
+pr.md
+TODO.md
+docs/pr-notes/
 
 # ── cargo-fuzz ───────────────────────────────────────────────────────────────
 # Per-target seed corpora and crash artifacts are local iteration state: they are
