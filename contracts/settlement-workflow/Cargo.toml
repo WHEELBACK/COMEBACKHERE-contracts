@@ -23,6 +23,7 @@ compliance-client = { package = "comebackhere-compliance-client", path = "../../
 # foreign wasm exports into this contract — unlike the `compliance` / `treasury`
 # impl crates, which stay dev-only for that reason.
 multisig = { package = "comebackhere-multisig", path = "../../crates/multisig" }
+workflow-errors = { package = "comebackhere-workflow-errors", path = "../../crates/workflow-errors" }
 
 [dev-dependencies]
 soroban-sdk = { workspace = true, features = ["testutils"] }

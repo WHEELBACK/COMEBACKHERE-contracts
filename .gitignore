@@ -14,6 +14,9 @@ contracts/invoice/tests/snapshots/
 **/*.snap.new
 .DS_Store
 **/__pycache__/
+# Trybuild intermediate stderr files — the committed .stderr files under tests/ui/
+# are the accepted baseline; wip/ holds generated output during test updates.
+**/wip/
 
 # ── cargo-fuzz ───────────────────────────────────────────────────────────────
 # Per-target seed corpora and crash artifacts are local iteration state: they are

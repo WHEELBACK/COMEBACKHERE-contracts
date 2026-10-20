@@ -1,0 +1,15 @@
+error[E0081]: discriminant value `1` assigned more than once
+  --> tests/ui/duplicate_discriminant.rs:11:1
+   |
+11 | / declare_contract_error! {
+12 | |     /// Test enum with a duplicate discriminant — must not compile.
+13 | |     pub enum DuplicateDiscriminantError {
+14 | |         First = 1,
+   | |                 - `1` assigned here
+15 | |         AlsoFirst = 1,
+   | |                     - `1` assigned here
+...  |
+18 | | }
+   | |_^
+   |
+   = note: this error originates in the macro `declare_contract_error` (in Nightly builds, run with -Z macro-backtrace for more info)

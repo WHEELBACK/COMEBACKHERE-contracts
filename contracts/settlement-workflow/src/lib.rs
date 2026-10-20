@@ -3,8 +3,9 @@
 use compliance_client::ComplianceClient;
 use multisig::{Settlement, TreasuryError};
 use soroban_sdk::{
-    contract, contractclient, contracterror, contractimpl, contracttype, Address, Env, Symbol, Vec,
+    contract, contractclient, contractimpl, contracttype, Address, Env, Symbol, Vec,
 };
+pub use workflow_errors::WorkflowError;
 
 /// Cross-contract call surface this crate needs from the treasury contract.
 /// `#[contractclient]` on a bare trait generates only an invocation client, not
@@ -51,50 +52,6 @@ pub trait PausableInterface {
 /// the protocol mid-incident with an unknown pause state. Eight comfortably
 /// covers this repository's contracts with room to grow.
 pub const MAX_PAUSE_TARGETS: u32 = 8;
-
-/// Errors raised by the workflow contract's own coordination role.
-///
-/// Distinct from [`TreasuryError`], which this crate returns from its settlement
-/// path only because it already depends on `multisig` and had no error type of
-/// its own. A coordination failure — a target would not pause, the workflow was
-/// never configured, the caller is not the pause admin — is not a treasury
-/// failure, and reporting it as one would send an operator debugging the wrong
-/// contract during an incident.
-#[contracterror]
-#[derive(Copy, Clone, Debug, Eq, PartialEq)]
-#[repr(u32)]
-pub enum WorkflowError {
-    /// The caller is not the address registered as the emergency-pause admin.
-    Unauthorized = 1,
-    /// `initialize_emergency_pause` has not been called, so there is no target
-    /// set to coordinate.
-    NotConfigured = 2,
-    /// A target refused to pause, or the invocation itself failed. The whole
-    /// fan-out is rolled back, so no target is left paused by a partial sweep.
-    PauseTargetFailed = 3,
-    /// A target refused to unpause. The whole fan-out is rolled back, so the
-    /// protocol is never left partially resumed.
-    UnpauseTargetFailed = 4,
-    /// An empty target set was supplied; there would be nothing to coordinate.
-    NoPauseTargets = 5,
-    /// More targets than [`MAX_PAUSE_TARGETS`].
-    TooManyPauseTargets = 6,
-    /// The same address appears twice, which would pause it twice and make the
-    /// second call the one that decides whether the fan-out succeeds.
-    DuplicatePauseTarget = 7,
-    /// The workflow contract itself was supplied as a target. Pausing itself
-    /// part-way through the fan-out would make every remaining call fail,
-    /// turning a recoverable incident into a workflow that cannot be resumed.
-    SelfPauseTarget = 8,
-    /// The target set cannot be reconfigured while an emergency pause is active:
-    /// the new set would not match the state that is actually paused.
-    EmergencyPauseActive = 9,
-    /// `resume_all` was called while no emergency pause is active. Distinct from
-    /// `NotConfigured` so an operator can tell "never set up" from "nothing to
-    /// undo", and so the orchestrator cannot be used to unpause a protocol that
-    /// somebody else paused through their own admin key.
-    NotEmergencyPaused = 10,
-}
 
 /// Storage keys for the workflow contract.
 ///
