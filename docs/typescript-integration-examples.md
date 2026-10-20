@@ -69,3 +69,99 @@ export async function loadProtocolHealth() {
   }>;
 }
 ```
+
+## Raise a dispute
+
+```ts
+export async function raiseDispute(input: {
+  disputeContract: string;
+  settlementId: string;
+  initiator: string;
+  reason: string;
+}) {
+  return invoke<number>({
+    contractId: input.disputeContract,
+    method: "raise_dispute",
+    args: {
+      settlement_id: input.settlementId,
+      initiator: input.initiator,
+      reason: input.reason,
+    },
+  });
+}
+```
+
+## Vote on a dispute
+
+```ts
+export async function voteOnDispute(input: {
+  disputeContract: string;
+  disputeId: string;
+  voter: string;
+  inFavor: boolean;
+}) {
+  return invoke<void>({
+    contractId: input.disputeContract,
+    method: "cast_vote",
+    args: {
+      dispute_id: input.disputeId,
+      voter: input.voter,
+      in_favor: input.inFavor,
+    },
+  });
+}
+```
+
+## Resolve a dispute
+
+```ts
+export async function resolveDispute(input: {
+  disputeContract: string;
+  disputeId: string;
+  resolver: string;
+  outcome: "refund" | "release";
+}) {
+  return invoke<void>({
+    contractId: input.disputeContract,
+    method: "resolve_dispute",
+    args: {
+      dispute_id: input.disputeId,
+      resolver: input.resolver,
+      outcome: input.outcome,
+    },
+  });
+}
+```
+
+## Hold and release a settlement
+
+```ts
+export async function holdSettlement(input: {
+  treasuryContract: string;
+  settlementId: string;
+  admin: string;
+  reason: string;
+}) {
+  return invoke<void>({
+    contractId: input.treasuryContract,
+    method: "hold_settlement",
+    args: {
+      settlement_id: input.settlementId,
+      admin: input.admin,
+      reason: input.reason,
+    },
+  });
+}
+
+export async function releaseSettlement(input: {
+  treasuryContract: string;
+  settlementId: string;
+  admin: string;
+}) {
+  return invoke<void>({
+    contractId: input.treasuryContract,
+    method: "release_settlement",
+    args: { settlement_id: input.settlementId, admin: input.admin },
+  });
+}
+```

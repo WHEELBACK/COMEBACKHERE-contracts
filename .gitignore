@@ -11,12 +11,19 @@ lcov.info
 # ── Test snapshots ───────────────────────────────────────────────────────────
 **/test_snapshots/
 contracts/invoice/tests/snapshots/
+contracts/treasury/tests/snapshots/
 **/*.snap.new
+**/*.snap
 .DS_Store
 **/__pycache__/
 # Trybuild intermediate stderr files — the committed .stderr files under tests/ui/
 # are the accepted baseline; wip/ holds generated output during test updates.
 **/wip/
+
+# ── Local draft and notes files ───────────────────────────────────────────────
+pr.md
+TODO.md
+docs/pr-notes/
 
 # ── cargo-fuzz ───────────────────────────────────────────────────────────────
 # Per-target seed corpora and crash artifacts are local iteration state: they are
@@ -24,3 +31,7 @@ contracts/invoice/tests/snapshots/
 # are the exception worth keeping — a crash reproducer is valuable, so those are
 # intentionally NOT ignored; the ignore below is scoped to corpus/ only.
 contracts/*/fuzz/corpus/
+
+testsnapshot/
+**/testsnapshot
+*.testsnapshot

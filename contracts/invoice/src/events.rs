@@ -13,7 +13,8 @@
 // - Structs (Invoice) serialize to JSON objects with field keys
 // - Optional types (Option<u64>) serialize to null or value
 
-use crate::invoice::Invoice;
+use crate::invoice::{Invoice, MaybeAddress};
+use crate::template::InvoiceTemplate;
 use crate::refund::NetRefund;
 use soroban_sdk::{contracttype, Address, Env, Symbol};
 
@@ -36,9 +37,32 @@ pub struct InvoiceExpiryExtendedEvent {
     pub new_expires_at: u64,
 }
 
+/// Payload for `invoice_created`. Carries `token_address` explicitly (schema v2)
+/// so indexers can learn the settlement asset without re-fetching the invoice (#718).
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct InvoiceCreatedEvent {
+    pub id: u64,
+    pub merchant: Address,
+    pub amount_usdc: i128,
+    pub gross_usdc: i128,
+    pub expires_at: u64,
+    pub merchant_nonce: u64,
+    pub token_address: MaybeAddress,
+}
+
 pub fn invoice_created(env: &Env, id: u64, invoice: &Invoice) {
+    let payload = InvoiceCreatedEvent {
+        id,
+        merchant: invoice.merchant.clone(),
+        amount_usdc: invoice.amount_usdc,
+        gross_usdc: invoice.gross_usdc,
+        expires_at: invoice.expires_at,
+        merchant_nonce: invoice.merchant_nonce,
+        token_address: invoice.token_address.clone(),
+    };
     env.events()
-        .publish((Symbol::new(env, "invoice_created"), id), invoice.clone());
+        .publish((Symbol::new(env, "invoice_created"), id), payload);
 }
 
 pub fn invoice_paid(env: &Env, id: u64, invoice: &Invoice) {
@@ -140,6 +164,50 @@ pub fn contract_unpaused(env: &Env, admin: &Address) {
         .publish((Symbol::new(env, "contract_unpaused"),), admin);
 }
 
+/// Emitted when the admin updates the grace window configuration.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct GraceWindowUpdatedEvent {
+    pub old_seconds: u64,
+    pub new_seconds: u64,
+}
+
+pub fn grace_window_updated(env: &Env, event: &GraceWindowUpdatedEvent) {
+    env.events()
+        .publish((Symbol::new(env, "grace_window_updated"),), event.clone());
+}
+
+/// Emitted when the admin updates the max-open-invoices limit.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct MaxOpenInvoicesUpdatedEvent {
+    pub old_limit: u32,
+    pub new_limit: u32,
+}
+
+pub fn max_open_invoices_updated(env: &Env, event: &MaxOpenInvoicesUpdatedEvent) {
+    env.events().publish(
+        (Symbol::new(env, "max_open_invoices_updated"),),
+        event.clone(),
+    );
+}
+
+/// Emitted when the admin sets or clears a per-merchant open-invoice cap (#715).
+/// `new_limit` is `None` when the override was cleared.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct MerchantMaxOpenInvoicesUpdatedEvent {
+    pub merchant: Address,
+    pub new_limit: Option<u32>,
+}
+
+pub fn merchant_max_open_invoices_updated(env: &Env, event: &MerchantMaxOpenInvoicesUpdatedEvent) {
+    env.events().publish(
+        (Symbol::new(env, "merchant_max_open_invoices_updated"),),
+        event.clone(),
+    );
+}
+
 pub fn invoice_amended(env: &Env, event: &InvoiceAmountUpdatedEvent) {
     env.events().publish(
         (Symbol::new(env, "invoice_amended"), event.id),
@@ -183,4 +251,69 @@ mod tests {
             Symbol::new(&env, "invoice_expiry_extended")
         );
     }
+}
+
+/// The admin changed the late fee: data is `(old_bps, new_bps)` (#704).
+pub fn late_fee_updated(env: &Env, old_bps: u32, new_bps: u32) {
+    env.events()
+        .publish((Symbol::new(env, "late_fee_updated"),), (old_bps, new_bps));
+}
+
+/// A recurring invoice template was registered (#698).
+pub fn template_created(env: &Env, id: u64, template: &InvoiceTemplate) {
+    env.events()
+        .publish((Symbol::new(env, "template_created"), id), template.clone());
+}
+
+/// A template was activated or deactivated: data is the new `active` flag.
+pub fn template_activated(env: &Env, id: u64, active: bool) {
+    env.events()
+        .publish((Symbol::new(env, "template_activated"), id), active);
+}
+
+/// The keeper generated an invoice: topics are the template id and invoice id (#699).
+pub fn template_generated(env: &Env, template_id: u64, invoice_id: u64) {
+    env.events().publish(
+        (
+            Symbol::new(env, "template_generated"),
+            template_id,
+            invoice_id,
+        ),
+        (),
+    );
+}
+
+/// Emitted when the admin changes the refund network fee (#701).
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct RefundNetworkFeeUpdatedEvent {
+    pub old_fee: i128,
+    pub new_fee: i128,
+}
+
+pub fn refund_network_fee_updated(env: &Env, old_fee: i128, new_fee: i128) {
+    env.events().publish(
+        (Symbol::new(env, "refund_network_fee_updated"),),
+        RefundNetworkFeeUpdatedEvent { old_fee, new_fee },
+    );
+}
+
+/// Emitted when the payer of a paid invoice transfers it to a new payer.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct InvoiceTransferredEvent {
+    pub id: u64,
+    pub from: Address,
+    pub to: Address,
+}
+
+pub fn invoice_transferred(env: &Env, id: u64, from: &Address, to: &Address) {
+    env.events().publish(
+        (Symbol::new(env, "invoice_transferred"), id),
+        InvoiceTransferredEvent {
+            id,
+            from: from.clone(),
+            to: to.clone(),
+        },
+    );
 }

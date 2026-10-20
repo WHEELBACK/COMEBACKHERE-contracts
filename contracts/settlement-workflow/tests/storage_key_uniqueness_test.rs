@@ -45,5 +45,9 @@ fn every_variant_serializes_uniquely() {
             xdr(&env, DataKey::EmergencyPauseTargets),
         ),
         ("EmergencyPausedAt", xdr(&env, DataKey::EmergencyPausedAt)),
+        ("Admin", xdr(&env, DataKey::Admin)),
+        ("PendingAdmin", xdr(&env, DataKey::PendingAdmin)),
+        ("Paused", xdr(&env, DataKey::Paused)),
+        ("SchemaVersion", xdr(&env, DataKey::SchemaVersion)),
     ]);
 }

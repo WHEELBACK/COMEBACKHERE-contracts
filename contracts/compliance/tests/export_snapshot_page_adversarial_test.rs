@@ -18,7 +18,7 @@
 // the later pages that cover its index slot.
 
 use compliance::{
-    AddressState, ComplianceContract, ComplianceContractClient, ContractError,
+    AddressState, ComplianceContract, ComplianceContractClient, ComplianceError,
     BULK_OP_COOLDOWN_SECS, MAX_BATCH_SIZE, MAX_TRACKED_ADDRESSES,
 };
 use soroban_sdk::{
@@ -89,7 +89,7 @@ fn index_filled_to_cap_rejects_further_growth() {
     // address must be rejected with AddressIndexFull.
     let one_more = Address::generate(&env);
     let result = client.try_allow_address(&admin, &one_more);
-    assert_eq!(result, Err(Ok(ContractError::AddressIndexFull)));
+    assert_eq!(result, Err(Ok(ComplianceError::AddressIndexFull)));
 }
 
 #[test]

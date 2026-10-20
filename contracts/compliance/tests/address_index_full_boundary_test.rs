@@ -2,7 +2,7 @@
 //!
 //! `ComplianceContract::track_address` (see `contracts/compliance/src/lib.rs`) only
 //! grows `DataKey::AddressIndex` when the address being tracked is *new* to the
-//! index. It rejects growth with `ContractError::AddressIndexFull` once
+//! index. It rejects growth with `ComplianceError::AddressIndexFull` once
 //! `index.len() >= MAX_TRACKED_ADDRESSES`, but never rejects an operation on an
 //! address that is already present in the index — that address's entry is a
 //! no-op with respect to `track_address`, regardless of how full the index is.
@@ -13,7 +13,7 @@
 //! 1. Filling the index to exactly `MAX_TRACKED_ADDRESSES` distinct addresses
 //!    must succeed for every single one (no off-by-one rejecting the last slot).
 //! 2. The next *new*, distinct address beyond the cap must be rejected with
-//!    `ContractError::AddressIndexFull`, not silently accepted or rejected with
+//!    `ComplianceError::AddressIndexFull`, not silently accepted or rejected with
 //!    some other error.
 //! 3. Operations on addresses that are already tracked — re-blocking an
 //!    already-blocked address, re-allowing an already-allowed address, and
@@ -25,7 +25,7 @@
 //! suite asserts against the real value rather than a hand-mirrored copy.
 
 use compliance::{
-    ComplianceContract, ComplianceContractClient, ContractError, BULK_OP_COOLDOWN_SECS,
+    ComplianceContract, ComplianceContractClient, ComplianceError, BULK_OP_COOLDOWN_SECS,
     MAX_BATCH_SIZE, MAX_TRACKED_ADDRESSES,
 };
 use soroban_sdk::{
@@ -103,7 +103,7 @@ fn new_distinct_address_beyond_cap_is_rejected_with_address_index_full() {
     let result = client.try_allow_address(&admin, &overflow_address);
     assert_eq!(
         result,
-        Err(Ok(ContractError::AddressIndexFull)),
+        Err(Ok(ComplianceError::AddressIndexFull)),
         "the (MAX_TRACKED_ADDRESSES + 1)th distinct address must be rejected"
     );
 
@@ -115,12 +115,12 @@ fn new_distinct_address_beyond_cap_is_rejected_with_address_index_full() {
     // `track_address` with a new address, not just `allow_address`.
     let overflow_address_2 = Address::generate(&env);
     let block_result = client.try_block_address(&admin, &overflow_address_2, &None);
-    assert_eq!(block_result, Err(Ok(ContractError::AddressIndexFull)));
+    assert_eq!(block_result, Err(Ok(ComplianceError::AddressIndexFull)));
 
     let overflow_address_3 = Address::generate(&env);
     let allow_until_result =
         client.try_allow_address_until(&admin, &overflow_address_3, &1_000_000);
-    assert_eq!(allow_until_result, Err(Ok(ContractError::AddressIndexFull)));
+    assert_eq!(allow_until_result, Err(Ok(ComplianceError::AddressIndexFull)));
 }
 
 #[test]
@@ -167,7 +167,7 @@ fn already_tracked_address_operations_succeed_while_index_is_full() {
     // already-tracked operations grew it.
     let overflow_address = Address::generate(&env);
     let result = client.try_allow_address(&admin, &overflow_address);
-    assert_eq!(result, Err(Ok(ContractError::AddressIndexFull)));
+    assert_eq!(result, Err(Ok(ComplianceError::AddressIndexFull)));
 }
 
 #[test]

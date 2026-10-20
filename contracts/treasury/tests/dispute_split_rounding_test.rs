@@ -92,7 +92,7 @@ fn prop_split_payout_sum_equals_disputed_amount() {
         let counterparty_before = token_client.balance(&counterparty);
 
         // Resolve the dispute with a split
-        client.resolve_dispute_split(&admin, &did, &claimant_bps, &token_id);
+        client.resolve_dispute_split(&admin, &did, &claimant_bps, &token_id, &None);
 
         // Get final balances
         let claimant_after = token_client.balance(&claimant);
@@ -144,7 +144,7 @@ fn split_zero_percent_claimant() {
     let claimant_before = token_client.balance(&claimant);
     let counterparty_before = token_client.balance(&counterparty);
 
-    client.resolve_dispute_split(&admin, &did, &0, &token_id);
+    client.resolve_dispute_split(&admin, &did, &0, &token_id, &None);
 
     let claimant_after = token_client.balance(&claimant);
     let counterparty_after = token_client.balance(&counterparty);
@@ -169,7 +169,7 @@ fn split_hundred_percent_claimant() {
     let claimant_before = token_client.balance(&claimant);
     let counterparty_before = token_client.balance(&counterparty);
 
-    client.resolve_dispute_split(&admin, &did, &BPS_DENOMINATOR, &token_id);
+    client.resolve_dispute_split(&admin, &did, &BPS_DENOMINATOR, &token_id, &None);
 
     let claimant_after = token_client.balance(&claimant);
     let counterparty_after = token_client.balance(&counterparty);
@@ -194,7 +194,7 @@ fn split_fifty_percent_claimant() {
     let claimant_before = token_client.balance(&claimant);
     let counterparty_before = token_client.balance(&counterparty);
 
-    client.resolve_dispute_split(&admin, &did, &5_000, &token_id);
+    client.resolve_dispute_split(&admin, &did, &5_000, &token_id, &None);
 
     let claimant_after = token_client.balance(&claimant);
     let counterparty_after = token_client.balance(&counterparty);
@@ -228,7 +228,7 @@ fn split_odd_amounts_various_ratios() {
         let claimant_before = token_client.balance(&claimant);
         let counterparty_before = token_client.balance(&counterparty);
 
-        client.resolve_dispute_split(&admin, &did, &claimant_bps, &token_id);
+        client.resolve_dispute_split(&admin, &did, &claimant_bps, &token_id, &None);
 
         let claimant_after = token_client.balance(&claimant);
         let counterparty_after = token_client.balance(&counterparty);
@@ -266,7 +266,7 @@ fn split_extreme_ratios() {
         let claimant_before = token_client.balance(&claimant);
         let counterparty_before = token_client.balance(&counterparty);
 
-        client.resolve_dispute_split(&admin, &did, &claimant_bps, &token_id);
+        client.resolve_dispute_split(&admin, &did, &claimant_bps, &token_id, &None);
 
         let claimant_after = token_client.balance(&claimant);
         let counterparty_after = token_client.balance(&counterparty);
@@ -304,7 +304,7 @@ fn split_remainder_assigned_to_counterparty() {
         let claimant_before = token_client.balance(&claimant);
         let counterparty_before = token_client.balance(&counterparty);
 
-        client.resolve_dispute_split(&admin, &did, &claimant_bps, &token_id);
+        client.resolve_dispute_split(&admin, &did, &claimant_bps, &token_id, &None);
 
         let claimant_after = token_client.balance(&claimant);
         let counterparty_after = token_client.balance(&counterparty);
@@ -346,7 +346,7 @@ fn split_deterministic_results() {
         let claimant_before = token_client_inner.balance(&claimant);
         let counterparty_before = token_client_inner.balance(&counterparty);
 
-        client_inner.resolve_dispute_split(&admin_inner, &did, &claimant_bps, &token_id);
+        client_inner.resolve_dispute_split(&admin_inner, &did, &claimant_bps, &token_id, &None);
 
         let claimant_after = token_client_inner.balance(&claimant);
         let counterparty_after = token_client_inner.balance(&counterparty);

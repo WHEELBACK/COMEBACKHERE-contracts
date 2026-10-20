@@ -27,6 +27,7 @@
     "get_hold_expiry",
     "get_hold_reason",
     "get_merchant_payout_address",
+    "get_payout_address_history",
     "get_pending_metrics",
     "get_pending_settlements",
     "get_pending_settlements_page",
