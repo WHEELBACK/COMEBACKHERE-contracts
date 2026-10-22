@@ -79,6 +79,29 @@ a successful invoice creation: cancelling or expiring the invoice does not delet
 the `MerchantNonce` storage entry, so a later creation by the same merchant with
 that nonce returns `DuplicateNonce`. Different merchants may use the same nonce.
 
+## Recurring invoice templates
+
+A merchant creates a template with `create_template`, which stores the invoice
+amounts, recurrence interval, expiry window, and optional metadata and payment
+link hashes. The merchant must authorize creation; the contract must not be
+paused. The first scheduled run is one full interval after creation, not
+immediate. Intervals are `Daily` (24 hours), `Weekly` (7 days), and `Monthly`
+(a fixed 30 days, without calendar-month arithmetic).
+
+The merchant or contract admin can disable or re-enable a template with
+`set_template_active`. Disabling preserves `next_run_at`; inactive templates
+are skipped by scheduled generation. A merchant can also call
+`generate_from_template` to create an invoice immediately from an active
+template. This on-demand call does not advance its recurrence schedule.
+
+Scheduled generation is permissionless: a keeper calls `generate_due_invoices`
+with template IDs. It creates one invoice for each active, due template and
+advances that template's next run past the current ledger time, so a late keeper
+does not create one invoice for every missed period. Unknown, inactive, and
+not-yet-due IDs are skipped. One call accepts at most 20 IDs, and generation is
+blocked while the invoice contract is paused. Use `get_invoice_template` or
+`list_templates_by_merchant` to inspect templates and their `next_run_at`.
+
 ## Reconstructing status history
 
 Off-chain indexers should reconstruct invoice status history from contract events,
@@ -103,7 +126,7 @@ source for a complete chronological audit trail.
 
 ## CLI usage examples
 
-Replace `$INVOICE_CONTRACT`, `$ADMIN`, `$MERCHANT`, `$PAYER`, and `$NETWORK` with your deployed values.
+Replace `$INVOICE_CONTRACT`, `$ADMIN`, `$MERCHANT`, `$PAYER`, `$KEEPER`, `$TEMPLATE_ID`, and `$NETWORK` with your deployed values.
 
 ### initialize
 
@@ -158,6 +181,67 @@ stellar contract invoke \
   -- release_escrow \
   --admin $ADMIN \
   --id 0
+```
+
+### Create a recurring template
+
+The interval is a contract enum; this example uses the `Weekly` variant.
+
+```sh
+stellar contract invoke \
+  --id $INVOICE_CONTRACT \
+  --source $MERCHANT \
+  --network $NETWORK \
+  -- create_template \
+  --merchant $MERCHANT \
+  --amount_usdc 10000000 \
+  --gross_usdc 10500000 \
+  --interval '{"Weekly":null}' \
+  --expires_in_seconds 604800 \
+  --metadata_hash null \
+  --payment_link_hash null
+```
+
+### Disable a template
+
+The merchant or contract admin can disable a template. Use the same address as
+`--source` and `--caller` so it authorizes the call.
+
+```sh
+stellar contract invoke \
+  --id $INVOICE_CONTRACT \
+  --source $MERCHANT \
+  --network $NETWORK \
+  -- set_template_active \
+  --caller $MERCHANT \
+  --id $TEMPLATE_ID \
+  --active false
+```
+
+### Generate invoices from a template
+
+The merchant can create one invoice immediately from an active template:
+
+```sh
+stellar contract invoke \
+  --id $INVOICE_CONTRACT \
+  --source $MERCHANT \
+  --network $NETWORK \
+  -- generate_from_template \
+  --merchant $MERCHANT \
+  --template_id $TEMPLATE_ID
+```
+
+A permissionless keeper can instead process due templates by ID (up to 20 IDs
+per call):
+
+```sh
+stellar contract invoke \
+  --id $INVOICE_CONTRACT \
+  --source $KEEPER \
+  --network $NETWORK \
+  -- generate_due_invoices \
+  --template_ids '[1,2]'
 ```
 
 ---

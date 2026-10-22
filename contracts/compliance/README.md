@@ -16,8 +16,11 @@ The Compliance contract manages an allowlist of addresses permitted to interact 
 | `allow_address_with_tier` | `admin` | `admin: Address, address: Address, tier: u32` | `Result<(), ContractError>` | `Unauthorized`, `ContractPaused` |
 | `get_address_tier` | None | `address: Address` | `u32` | None |
 | `get_address_history` | None | `address: Address` | `Vec<StatusHistoryEntry>` | None |
-| `set_jurisdiction` | `admin` | `admin: Address, address: Address, jurisdiction_code: Symbol` | `Result<(), ContractError>` | `Unauthorized`, `ContractPaused` |
-| `get_jurisdiction` | None | `address: Address` | `Option<Symbol>` | None |
+| `set_tier_limit` | `admin` | `admin: Address, tier: u32, limit: i128` | `Result<(), ContractError>` | `Unauthorized` |
+| `get_tier_limit` | None | `tier: u32` | `Option<i128>` | None |
+| `is_allowed_for_amount` | None | `address: Address, amount: i128` | `bool` | None |
+| `set_jurisdiction` | `admin` | `admin: Address, address: Address, code: Bytes` | `Result<(), ContractError>` | `Unauthorized`, `InvalidJurisdictionCode` |
+| `get_jurisdiction` | None | `address: Address` | `Option<Bytes>` | None |
 | `transfer_admin` | `admin` | `admin: Address, new_admin: Address` | `Result<(), ContractError>` | `Unauthorized` |
 | `accept_admin` | `new_admin` | `new_admin: Address` | `Result<(), ContractError>` | `Unauthorized` |
 | `clear_address` | `admin` | `admin: Address, address: Address` | `Result<(), ContractError>` | `Unauthorized` |
@@ -245,6 +248,30 @@ allow status. Allow expiry and `sweep_expired` never clear it:
 Integrators must gate on `is_allowed` first and only then read the tier; a
 non-zero tier alone does **not** mean the address is currently allowed. See
 `tests/tier_expiry_interaction_test.rs`.
+
+## Tiers, amount limits, and jurisdictions
+
+Tiers are integer labels. Tier `0` is the basic-KYC tier and is also the value
+returned when no tier has been stored; higher values are conventionally used
+for enhanced or institutional checks. The contract does not prescribe a fixed
+meaning for each higher number, so integrators and administrators must agree on
+their tier policy.
+
+The admin can configure a maximum settlement amount per tier with
+`set_tier_limit`. Amounts are in stroops. An unset limit is unlimited.
+`is_allowed_for_amount` is an on-chain check that returns `true` only when the
+address is currently allowed and the amount is no greater than its configured
+tier limit. The check is not automatically applied to every contract flow:
+treasury transfers call it, while the settlement workflow currently checks
+`is_allowed` without an amount. A limit therefore constrains only paths that
+call `is_allowed_for_amount`; it is not a protocol-wide cap by virtue of being
+configured.
+
+Jurisdictions are optional per-address tags set by the admin and read as
+`Bytes`. A code must contain 2 or 3 ASCII uppercase letters or digits (for
+example, `US`, `EU`, or `840`). This is a format check, not validation against
+an ISO registry. The contract stores and returns the tag but does not evaluate
+jurisdiction rules or use it in allow/deny or amount-limit decisions.
 
 ## Operator guide
 
