@@ -106,22 +106,25 @@ fn setup() -> Fixture {
     env.mock_all_auths();
 
     let operator = Address::generate(&env);
-    let workflow_id = env.register(SettlementWorkflowContract, ());
-    let workflow = SettlementWorkflowContractClient::new(&env, &workflow_id);
 
     let compliance_id = env.register(ComplianceContract, ());
     let compliance = ComplianceContractClient::new(&env, &compliance_id);
-    compliance.initialize(&workflow_id);
 
     let treasury_id = env.register(TreasuryContract, ());
     let treasury = TreasuryContractClient::new(&env, &treasury_id);
+
+    let workflow_id = env.register(
+        SettlementWorkflowContract,
+        (operator.clone(), compliance_id.clone(), treasury_id.clone()),
+    );
+    let workflow = SettlementWorkflowContractClient::new(&env, &workflow_id);
+
+    compliance.initialize(&workflow_id);
     treasury.initialize(&workflow_id, &1, &Vec::new(&env));
 
     let token_id = env.register_stellar_asset_contract(operator.clone());
     let bystander = Address::generate(&env);
     let third_party = Address::generate(&env);
-
-    workflow.initialize(&operator, &compliance_id, &treasury_id);
 
     Fixture {
         env,

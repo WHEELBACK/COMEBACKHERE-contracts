@@ -9,8 +9,14 @@ pub use protocol_math::{apply_bps_i128, is_valid_bps, split_bps_i128, BPS_DENOMI
 pub use multisig::{
     DataKey, Dispute, DisputeStatus, MaybeAddress, RotationStatus, Settlement,
     SettlementHoldReason, SettlementStatus, SignerChangeKind, SignerChangeProposal,
-    SignerChangeStatus, SignerRotationProposal, TreasuryError,
+    SignerChangeStatus, SignerRotationProposal,
 };
+// Explicit re-export so external consumers can import TreasuryError from this
+// crate directly. TreasuryError is canonically defined in `crates/multisig`
+// (the shared error authority for all treasury operations) and re-exported here
+// for convenience. See the doc comment on `TreasuryError` in that crate for the
+// full rationale.
+pub use multisig::TreasuryError;
 
 use soroban_sdk::{contract, contractimpl, Address, Bytes, Env, IntoVal, Symbol, Vec};
 

@@ -1,0 +1,32 @@
+error: enums are supported as contract errors only when all variants have an explicit integer literal
+  --> tests/ui/missing_discriminant.rs:14:1
+   |
+14 | / declare_contract_error! {
+15 | |     /// Enum where an implicit discriminant collides with an explicit one.
+16 | |     pub enum MissingDiscriminantError {
+17 | |         First = 1,
+...  |
+23 | | }
+   | |_^
+   |
+   = note: this error originates in the macro `declare_contract_error` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0081]: discriminant value `2` assigned more than once
+  --> tests/ui/missing_discriminant.rs:14:1
+   |
+14 | / declare_contract_error! {
+15 | |     /// Enum where an implicit discriminant collides with an explicit one.
+16 | |     pub enum MissingDiscriminantError {
+17 | |         First = 1,
+   | |         ----- discriminant for `Second` incremented from this startpoint (`First` + 1 variant later => `Second` = 2)
+18 | |         // Second gets implicit value 2 (First + 1).
+19 | |         Second,
+   | |         ------ `2` assigned here
+20 | |         // Explicit 2 collides with Second's implicit 2.
+21 | |         AlsoTwo = 2,
+   | |                   - `2` assigned here
+22 | |     }
+23 | | }
+   | |_^
+   |
+   = note: this error originates in the macro `declare_contract_error` (in Nightly builds, run with -Z macro-backtrace for more info)

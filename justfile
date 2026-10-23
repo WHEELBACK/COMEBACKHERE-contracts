@@ -49,6 +49,10 @@ deny:
 check-event-schema:
     python3 scripts/check-event-schema-drift.py
 
+# Verify every mod x; declaration has a corresponding source file
+check-mod-files:
+    scripts/check-mod-files.sh
+
 # Audit dependencies for known security vulnerabilities
 audit:
     cargo audit
@@ -58,7 +62,7 @@ check: fmt lint test deny
     @echo "✓ All checks passed"
 
 # Run all quality gates before pushing
-check-all: fmt lint test audit
+check-all: fmt lint test audit check-mod-files
     @echo "✓ All quality gates passed"
 
 # Literal mirror of the Pre-commit CI job's command sequence (see .github/workflows/pre-commit.yml

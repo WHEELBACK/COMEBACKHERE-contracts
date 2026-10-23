@@ -3,8 +3,9 @@
 pub use compliance_errors::ComplianceError;
 pub use invoice_errors::InvoiceError;
 pub use treasury::TreasuryError;
+pub use workflow_errors::WorkflowError;
 
-/// Unified error type spanning all three COMEBACKHERE contracts.
+/// Unified error type spanning all COMEBACKHERE contracts.
 ///
 /// Integration clients and cross-contract tests can import this single type
 /// and handle errors from any contract with one `match` arm.
@@ -14,12 +15,13 @@ pub use treasury::TreasuryError;
 /// settlement-workflow link failure this repo hit from exactly that mistake.
 /// `protocol-errors` exists to sit outside the on-chain dependency graph, not
 /// inside it, and that stays true even once this crate depends on nothing but
-/// the three error enums themselves.
+/// the four error enums themselves.
 #[derive(Copy, Clone, Debug, PartialEq)]
 pub enum ProtocolError {
     Invoice(InvoiceError),
     Treasury(TreasuryError),
     Compliance(ComplianceError),
+    Workflow(WorkflowError),
 }
 
 impl From<InvoiceError> for ProtocolError {
@@ -40,6 +42,12 @@ impl From<ComplianceError> for ProtocolError {
     }
 }
 
+impl From<WorkflowError> for ProtocolError {
+    fn from(e: WorkflowError) -> Self {
+        ProtocolError::Workflow(e)
+    }
+}
+
 impl ProtocolError {
     /// Returns the originating contract name as a static string slice.
     pub fn contract_name(&self) -> &'static str {
@@ -47,6 +55,7 @@ impl ProtocolError {
             ProtocolError::Invoice(_) => "invoice",
             ProtocolError::Treasury(_) => "treasury",
             ProtocolError::Compliance(_) => "compliance",
+            ProtocolError::Workflow(_) => "settlement-workflow",
         }
     }
 
@@ -56,6 +65,7 @@ impl ProtocolError {
             ProtocolError::Invoice(e) => invoice_description(*e),
             ProtocolError::Treasury(e) => treasury_description(*e),
             ProtocolError::Compliance(e) => compliance_description(*e),
+            ProtocolError::Workflow(e) => workflow_description(*e),
         }
     }
 }
@@ -161,6 +171,22 @@ fn treasury_description(e: TreasuryError) -> &'static str {
 fn compliance_description(e: ComplianceError) -> &'static str {
     match e {
         ComplianceError::AlreadyInitialized => "The compliance contract is already initialized.",
+    }
+}
+
+fn workflow_description(e: WorkflowError) -> &'static str {
+    use WorkflowError::*;
+    match e {
+        Unauthorized => "Caller is not the emergency-pause admin.",
+        NotConfigured => "Emergency pause has not been configured.",
+        PauseTargetFailed => "A target refused to pause; no targets were paused.",
+        UnpauseTargetFailed => "A target refused to unpause; no targets were resumed.",
+        NoPauseTargets => "An empty pause target set was supplied.",
+        TooManyPauseTargets => "Too many pause targets supplied.",
+        DuplicatePauseTarget => "The pause target list contains a duplicate address.",
+        SelfPauseTarget => "The workflow contract cannot be its own pause target.",
+        EmergencyPauseActive => "Cannot reconfigure targets while an emergency pause is active.",
+        NotEmergencyPaused => "No emergency pause is currently active.",
     }
 }
 
