@@ -80,6 +80,9 @@ pub enum DataKey {
     /// while no emergency pause is active. Doubles as the flag that blocks
     /// reconfiguration and `resume_all` while an incident is open.
     EmergencyPausedAt,
+    /// Targets that were already paused before `emergency_pause_all` ran.
+    /// `resume_all` skips these so it only reverses its own sweep.
+    AlreadyPaused,
     /// The active administrator. Set once at initialization and thereafter only
     /// changed through `accept_admin`. See #621.
     Admin,
