@@ -83,9 +83,11 @@ fn setup() -> Fixture {
     let treasury = TreasuryContractClient::new(&env, &treasury_id);
     treasury.initialize(&admin, &1, &soroban_sdk::Vec::new(&env));
 
-    let workflow_id = env.register_contract(None, SettlementWorkflowContract);
+    let workflow_id = env.register(
+        SettlementWorkflowContract,
+        (admin.clone(), compliance_id.clone(), treasury_id.clone()),
+    );
     let workflow = SettlementWorkflowContractClient::new(&env, &workflow_id);
-    workflow.initialize(&admin, &compliance_id, &treasury_id);
     treasury.set_signer(&admin, &workflow_id, &1);
 
     let token_id = env.register_stellar_asset_contract(admin.clone());
