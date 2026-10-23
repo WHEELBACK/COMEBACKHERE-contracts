@@ -640,6 +640,7 @@ pub fn meets_threshold(weight: u32, threshold: u32) -> bool {
 mod tests {
     use super::*;
     use soroban_sdk::testutils::Address as _;
+    use soroban_sdk::testutils::Ledger as _;
     use soroban_sdk::{contract, contractimpl, Env};
 
     /// Test-only pass-through contract. Every entrypoint forwards to the
@@ -691,6 +692,17 @@ mod tests {
 
         pub fn meets_threshold(weight: u32, threshold: u32) -> bool {
             crate::meets_threshold(weight, threshold)
+        }
+
+        /// Forwards to `crate::approval_expiry`, returning the built metadata so
+        /// tests can inspect `approved_at`, `expires_at`, and `signer`.
+        pub fn approval_expiry(env: Env, signer: Address, ttl_seconds: u64) -> ApprovalExpiry {
+            crate::approval_expiry(&env, &signer, ttl_seconds)
+        }
+
+        /// Forwards to `crate::approval_is_active`.
+        pub fn approval_is_active(env: Env, approval: ApprovalExpiry) -> bool {
+            crate::approval_is_active(&env, &approval)
         }
     }
 
@@ -1269,5 +1281,170 @@ mod tests {
         client.set_signer_weight(&signer, &u32::MAX);
 
         client.require_authorized_signer(&signer);
+    }
+
+    // ---------------------------------------------------------------------
+    // approval_expiry (#781)
+    // ---------------------------------------------------------------------
+
+    /// A TTL of zero means "no expiry": `expires_at` must be `0` regardless of
+    /// the current ledger timestamp. This is the sentinel value that
+    /// `approval_is_active` treats as "never expires".
+    #[test]
+    fn approval_expiry_ttl_zero_produces_no_expiry() {
+        let (env, client) = setup();
+        let signer = Address::generate(&env);
+
+        let expiry = client.approval_expiry(&signer, &0u64);
+
+        assert_eq!(expiry.signer, signer);
+        assert_eq!(expiry.expires_at, 0, "TTL=0 must set expires_at to 0");
+    }
+
+    /// With a non-zero TTL the `expires_at` field must equal
+    /// `ledger_timestamp + ttl_seconds`. This pins the exact formula so a
+    /// future refactor cannot silently change it to, e.g., `timestamp * ttl`.
+    #[test]
+    fn approval_expiry_non_zero_ttl_sets_expires_at_to_timestamp_plus_ttl() {
+        let (env, client) = setup();
+        let signer = Address::generate(&env);
+
+        // Pin the ledger timestamp to a known value so the assertion is exact.
+        env.ledger().set_timestamp(1_000);
+        let ttl: u64 = 500;
+
+        let expiry = client.approval_expiry(&signer, &ttl);
+
+        assert_eq!(expiry.approved_at, 1_000);
+        assert_eq!(
+            expiry.expires_at, 1_500,
+            "expires_at must be approved_at + ttl_seconds"
+        );
+    }
+
+    /// `approved_at` must capture the ledger timestamp at the moment of the call,
+    /// not a cached value from earlier. Two calls at different timestamps produce
+    /// different `approved_at` values.
+    #[test]
+    fn approval_expiry_approved_at_reflects_current_ledger_timestamp() {
+        let (env, client) = setup();
+        let signer = Address::generate(&env);
+
+        env.ledger().set_timestamp(100);
+        let first = client.approval_expiry(&signer, &0u64);
+        assert_eq!(first.approved_at, 100);
+
+        env.ledger().set_timestamp(200);
+        let second = client.approval_expiry(&signer, &0u64);
+        assert_eq!(second.approved_at, 200);
+    }
+
+    /// The signer address embedded in the returned metadata must be the address
+    /// that was passed in, not a default or the contract address.
+    #[test]
+    fn approval_expiry_embeds_the_correct_signer_address() {
+        let (env, client) = setup();
+        let alice = Address::generate(&env);
+        let bob = Address::generate(&env);
+
+        let for_alice = client.approval_expiry(&alice, &100u64);
+        let for_bob = client.approval_expiry(&bob, &100u64);
+
+        assert_eq!(for_alice.signer, alice);
+        assert_eq!(for_bob.signer, bob);
+        assert_ne!(for_alice.signer, for_bob.signer);
+    }
+
+    // ---------------------------------------------------------------------
+    // approval_is_active (#781)
+    // ---------------------------------------------------------------------
+
+    /// An approval with `expires_at == 0` is always active regardless of how
+    /// far the ledger has advanced — `0` is the "no expiry" sentinel.
+    #[test]
+    fn approval_is_active_with_zero_expires_at_is_always_true() {
+        let (env, client) = setup();
+        let signer = Address::generate(&env);
+
+        // Build a zero-TTL approval manually so the sentinel is explicit.
+        let approval = ApprovalExpiry {
+            signer: signer.clone(),
+            approved_at: 0,
+            expires_at: 0,
+        };
+
+        // Active at timestamp 0.
+        env.ledger().set_timestamp(0);
+        assert!(client.approval_is_active(&approval));
+
+        // Still active far in the future.
+        env.ledger().set_timestamp(u64::MAX / 2);
+        assert!(client.approval_is_active(&approval));
+    }
+
+    /// An approval is active when the current timestamp is exactly equal to
+    /// `expires_at` (boundary: inclusive on expiry).
+    #[test]
+    fn approval_is_active_at_exact_expiry_boundary_is_true() {
+        let (env, client) = setup();
+        let signer = Address::generate(&env);
+
+        let approval = ApprovalExpiry {
+            signer,
+            approved_at: 1_000,
+            expires_at: 1_500,
+        };
+
+        env.ledger().set_timestamp(1_500);
+        assert!(
+            client.approval_is_active(&approval),
+            "approval must still be active at exactly expires_at"
+        );
+    }
+
+    /// One second after `expires_at` the approval is no longer active.
+    #[test]
+    fn approval_is_active_one_second_past_expiry_is_false() {
+        let (env, client) = setup();
+        let signer = Address::generate(&env);
+
+        let approval = ApprovalExpiry {
+            signer,
+            approved_at: 1_000,
+            expires_at: 1_500,
+        };
+
+        env.ledger().set_timestamp(1_501);
+        assert!(
+            !client.approval_is_active(&approval),
+            "approval must be inactive one second after expires_at"
+        );
+    }
+
+    /// Combines `approval_expiry` and `approval_is_active`: an approval built
+    /// with a non-zero TTL must be active immediately and inactive after the TTL
+    /// has elapsed.
+    #[test]
+    fn approval_expiry_and_is_active_round_trip() {
+        let (env, client) = setup();
+        let signer = Address::generate(&env);
+        let ttl: u64 = 3_600; // 1 hour
+
+        env.ledger().set_timestamp(10_000);
+        let expiry = client.approval_expiry(&signer, &ttl);
+
+        // Active immediately after the approval is recorded.
+        assert!(
+            client.approval_is_active(&expiry),
+            "approval must be active at its own approved_at timestamp"
+        );
+
+        // Active at the boundary.
+        env.ledger().set_timestamp(13_600); // approved_at + ttl
+        assert!(client.approval_is_active(&expiry));
+
+        // Inactive one tick past the boundary.
+        env.ledger().set_timestamp(13_601);
+        assert!(!client.approval_is_active(&expiry));
     }
 }

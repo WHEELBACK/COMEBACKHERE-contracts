@@ -16,6 +16,9 @@ contracts/treasury/tests/snapshots/
 **/*.snap
 .DS_Store
 **/__pycache__/
+# Trybuild intermediate stderr files — the committed .stderr files under tests/ui/
+# are the accepted baseline; wip/ holds generated output during test updates.
+**/wip/
 
 # ── Local draft and notes files ───────────────────────────────────────────────
 pr.md
