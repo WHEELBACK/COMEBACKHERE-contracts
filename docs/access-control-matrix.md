@@ -20,6 +20,7 @@ silently reconciled.
 |---|---|
 | **Admin-only** | `require_admin(...)` (or the contract-local equivalent) is called: caller must be the stored admin address. |
 | **Admin or operator** | Caller must be the stored admin *or* the stored operator address. |
+| **Role-gated** | Caller must hold the required `Role` (`Admin`, `Operator`, or `Viewer`) in the role registry; a missing or insufficient role traps with `RoleUnauthorized`. See [Role-based authorization](#role-based-authorization). |
 | **Authorized signer** | `require_authorized_signer(...)`: caller must authenticate and hold non-zero weight in the multisig signer registry. |
 | **Self-auth (role)** | The function calls `<param>.require_auth()` on a specific parameter (e.g. `merchant`, `claimant`, `payer`, `to`, `from`, `new_admin`) — anyone can call it, but only *as* that address, which they must be able to sign for. |
 | **Self-auth + ownership check** | Self-auth as above, plus an additional in-body check that the authenticated caller matches a stored value (e.g. the invoice's recorded merchant) before the mutation proceeds. |
@@ -221,6 +222,10 @@ entrypoint calls them.
 | `add_operator` | `Self::require_admin(&env, &admin)?` — adds an address to the bounded multi-operator set (max `MAX_OPERATORS`); no pause check (role management) | Admin-only |
 | `remove_operator` | `Self::require_admin(&env, &admin)?` — removes an address from the multi-operator set; no pause check | Admin-only |
 | `get_operators` | none | Permissionless (read-only) |
+| `grant_role` | `Self::require_admin(&env, &admin)?` — grants a `Role` (`Admin`/`Operator`/`Viewer`) to an address; emits `role_granted`; no pause check (role management) | Admin-only |
+| `revoke_role` | `Self::require_admin(&env, &admin)?` — revokes a previously granted `Role`; emits `role_revoked`; no pause check | Admin-only |
+| `get_role` | none — returns the caller's stored `Role`, or `None` if unset | Permissionless (read-only) |
+| `has_role` | none — returns whether an address holds at least the queried `Role` | Permissionless (read-only) |
 | `set_blocklist_root` | `Self::require_admin(&env, &admin)?` — commits or rotates the Merkle root for the bulk blocklist; permitted while paused (same emergency policy as `block_address`) | Admin-only |
 | `get_blocklist_root` | none | Permissionless (read-only) |
 | `get_allow_expiry` | none | Permissionless (read-only) |
@@ -252,6 +257,52 @@ Source: `src/lib.rs`.
 | `get_emergency_pause_targets` | none | Permissionless (read-only) |
 | `get_emergency_pause_admin` | none | Permissionless (read-only) |
 | `get_emergency_paused_at` | none | Permissionless (read-only) |
+
+## Role-based authorization
+
+`contracts/access-control` (and the parameter-mutation entrypoints in
+`contracts/storage-layout`) gate privileged calls through a granular
+`Role` enum rather than a single admin slot:
+
+| `Role` | Intended holder | Capabilities |
+|---|---|---|
+| `Admin` | Contract administrator | Everything an `Operator` can do, plus role grant/revoke, admin transfer, pause/unpause, and parameter mutation. |
+| `Operator` | Day-to-day operator | Mutating operational entrypoints (e.g. blocking/clearing addresses, storage-layout parameter updates) but **not** role management or admin transfer. |
+| `Viewer` | Read-only auditor | Read-only entrypoints only; no state mutation. |
+
+Role checks are performed by `require_role(&env, &caller, Role::X)`, which
+calls `caller.require_auth()` and then verifies the stored role is at least
+the required level. A caller that authenticates but lacks the required role
+traps with the `RoleUnauthorized` error (`Error::RoleUnauthorized`), which
+carries the address and the missing role for diagnostics. A caller that
+cannot authenticate at all traps with the host's standard auth failure
+before the role lookup runs.
+
+Role changes emit events so off-chain indexers can track grants:
+
+- `role_granted` — `(address, role)` when `grant_role` succeeds.
+- `role_revoked` — `(address, role)` when `revoke_role` succeeds.
+
+### `contracts/storage-layout`
+
+Source: `src/lib.rs`. Previously every parameter-mutation entrypoint was
+admin-only; they are now gated by `require_role` and accept an `Operator`
+(or `Admin`) caller. Read-only getters remain permissionless.
+
+| Entrypoint | Auth check in source | Category |
+|---|---|---|
+| `initialize` | `admin.require_auth()`; only succeeds once (`AlreadyInitialized` guard) | Self-auth (bootstrap) |
+| `set_layout_param` | `require_role(&env, &caller, Role::Operator)?` — traps `RoleUnauthorized` if the caller is not at least `Operator` | Role-gated (Operator) |
+| `set_layout_params` | `require_role(&env, &caller, Role::Operator)?` — batch variant of `set_layout_param` | Role-gated (Operator) |
+| `set_storage_key` | `require_role(&env, &caller, Role::Operator)?` | Role-gated (Operator) |
+| `remove_storage_key` | `require_role(&env, &caller, Role::Operator)?` | Role-gated (Operator) |
+| `set_layout_version` | `require_role(&env, &caller, Role::Admin)?` — version bumps are admin-only | Role-gated (Admin) |
+| `grant_role` | `require_role(&env, &caller, Role::Admin)?` — emits `role_granted` | Role-gated (Admin) |
+| `revoke_role` | `require_role(&env, &caller, Role::Admin)?` — emits `role_revoked` | Role-gated (Admin) |
+| `get_role` | none | Permissionless (read-only) |
+| `get_layout_param` | none | Permissionless (read-only) |
+| `get_layout_params` | none | Permissionless (read-only) |
+| `get_layout_version` | none | Permissionless (read-only) |
 
 ## Discrepancies found
 
