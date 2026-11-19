@@ -4,6 +4,9 @@ members = [
     "contracts/treasury",
     "contracts/compliance",
     "contracts/settlement-workflow",
+    "contracts/event-emitter",
+    "contracts/access-control",
+    "contracts/recovery-manager",
     "tests",
     "crates/compliance-client",
     "crates/error-macros",
@@ -24,6 +27,9 @@ repository = "https://github.com/WHEELBACK/COMEBACKHERE-contracts"
 [workspace.dependencies]
 soroban-sdk = { version = "29.0.1" }
 stellar-xdr = "0.0.18"
+
+[workspace.dev-dependencies]
+soroban-sdk = { version = "29.0.1", features = ["testutils"] }
 
 [profile.release]
 opt-level = "z"
