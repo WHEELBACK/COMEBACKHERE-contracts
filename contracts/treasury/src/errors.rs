@@ -24,4 +24,10 @@ pub enum TreasuryError {
     TooManySigners = 9,
     /// The signer weight must be greater than zero; use `remove_signer` to remove a signer.
     ZeroSignerWeight = 10,
+    /// The balance is zero and the requested operation cannot proceed.
+    ZeroBalance = 11,
+    /// An arithmetic operation overflowed or underflowed.
+    ArithmeticError = 12,
+    /// A division by zero was attempted.
+    DivisionByZero = 13,
 }

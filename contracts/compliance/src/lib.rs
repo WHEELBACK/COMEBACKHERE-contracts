@@ -30,6 +30,10 @@
 #![no_std]
 
 pub use compliance_errors::ComplianceError;
+/// Alias kept for entrypoints that historically returned `ContractError`
+/// (e.g. `bulk_get_address_status`). The workspace has a single compliance
+/// error enum, so this is the same type under a second name.
+pub use compliance_errors::ComplianceError as ContractError;
 use soroban_sdk::{
     contract, contractimpl, contracttype, xdr::ToXdr, Address, Bytes, BytesN, Env, Symbol, Vec,
 };
