@@ -226,6 +226,20 @@ pub const MAX_OPERATORS: u32 = 10;
 /// without limit. Once full, the oldest entry is dropped when a new one is appended.
 pub const MAX_STATUS_HISTORY: u32 = 10;
 
+/// Ledger-sequence threshold below which a persistent compliance entry is
+/// considered at risk of eviction and its TTL is extended (#965).
+///
+/// Mirrors the `storage-layout` contract's `STORAGE_LAYOUT_TTL_THRESHOLD`: when a
+/// persistent `Allowed`/`Blocked`/`AllowedUntil`/`BlockedUntil`/`BlockReason`
+/// entry is read or written and its remaining TTL is below this many ledgers, it
+/// is bumped to [`STORAGE_LAYOUT_TTL_EXTEND_TO`]. Without this, long-lived
+/// allow/block entries could be archived out from under the compliance gate.
+pub const STORAGE_LAYOUT_TTL_THRESHOLD: u32 = 100;
+
+/// Ledger count a persistent compliance entry's TTL is extended to when it
+/// falls below [`STORAGE_LAYOUT_TTL_THRESHOLD`] (#965).
+pub const STORAGE_LAYOUT_TTL_EXTEND_TO: u32 = 1_000;
+
 #[contract]
 pub struct ComplianceContract;
 
@@ -271,9 +285,9 @@ impl ComplianceContract {
                 .persistent()
                 .get(&DataKey::Allowed(address.clone()))
                 .unwrap_or(false);
-            env.storage()
-                .persistent()
-                .set(&DataKey::Allowed(address.clone()), &true);
+            let allowed_key = DataKey::Allowed(address.clone());
+            env.storage().persistent().set(&allowed_key, &true);
+            Self::bump_persistent_ttl(&env, &allowed_key);
             env.storage()
                 .persistent()
                 .remove(&DataKey::AllowedUntil(address.clone()));
@@ -391,31 +405,41 @@ impl ComplianceContract {
         // `Allowed` first: an address that is not allowed is `false` under the
         // precedence no matter what its block flag says, so `Blocked` and
         // `BlockedUntil` do not need to be read at all.
-        let allowed: bool = storage
-            .get(&DataKey::Allowed(address.clone()))
-            .unwrap_or(false);
+        let allowed_key = DataKey::Allowed(address.clone());
+        let allowed: bool = storage.get(&allowed_key).unwrap_or(false);
         if !allowed {
             return false;
         }
+        // Reading an entry does not refresh its TTL, so bump it explicitly to
+        // keep long-lived allow entries from being evicted (#965).
+        Self::bump_persistent_ttl(env, &allowed_key);
 
         // On the allowlist, so block status is now the deciding question. If
         // there is a `BlockedUntil` timestamp, the block auto-expires once
         // now >= unblock_at and stops overriding the allow.
-        let blocked: bool = storage
-            .get(&DataKey::Blocked(address.clone()))
-            .unwrap_or(false);
-        if blocked
-            && !matches!(
-                storage.get::<_, u64>(&DataKey::BlockedUntil(address.clone())),
-                Some(unblock_at) if now >= unblock_at
-            )
-        {
-            return false;
+        let blocked_key = DataKey::Blocked(address.clone());
+        let blocked: bool = storage.get(&blocked_key).unwrap_or(false);
+        if blocked {
+            Self::bump_persistent_ttl(env, &blocked_key);
+            let blocked_until_key = DataKey::BlockedUntil(address.clone());
+            let unblock_at: Option<u64> = storage.get(&blocked_until_key);
+            if let Some(unblock_at) = unblock_at {
+                Self::bump_persistent_ttl(env, &blocked_until_key);
+                if now < unblock_at {
+                    return false;
+                }
+            } else {
+                return false;
+            }
         }
 
         // Check optional expiry on the allow
-        match storage.get::<_, u64>(&DataKey::AllowedUntil(address.clone())) {
-            Some(expires_at) => now < expires_at,
+        let allowed_until_key = DataKey::AllowedUntil(address.clone());
+        match storage.get::<_, u64>(&allowed_until_key) {
+            Some(expires_at) => {
+                Self::bump_persistent_ttl(env, &allowed_until_key);
+                now < expires_at
+            }
             None => true,
         }
     }
@@ -447,10 +471,12 @@ impl ComplianceContract {
 
     /// Returns whether `address` is explicitly blocked. No auth required.
     pub fn is_blocked(env: Env, address: Address) -> bool {
-        env.storage()
-            .persistent()
-            .get(&DataKey::Blocked(address))
-            .unwrap_or(false)
+        let key = DataKey::Blocked(address);
+        let blocked: bool = env.storage().persistent().get(&key).unwrap_or(false);
+        if blocked {
+            Self::bump_persistent_ttl(&env, &key);
+        }
+        blocked
     }
 
     /// Permanently allow an address. Removes any existing expiry.
@@ -473,9 +499,9 @@ impl ComplianceContract {
             .persistent()
             .get(&DataKey::Allowed(address.clone()))
             .unwrap_or(false);
-        env.storage()
-            .persistent()
-            .set(&DataKey::Allowed(address.clone()), &true);
+        let allowed_key = DataKey::Allowed(address.clone());
+        env.storage().persistent().set(&allowed_key, &true);
+        Self::bump_persistent_ttl(&env, &allowed_key);
         // Remove any expiry so this becomes a permanent allow.
         env.storage()
             .persistent()
@@ -514,9 +540,9 @@ impl ComplianceContract {
     ) -> Result<(), ComplianceError> {
         Self::require_admin(&env, &admin)?;
         Self::require_not_paused(&env)?;
-        env.storage()
-            .persistent()
-            .set(&DataKey::Allowed(address.clone()), &true);
+        let allowed_key = DataKey::Allowed(address.clone());
+        env.storage().persistent().set(&allowed_key, &true);
+        Self::bump_persistent_ttl(&env, &allowed_key);
         env.storage()
             .persistent()
             .remove(&DataKey::AllowedUntil(address.clone()));
@@ -657,9 +683,9 @@ impl ComplianceContract {
             return Err(ComplianceError::BatchTooLarge);
         }
         for address in addresses.iter() {
-            env.storage()
-                .persistent()
-                .set(&DataKey::Blocked(address.clone()), &true);
+            let blocked_key = DataKey::Blocked(address.clone());
+            env.storage().persistent().set(&blocked_key, &true);
+            Self::bump_persistent_ttl(&env, &blocked_key);
             // Admin-placed by construction: `bulk_block_addresses` is admin-only, so
             // no operator may clear these afterwards (#604).
             Self::record_block_placer(&env, &address, &admin);
@@ -698,14 +724,14 @@ impl ComplianceContract {
         reason: Option<BlockReason>,
     ) -> Result<(), ComplianceError> {
         Self::require_admin_or_operator(&env, &caller)?;
-        env.storage()
-            .persistent()
-            .set(&DataKey::Blocked(address.clone()), &true);
+        let blocked_key = DataKey::Blocked(address.clone());
+        env.storage().persistent().set(&blocked_key, &true);
+        Self::bump_persistent_ttl(&env, &blocked_key);
         Self::record_block_placer(&env, &address, &caller);
         if let Some(r) = reason {
-            env.storage()
-                .persistent()
-                .set(&DataKey::BlockReason(address.clone()), &r);
+            let reason_key = DataKey::BlockReason(address.clone());
+            env.storage().persistent().set(&reason_key, &r);
+            Self::bump_persistent_ttl(&env, &reason_key);
         }
         Self::append_status_history(&env, &address, AddressState::Blocked, &caller);
         Self::track_address(&env, &address)?;
@@ -726,17 +752,19 @@ impl ComplianceContract {
         reason: Option<BlockReason>,
     ) -> Result<(), ComplianceError> {
         Self::require_admin_or_operator(&env, &caller)?;
+        let blocked_key = DataKey::Blocked(address.clone());
+        env.storage().persistent().set(&blocked_key, &true);
+        Self::bump_persistent_ttl(&env, &blocked_key);
+        let blocked_until_key = DataKey::BlockedUntil(address.clone());
         env.storage()
             .persistent()
-            .set(&DataKey::Blocked(address.clone()), &true);
-        env.storage()
-            .persistent()
-            .set(&DataKey::BlockedUntil(address.clone()), &unblock_at);
+            .set(&blocked_until_key, &unblock_at);
+        Self::bump_persistent_ttl(&env, &blocked_until_key);
         Self::record_block_placer(&env, &address, &caller);
         if let Some(r) = reason {
-            env.storage()
-                .persistent()
-                .set(&DataKey::BlockReason(address.clone()), &r);
+            let reason_key = DataKey::BlockReason(address.clone());
+            env.storage().persistent().set(&reason_key, &r);
+            Self::bump_persistent_ttl(&env, &reason_key);
         }
         Self::append_status_history(&env, &address, AddressState::Blocked, &caller);
         Self::track_address(&env, &address)?;
@@ -754,14 +782,22 @@ impl ComplianceContract {
     /// operator-placed block apart from an admin-placed (e.g. sanctions) block
     /// without having to infer it from transaction history.
     pub fn get_block_placer(env: Env, address: Address) -> Option<Address> {
-        env.storage().persistent().get(&DataKey::BlockedBy(address))
+        let key = DataKey::BlockedBy(address);
+        let placer: Option<Address> = env.storage().persistent().get(&key);
+        if placer.is_some() {
+            Self::bump_persistent_ttl(&env, &key);
+        }
+        placer
     }
 
     /// Returns the stored block reason for an address, if any.
     pub fn get_block_reason(env: Env, address: Address) -> Option<BlockReason> {
-        env.storage()
-            .persistent()
-            .get(&DataKey::BlockReason(address))
+        let key = DataKey::BlockReason(address);
+        let reason: Option<BlockReason> = env.storage().persistent().get(&key);
+        if reason.is_some() {
+            Self::bump_persistent_ttl(&env, &key);
+        }
+        reason
     }
 
     /// Returns the schema version set at initialization.
@@ -836,12 +872,14 @@ impl ComplianceContract {
     ) -> Result<(), ComplianceError> {
         Self::require_admin(&env, &admin)?;
         Self::require_not_paused(&env)?;
+        let allowed_key = DataKey::Allowed(address.clone());
+        env.storage().persistent().set(&allowed_key, &true);
+        Self::bump_persistent_ttl(&env, &allowed_key);
+        let allowed_until_key = DataKey::AllowedUntil(address.clone());
         env.storage()
             .persistent()
-            .set(&DataKey::Allowed(address.clone()), &true);
-        env.storage()
-            .persistent()
-            .set(&DataKey::AllowedUntil(address.clone()), &expires_at);
+            .set(&allowed_until_key, &expires_at);
+        Self::bump_persistent_ttl(&env, &allowed_until_key);
         Self::append_status_history(&env, &address, AddressState::Allowed, &admin);
         Self::track_address(&env, &address)?;
         env.events().publish(
@@ -986,9 +1024,9 @@ impl ComplianceContract {
             .persistent()
             .get(&DataKey::Allowed(address.clone()))
             .unwrap_or(false);
-        env.storage()
-            .persistent()
-            .set(&DataKey::Blocked(address.clone()), &false);
+        let blocked_key = DataKey::Blocked(address.clone());
+        env.storage().persistent().set(&blocked_key, &false);
+        Self::bump_persistent_ttl(&env, &blocked_key);
         env.storage()
             .persistent()
             .remove(&DataKey::BlockedUntil(address.clone()));
@@ -1000,9 +1038,9 @@ impl ComplianceContract {
         env.storage()
             .persistent()
             .remove(&DataKey::BlockedBy(address.clone()));
-        env.storage()
-            .persistent()
-            .set(&DataKey::Allowed(address.clone()), &true);
+        let allowed_key = DataKey::Allowed(address.clone());
+        env.storage().persistent().set(&allowed_key, &true);
+        Self::bump_persistent_ttl(&env, &allowed_key);
         // Clear allow expiry
         env.storage()
             .persistent()
@@ -1304,9 +1342,12 @@ impl ComplianceContract {
     /// Returns the raw expiry timestamp (seconds since epoch) for `address`, or
     /// `None` if the address has no time-limited allow entry (permanent allow or no allow).
     pub fn get_allow_expiry(env: Env, address: Address) -> Option<u64> {
-        env.storage()
-            .persistent()
-            .get::<_, u64>(&DataKey::AllowedUntil(address))
+        let key = DataKey::AllowedUntil(address);
+        let expiry: Option<u64> = env.storage().persistent().get::<_, u64>(&key);
+        if expiry.is_some() {
+            Self::bump_persistent_ttl(&env, &key);
+        }
+        expiry
     }
 
     /// Returns the bounded history of status changes for `address` (#603).
@@ -1315,10 +1356,16 @@ impl ComplianceContract {
     /// [`MAX_STATUS_HISTORY`]. If no status changes have been recorded for the
     /// address, an empty vector is returned.
     pub fn get_address_history(env: Env, address: Address) -> Vec<StatusHistoryEntry> {
-        env.storage()
+        let key = DataKey::StatusHistory(address);
+        let history: Vec<StatusHistoryEntry> = env
+            .storage()
             .persistent()
-            .get(&DataKey::StatusHistory(address))
-            .unwrap_or_else(|| Vec::new(&env))
+            .get(&key)
+            .unwrap_or_else(|| Vec::new(&env));
+        if !history.is_empty() {
+            Self::bump_persistent_ttl(&env, &key);
+        }
+        history
     }
 
     /// Sweep tracked addresses for lapsed time-bound allow entries.
@@ -1352,23 +1399,26 @@ impl ComplianceContract {
             if limit > 0 && swept >= limit {
                 break;
             }
+            let allowed_key = DataKey::Allowed(addr.clone());
             let allowed: bool = env
                 .storage()
                 .persistent()
-                .get(&DataKey::Allowed(addr.clone()))
+                .get(&allowed_key)
                 .unwrap_or(false);
             if !allowed {
                 continue;
             }
+            Self::bump_persistent_ttl(&env, &allowed_key);
+            let allowed_until_key = DataKey::AllowedUntil(addr.clone());
             let expires_at: Option<u64> = env
                 .storage()
                 .persistent()
-                .get(&DataKey::AllowedUntil(addr.clone()));
+                .get(&allowed_until_key);
             if let Some(expires_at) = expires_at {
+                Self::bump_persistent_ttl(&env, &allowed_until_key);
                 if now >= expires_at {
-                    env.storage()
-                        .persistent()
-                        .set(&DataKey::Allowed(addr.clone()), &false);
+                    env.storage().persistent().set(&allowed_key, &false);
+                    Self::bump_persistent_ttl(&env, &allowed_key);
                     env.storage()
                         .persistent()
                         .remove(&DataKey::AllowedUntil(addr.clone()));
@@ -1491,11 +1541,13 @@ impl ComplianceContract {
         if !allowed {
             return Ok(AddressState::Blocked);
         }
+        let allowed_until_key = DataKey::AllowedUntil(address);
         if let Some(expires_at) = env
             .storage()
             .persistent()
-            .get::<_, u64>(&DataKey::AllowedUntil(address))
+            .get::<_, u64>(&allowed_until_key)
         {
+            Self::bump_persistent_ttl(&env, &allowed_until_key);
             if env.ledger().timestamp() < expires_at {
                 Ok(AddressState::Allowed)
             } else {
@@ -1504,6 +1556,22 @@ impl ComplianceContract {
         } else {
             Ok(AddressState::Allowed)
         }
+    }
+
+    /// Extends the TTL of a persistent compliance entry when it is close to
+    /// eviction (#965).
+    ///
+    /// Soroban does not refresh an entry's TTL on read, so every read/write of a
+    /// long-lived `Allowed`/`Blocked`/`AllowedUntil`/`BlockedUntil`/`BlockReason`
+    /// entry calls this to keep it live. The bump is a no-op for keys that are
+    /// not currently stored, so callers may invoke it unconditionally after a
+    /// read or write without a separate `has()` probe.
+    fn bump_persistent_ttl(env: &Env, key: &DataKey) {
+        env.storage().persistent().extend_ttl(
+            key,
+            STORAGE_LAYOUT_TTL_THRESHOLD,
+            STORAGE_LAYOUT_TTL_EXTEND_TO,
+        );
     }
 
     fn require_admin(env: &Env, admin: &Address) -> Result<(), ComplianceError> {
@@ -1527,9 +1595,9 @@ impl ComplianceContract {
 
     /// Records `placer` as the address that placed the block on `address` (#604).
     fn record_block_placer(env: &Env, address: &Address, placer: &Address) {
-        env.storage()
-            .persistent()
-            .set(&DataKey::BlockedBy(address.clone()), placer);
+        let key = DataKey::BlockedBy(address.clone());
+        env.storage().persistent().set(&key, placer);
+        Self::bump_persistent_ttl(env, &key);
     }
 
     /// Enforces that `caller` may reverse the block on `address` (#604).
@@ -1559,14 +1627,16 @@ impl ComplianceContract {
     /// Falls back to the stored admin for blocks placed before provenance tracking,
     /// so a legacy block is attributed to the role that could always clear it.
     fn block_placer(env: &Env, address: &Address) -> Option<Address> {
+        let blocked_key = DataKey::Blocked(address.clone());
         let blocked: bool = env
             .storage()
             .persistent()
-            .get(&DataKey::Blocked(address.clone()))
+            .get(&blocked_key)
             .unwrap_or(false);
         if !blocked {
             return None;
         }
+        Self::bump_persistent_ttl(env, &blocked_key);
         match env
             .storage()
             .persistent()
@@ -1636,27 +1706,33 @@ impl ComplianceContract {
     /// Compute the current [`AddressState`] for a single address without auth.
     #[allow(dead_code)]
     fn address_state(env: &Env, addr: &Address) -> AddressState {
+        let blocked_key = DataKey::Blocked(addr.clone());
         let blocked: bool = env
             .storage()
             .persistent()
-            .get(&DataKey::Blocked(addr.clone()))
+            .get(&blocked_key)
             .unwrap_or(false);
         if blocked {
+            Self::bump_persistent_ttl(env, &blocked_key);
             return AddressState::Blocked;
         }
+        let allowed_key = DataKey::Allowed(addr.clone());
         let allowed: bool = env
             .storage()
             .persistent()
-            .get(&DataKey::Allowed(addr.clone()))
+            .get(&allowed_key)
             .unwrap_or(false);
         if !allowed {
             return AddressState::Blocked;
         }
+        Self::bump_persistent_ttl(env, &allowed_key);
+        let allowed_until_key = DataKey::AllowedUntil(addr.clone());
         if let Some(expires_at) = env
             .storage()
             .persistent()
-            .get::<_, u64>(&DataKey::AllowedUntil(addr.clone()))
+            .get::<_, u64>(&allowed_until_key)
         {
+            Self::bump_persistent_ttl(env, &allowed_until_key);
             if env.ledger().timestamp() < expires_at {
                 AddressState::Allowed
             } else {
@@ -1756,8 +1832,150 @@ impl ComplianceContract {
         });
 
         env.storage().persistent().set(&key, &history);
+        Self::bump_persistent_ttl(env, &key);
     }
 }
 
 #[cfg(test)]
 extern crate std;
+
+#[cfg(test)]
+mod ttl_tests {
+    use super::*;
+    use soroban_sdk::testutils::Ledger as _;
+
+    fn setup() -> (Env, ComplianceContractClient<'static>, Address) {
+        let env = Env::default();
+        env.mock_all_auths();
+        let contract_id = env.register(ComplianceContract, ());
+        let client = ComplianceContractClient::new(&env, &contract_id);
+        let admin = Address::generate(&env);
+        client.initialize(&admin);
+        (env, client, admin)
+    }
+
+    /// Reads the remaining TTL of a persistent entry, if it is still live.
+    fn remaining_ttl(env: &Env, contract_id: &Address, key: &DataKey) -> Option<u32> {
+        env.as_contract(contract_id, || {
+            env.storage().persistent().get_ttl(key)
+        })
+    }
+
+    #[test]
+    fn allow_address_extends_persistent_ttl() {
+        let (env, client, admin) = setup();
+        let address = Address::generate(&env);
+        client.allow_address(&admin, &address);
+
+        let contract_id = client.address.clone();
+        let ttl = remaining_ttl(&env, &contract_id, &DataKey::Allowed(address.clone()))
+            .expect("Allowed entry should be live");
+        assert!(
+            ttl >= STORAGE_LAYOUT_TTL_THRESHOLD,
+            "TTL {ttl} should be at least the threshold after allow_address"
+        );
+    }
+
+    #[test]
+    fn is_allowed_bumps_ttl_on_read() {
+        let (env, client, admin) = setup();
+        let address = Address::generate(&env);
+        client.allow_address(&admin, &address);
+
+        let contract_id = client.address.clone();
+        let key = DataKey::Allowed(address.clone());
+        // Advance the ledger so the entry's TTL falls below the threshold.
+        env.ledger()
+            .set_sequence_number(env.ledger().sequence() + STORAGE_LAYOUT_TTL_THRESHOLD + 1);
+        let before = remaining_ttl(&env, &contract_id, &key).unwrap_or(0);
+        assert!(before < STORAGE_LAYOUT_TTL_THRESHOLD);
+
+        assert!(client.is_allowed(&address));
+
+        let after = remaining_ttl(&env, &contract_id, &key).expect("entry should still be live");
+        assert!(
+            after >= STORAGE_LAYOUT_TTL_THRESHOLD,
+            "is_allowed should bump the Allowed TTL ({before} -> {after})"
+        );
+    }
+
+    #[test]
+    fn block_address_extends_persistent_ttl() {
+        let (env, client, admin) = setup();
+        let address = Address::generate(&env);
+        client.block_address(&admin, &address, &Some(BlockReason::Fraud));
+
+        let contract_id = client.address.clone();
+        for key in [
+            DataKey::Blocked(address.clone()),
+            DataKey::BlockReason(address.clone()),
+        ] {
+            let ttl = remaining_ttl(&env, &contract_id, &key).expect("entry should be live");
+            assert!(
+                ttl >= STORAGE_LAYOUT_TTL_THRESHOLD,
+                "TTL {ttl} should be at least the threshold after block_address"
+            );
+        }
+    }
+
+    #[test]
+    fn is_blocked_bumps_ttl_on_read() {
+        let (env, client, admin) = setup();
+        let address = Address::generate(&env);
+        client.block_address(&admin, &address, &None);
+
+        let contract_id = client.address.clone();
+        let key = DataKey::Blocked(address.clone());
+        env.ledger()
+            .set_sequence_number(env.ledger().sequence() + STORAGE_LAYOUT_TTL_THRESHOLD + 1);
+        let before = remaining_ttl(&env, &contract_id, &key).unwrap_or(0);
+        assert!(before < STORAGE_LAYOUT_TTL_THRESHOLD);
+
+        assert!(client.is_blocked(&address));
+
+        let after = remaining_ttl(&env, &contract_id, &key).expect("entry should still be live");
+        assert!(
+            after >= STORAGE_LAYOUT_TTL_THRESHOLD,
+            "is_blocked should bump the Blocked TTL ({before} -> {after})"
+        );
+    }
+
+    #[test]
+    fn allow_address_until_extends_expiry_ttl() {
+        let (env, client, admin) = setup();
+        let address = Address::generate(&env);
+        let expires_at = env.ledger().timestamp() + 10_000;
+        client.allow_address_until(&admin, &address, &expires_at);
+
+        let contract_id = client.address.clone();
+        let ttl = remaining_ttl(&env, &contract_id, &DataKey::AllowedUntil(address.clone()))
+            .expect("AllowedUntil entry should be live");
+        assert!(ttl >= STORAGE_LAYOUT_TTL_THRESHOLD);
+    }
+
+    #[test]
+    fn block_address_until_extends_expiry_ttl() {
+        let (env, client, admin) = setup();
+        let address = Address::generate(&env);
+        let unblock_at = env.ledger().timestamp() + 10_000;
+        client.block_address_until(&admin, &address, &unblock_at, &None);
+
+        let contract_id = client.address.clone();
+        let ttl = remaining_ttl(&env, &contract_id, &DataKey::BlockedUntil(address.clone()))
+            .expect("BlockedUntil entry should be live");
+        assert!(ttl >= STORAGE_LAYOUT_TTL_THRESHOLD);
+    }
+
+    #[test]
+    fn repeated_reads_do_not_regress_metering() {
+        // Sanity check that the TTL bump on the read path does not blow up the
+        // instruction budget: a batch of reads on a live entry must complete.
+        let (env, client, admin) = setup();
+        let address = Address::generate(&env);
+        client.allow_address(&admin, &address);
+
+        for _ in 0..10 {
+            assert!(client.is_allowed(&address));
+        }
+    }
+}

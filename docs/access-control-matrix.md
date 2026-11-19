@@ -1,13 +1,19 @@
 # Access-Control Matrix
 
 This document enumerates every `pub fn` in the `#[contractimpl]` blocks of
-`contracts/invoice`, `contracts/treasury`, `contracts/compliance`, and
-`contracts/settlement-workflow`, and records the **actual** authorization
-check found in each function's body — not what a doc comment claims, since
-doc comments can lag behind implementation (see #14/#55-style precedent).
+`contracts/invoice`, `contracts/treasury`, `contracts/compliance`,
+`contracts/settlement-workflow`, and `contracts/access-control`, and records
+the **actual** authorization check found in each function's body — not what a
+doc comment claims, since doc comments can lag behind implementation (see
+#14/#55-style precedent).
 It exists to support #117's planned external audit and to give an
 auditor, new contributor, or reviewer a single place to check "who can call
 this?" without reading all source files.
+
+For `contracts/access-control`, each row also names the `AccessControlError`
+variant returned on the failure path, so clients can map a returned error code
+back to the documented auth failure (see
+[`AccessControlError` discriminants](#accesscontrolerror-discriminants)).
 
 Each entry was verified by reading the function body directly. Where a doc
 comment's stated auth requirement did not match the code, it is called out
@@ -252,6 +258,51 @@ Source: `src/lib.rs`.
 | `get_emergency_pause_targets` | none | Permissionless (read-only) |
 | `get_emergency_pause_admin` | none | Permissionless (read-only) |
 | `get_emergency_paused_at` | none | Permissionless (read-only) |
+
+## `contracts/access-control`
+
+Source: `src/lib.rs`, `src/errors.rs`, `src/admin.rs`, `src/roles.rs`,
+`src/pause.rs`.
+
+| Entrypoint | Auth check in source | Category | Error on failure |
+|---|---|---|---|
+| `initialize` | `admin.require_auth()`; only succeeds once (`AlreadyInitialized` guard) | Self-auth (bootstrap) | `AlreadyInitialized` |
+| `get_admin` | none | Permissionless (read-only) | `NotInitialized` (when unset) |
+| `transfer_admin` | `require_admin(&env, &admin)?` | Admin-only | `Unauthorized` |
+| `accept_admin` | `new_admin.require_auth()`; checked against stored `PendingAdmin` | Self-auth (role) | `NoPendingAdmin`, `Unauthorized` |
+| `cancel_admin_transfer` | `require_admin(&env, &admin)?` | Admin-only | `Unauthorized`, `NoPendingAdmin` |
+| `get_pending_admin` | none | Permissionless (read-only) | — |
+| `grant_role` | `require_admin(&env, &admin)?` | Admin-only | `Unauthorized`, `InvalidRole` |
+| `revoke_role` | `require_admin(&env, &admin)?` | Admin-only | `Unauthorized`, `InvalidRole` |
+| `has_role` | none | Permissionless (read-only) | — |
+| `get_role_members` | none (bounded page) | Permissionless (read-only) | `InvalidRole` |
+| `pause` | `require_admin(&env, &admin)?` | Admin-only | `Unauthorized`, `ContractPaused` |
+| `unpause` | `require_admin(&env, &admin)?` | Admin-only | `Unauthorized` |
+| `is_paused` | none | Permissionless (read-only) | — |
+| `set_operator` | `require_admin(&env, &admin)?` | Admin-only | `Unauthorized` |
+| `get_operator` | none | Permissionless (read-only) | — |
+| `require_role` | caller `require_auth()` + role membership check | Self-auth (role) | `Unauthorized`, `InvalidRole` |
+| `require_not_paused` | none (reads pause flag) | Permissionless (read-only) | `ContractPaused` |
+
+## `AccessControlError` discriminants
+
+`contracts/access-control/src/errors.rs` defines a single `#[contracterror]`
+enum, `AccessControlError`, with explicit discriminants. These values are part
+of the contract's public ABI: clients should match on the numeric code returned
+in the `ScError` payload rather than on message text. Discriminants are stable
+and must not be renumbered — append new variants at the end.
+
+| Code | Variant | Meaning |
+|---|---|---|
+| 1 | `Unauthorized` | Caller is not the stored admin, or failed a role/ownership check. |
+| 2 | `NotInitialized` | Contract has not been initialized yet. |
+| 3 | `AlreadyInitialized` | `initialize` was called more than once. |
+| 4 | `ContractPaused` | Operation rejected because the contract is paused. |
+| 5 | `InvalidRole` | Role symbol is not one of the recognized roles. |
+| 6 | `NoPendingAdmin` | `accept_admin`/`cancel_admin_transfer` called with no outstanding nomination. |
+| 7 | `RoleAlreadyGranted` | `grant_role` called for an address that already holds the role. |
+| 8 | `RoleNotGranted` | `revoke_role` called for an address that does not hold the role. |
+| 9 | `TooManyRoleMembers` | Role member set is at capacity. |
 
 ## Discrepancies found
 

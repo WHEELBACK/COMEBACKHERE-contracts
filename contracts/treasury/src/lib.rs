@@ -91,6 +91,28 @@ pub(crate) const MAX_ALLOWED_TOKENS: u32 = 20;
 /// Default TTL (in ledgers) for a deposit reference id before it can be reused (#747).
 pub(crate) const DEPOSIT_REF_TTL_LEDGERS: u32 = 30 * 24 * 60 * 60 / 5;
 
+/// Ledger-count threshold below which a persistent storage entry is considered
+/// "at risk" of eviction and gets its TTL bumped (#965). Roughly 30 days at
+/// 5-second ledgers.
+pub(crate) const STORAGE_LAYOUT_TTL_THRESHOLD: u32 = 30 * 24 * 60 * 60 / 5;
+
+/// Ledger-count the TTL is extended to when a persistent entry is bumped (#965).
+/// Roughly 90 days at 5-second ledgers, giving operators ample time to act on
+/// long-lived settlements and disputes before they can be archived.
+pub(crate) const STORAGE_LAYOUT_TTL_EXTEND_TO: u32 = 90 * 24 * 60 * 60 / 5;
+
+/// Bumps the TTL of a persistent storage entry so open records cannot be
+/// archived out from under the contract (#965). Called on every persistent
+/// `Settlement`/`Dispute` read/write path. Idempotent and cheap when the entry
+/// is already above `STORAGE_LAYOUT_TTL_THRESHOLD`.
+pub(crate) fn bump_persistent_ttl(env: &Env, key: &DataKey) {
+    env.storage().persistent().extend_ttl(
+        key,
+        STORAGE_LAYOUT_TTL_THRESHOLD,
+        STORAGE_LAYOUT_TTL_EXTEND_TO,
+    );
+}
+
 pub(crate) fn require_admin(env: &Env, admin: &Address) {
     admin.require_auth();
     // An uninitialized contract has no admin, so it fails closed as Unauthorized.
@@ -148,9 +170,9 @@ pub(crate) fn require_compliance_allowed(
 /// drift from what `settlement.status == Pending` actually says, without having to
 /// duplicate that add/remove bookkeeping at each call site individually.
 pub(crate) fn write_settlement(env: &Env, id: u64, settlement: &Settlement) {
-    env.storage()
-        .persistent()
-        .set(&DataKey::Settlement(id), settlement);
+    let key = DataKey::Settlement(id);
+    env.storage().persistent().set(&key, settlement);
+    bump_persistent_ttl(env, &key);
 
     let mut index: Vec<u64> = env
         .storage()
@@ -193,6 +215,35 @@ pub(crate) fn clear_hold_state(env: &Env, id: u64) {
     env.storage().persistent().remove(&DataKey::HoldExpiry(id));
 }
 
+/// Reads a persistent `Settlement`, bumping its TTL so an open record cannot be
+/// archived while it is still being acted upon (#965).
+pub(crate) fn read_settlement(env: &Env, id: u64) -> Option<Settlement> {
+    let key = DataKey::Settlement(id);
+    let settlement: Option<Settlement> = env.storage().persistent().get(&key);
+    if settlement.is_some() {
+        bump_persistent_ttl(env, &key);
+    }
+    settlement
+}
+
+/// Reads a persistent `Dispute`, bumping its TTL so an open record cannot be
+/// archived while it is still being acted upon (#965).
+pub(crate) fn read_dispute(env: &Env, id: u64) -> Option<Dispute> {
+    let key = DataKey::Dispute(id);
+    let dispute: Option<Dispute> = env.storage().persistent().get(&key);
+    if dispute.is_some() {
+        bump_persistent_ttl(env, &key);
+    }
+    dispute
+}
+
+/// Writes a persistent `Dispute` and bumps its TTL (#965).
+pub(crate) fn write_dispute(env: &Env, id: u64, dispute: &Dispute) {
+    let key = DataKey::Dispute(id);
+    env.storage().persistent().set(&key, dispute);
+    bump_persistent_ttl(env, &key);
+}
+
 /// Rejects a deposit whose reference id was already seen within the TTL window
 /// (#747). Records `ref_id` with a TTL so storage stays bounded and the id can
 /// be reused once the entry expires.
@@ -211,3 +262,99 @@ pub(crate) fn record_deposit_reference(env: &Env, ref_id: &Bytes) -> Result<(), 
 
 #[cfg(test)]
 extern crate std;
+
+#[cfg(test)]
+mod ttl_tests {
+    use super::*;
+    use soroban_sdk::testutils::storage::Persistent as _;
+    use soroban_sdk::testutils::Ledger as _;
+    use soroban_sdk::{Address, Env};
+
+    fn setup() -> (Env, TreasuryContractClient<'static>, Address) {
+        let env = Env::default();
+        env.mock_all_auths();
+        let contract_id = env.register(TreasuryContract, ());
+        let client = TreasuryContractClient::new(&env, &contract_id);
+        let admin = Address::generate(&env);
+        client.initialize(&admin, &1u32, &Vec::new(&env));
+        (env, client, admin)
+    }
+
+    #[test]
+    fn write_settlement_bumps_persistent_ttl() {
+        let (env, _client, _admin) = setup();
+        let id = 1u64;
+        let settlement = Settlement {
+            id,
+            status: SettlementStatus::Pending,
+            ..Default::default()
+        };
+        env.as_contract(&env.current_contract_address(), || {
+            write_settlement(&env, id, &settlement);
+            let ttl = env.storage().persistent().get_ttl(&DataKey::Settlement(id));
+            assert!(ttl >= STORAGE_LAYOUT_TTL_THRESHOLD);
+        });
+    }
+
+    #[test]
+    fn read_settlement_bumps_persistent_ttl() {
+        let (env, _client, _admin) = setup();
+        let id = 2u64;
+        let settlement = Settlement {
+            id,
+            status: SettlementStatus::Pending,
+            ..Default::default()
+        };
+        env.as_contract(&env.current_contract_address(), || {
+            write_settlement(&env, id, &settlement);
+            // Advance the ledger so the TTL drops below the threshold.
+            env.ledger()
+                .set_sequence_number(env.ledger().sequence() + STORAGE_LAYOUT_TTL_THRESHOLD + 1);
+            let before = env.storage().persistent().get_ttl(&DataKey::Settlement(id));
+            assert!(before < STORAGE_LAYOUT_TTL_THRESHOLD);
+            let _ = read_settlement(&env, id);
+            let after = env.storage().persistent().get_ttl(&DataKey::Settlement(id));
+            assert!(after >= STORAGE_LAYOUT_TTL_THRESHOLD);
+        });
+    }
+
+    #[test]
+    fn read_dispute_bumps_persistent_ttl() {
+        let (env, _client, _admin) = setup();
+        let id = 3u64;
+        let dispute = Dispute {
+            id,
+            status: DisputeStatus::Open,
+            ..Default::default()
+        };
+        env.as_contract(&env.current_contract_address(), || {
+            write_dispute(&env, id, &dispute);
+            env.ledger()
+                .set_sequence_number(env.ledger().sequence() + STORAGE_LAYOUT_TTL_THRESHOLD + 1);
+            let before = env.storage().persistent().get_ttl(&DataKey::Dispute(id));
+            assert!(before < STORAGE_LAYOUT_TTL_THRESHOLD);
+            let _ = read_dispute(&env, id);
+            let after = env.storage().persistent().get_ttl(&DataKey::Dispute(id));
+            assert!(after >= STORAGE_LAYOUT_TTL_THRESHOLD);
+        });
+    }
+
+    #[test]
+    fn bump_persistent_ttl_is_idempotent() {
+        let (env, _client, _admin) = setup();
+        let id = 4u64;
+        let settlement = Settlement {
+            id,
+            status: SettlementStatus::Pending,
+            ..Default::default()
+        };
+        env.as_contract(&env.current_contract_address(), || {
+            write_settlement(&env, id, &settlement);
+            let first = env.storage().persistent().get_ttl(&DataKey::Settlement(id));
+            bump_persistent_ttl(&env, &DataKey::Settlement(id));
+            let second = env.storage().persistent().get_ttl(&DataKey::Settlement(id));
+            // A second bump when already above the threshold must not shrink the TTL.
+            assert!(second >= first);
+        });
+    }
+}
