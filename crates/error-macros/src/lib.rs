@@ -103,7 +103,9 @@
 //!    `error-macros = { package = "comebackhere-error-macros", path = "../error-macros" }`.
 //! 2. Pick the crate's numeric range so it does not collide with another
 //!    contract's — see `ARCHITECTURE.md`'s "Error-Code Ranges per Contract" and
-//!    the per-crate READMEs under `crates/`.
+//!    the per-crate READMEs under `crates/`. The `event-emitter` contract's
+//!    codes live in `crates/event-emitter-errors` (`EventEmitterError`, range
+//!    `7000..=7099`), declared with this macro.
 //! 3. Start the enum at `1` and document in its rustdoc that variants are
 //!    append-only.
 //! 4. Add a README with a code/name/meaning table, matching
