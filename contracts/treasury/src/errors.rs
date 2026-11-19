@@ -24,4 +24,10 @@ pub enum TreasuryError {
     TooManySigners = 9,
     /// The signer weight must be greater than zero; use `remove_signer` to remove a signer.
     ZeroSignerWeight = 10,
+    /// An arithmetic operation underflowed (e.g. a checked subtraction of
+    /// settlement amounts exceeded the available balance).
+    ArithmeticUnderflow = 11,
+    /// A strict state invariant was violated, indicating possible state
+    /// inconsistency that must be rejected defensively.
+    InvariantViolation = 12,
 }

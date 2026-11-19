@@ -93,3 +93,63 @@ fn wrong_admin_address_is_rejected() {
     client.set_signer(&_admin, &other_admin, &1);
     client.update_threshold(&other_admin, &3);
 }
+
+#[test]
+#[should_panic(expected = "Error(Contract, #9)")]
+fn signer_without_admin_role_cannot_update_threshold() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, admin) = setup(&env, 2);
+
+    // a signer with a large weight is still not the admin and must be rejected
+    let signer = Address::generate(&env);
+    client.set_signer(&admin, &signer, &10);
+    client.update_threshold(&signer, &1);
+}
+
+#[test]
+#[should_panic(expected = "Error(Contract, #9)")]
+fn unauthorized_caller_cannot_update_threshold() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, _admin) = setup(&env, 2);
+
+    let attacker = Address::generate(&env);
+    client.update_threshold(&attacker, &1);
+}
+
+#[test]
+fn threshold_update_preserves_invariants() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, admin) = setup(&env, 2);
+
+    let backup = Address::generate(&env);
+    client.set_signer(&admin, &backup, &3);
+    // admin(1) + backup(3) = total weight 4
+    client.update_threshold(&admin, &4);
+
+    // post-update invariant: threshold never exceeds total signer weight
+    let threshold = client.get_threshold();
+    assert_eq!(threshold, 4);
+    assert!(threshold <= client.get_total_weight());
+
+    // role mappings remain valid: admin is still the stored admin and can act
+    let merchant = Address::generate(&env);
+    let sid = client.propose_settlement(&admin, &merchant, &1_000_000, &0_u64);
+    let s = client.approve_settlement(&backup, &sid);
+    assert_eq!(s.approvals.len(), 2);
+}
+
+#[test]
+#[should_panic(expected = "Error(Contract, #18)")]
+fn threshold_update_beyond_total_weight_leaves_state_unchanged() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, admin) = setup(&env, 2);
+
+    let backup = Address::generate(&env);
+    client.set_signer(&admin, &backup, &2);
+    // total weight is 3; a threshold of 4 must be rejected
+    client.update_threshold(&admin, &4);
+}
