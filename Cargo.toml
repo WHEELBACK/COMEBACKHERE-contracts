@@ -14,6 +14,10 @@ members = [
     "crates/protocol-errors",
     "crates/protocol-math",
 ]
+exclude = [
+    "contracts/storage-layout/fuzz",
+    "contracts/access-control/fuzz",
+]
 resolver = "2"
 
 [workspace.package]

@@ -7,7 +7,7 @@
 pub use protocol_math::{apply_bps_i128, is_valid_bps, split_bps_i128, BPS_DENOMINATOR};
 
 pub use multisig::{
-    DataKey, Dispute, DisputeStatus, MaybeAddress, RotationStatus, Settlement,
+    DataKey, Dispute, DisputeStatus, MaybeAddress, Role, RotationStatus, Settlement,
     SettlementHoldReason, SettlementStatus, SignerChangeKind, SignerChangeProposal,
     SignerChangeStatus, SignerRotationProposal,
 };
@@ -97,6 +97,29 @@ pub(crate) fn require_admin(env: &Env, admin: &Address) {
     let stored: Option<Address> = env.storage().instance().get(&DataKey::Admin);
     if stored.as_ref() != Some(admin) {
         soroban_sdk::panic_with_error!(env, TreasuryError::Unauthorized);
+    }
+}
+
+/// Granular role-based authorization gate (#960).
+///
+/// Performs `require_auth` on `account` and then a *single* targeted lookup of
+/// `DataKey::Role(account)` to confirm the stored role equals `role`. The role
+/// is read once per call (no repeated deserialization) to keep host memory and
+/// CPU instruction usage minimal.
+///
+/// Fails closed: when no role is stored for `account` the call panics with
+/// `TreasuryError::RoleUnauthorized`, so an uninitialized or unprivileged
+/// account can never mutate parameters.
+///
+/// Every parameter-mutation entrypoint (threshold, expiry, allowlist,
+/// compliance client, pause/unpause, ...) MUST call this helper instead of
+/// relying on `require_admin` alone.
+pub(crate) fn require_role(env: &Env, account: &Address, role: Role) {
+    account.require_auth();
+    let stored: Option<Role> = env.storage().instance().get(&DataKey::Role(account.clone()));
+    match stored {
+        Some(stored_role) if stored_role == role => {}
+        _ => soroban_sdk::panic_with_error!(env, TreasuryError::RoleUnauthorized),
     }
 }
 

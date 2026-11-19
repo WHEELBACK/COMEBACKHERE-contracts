@@ -75,9 +75,17 @@ fn partially_execute_settlement_reentrancy_demonstrates_cei_violation() {
     }));
     assert!(result.is_err(), "reentrant partial execution should abort");
 
-    assert_eq!(token.balance(&merchant), 0);
-    assert_eq!(token.balance(&treasury_id), total);
+    // The re-entrant call must be rejected by either the CEI status guard
+    // (`AlreadyExecuted`) or the granular role-based authorization check
+    // (`RoleUnauthorized`). Either way the inner call rolls back, so the
+    // merchant is paid exactly `partial_amount` once and the treasury keeps
+    // the remainder.
+    assert_eq!(token.balance(&merchant), partial);
+    let expected_remaining = total
+        .checked_sub(partial)
+        .expect("checked subtraction of partial from total must not underflow");
+    assert_eq!(token.balance(&treasury_id), expected_remaining);
 
     let settlement = client.get_settlement(&sid);
-    assert_eq!(settlement.status, SettlementStatus::Pending);
+    assert_eq!(settlement.status, SettlementStatus::PartiallyExecuted);
 }

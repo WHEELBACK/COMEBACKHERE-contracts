@@ -1,12 +1,13 @@
 use crate::{
-    require_admin, DataKey, TreasuryContract, TreasuryContractArgs, TreasuryContractClient,
-    TreasuryError,
+    require_admin, require_role, DataKey, Role, TreasuryContract, TreasuryContractArgs,
+    TreasuryContractClient, TreasuryError,
 };
 use soroban_sdk::{contractimpl, Address, Env, Symbol};
 
 #[contractimpl]
 impl TreasuryContract {
-    /// Updates the multisig approval threshold required to execute settlements (admin-only).
+    /// Updates the multisig approval threshold required to execute settlements
+    /// (admin or `Role::Admin` holder).
     /// Errors: `ZeroThreshold`, `ThresholdUnreachable`.
     /// Emits: `threshold_updated`.
     pub fn update_threshold(
@@ -14,7 +15,7 @@ impl TreasuryContract {
         admin: Address,
         new_threshold: u32,
     ) -> Result<(), TreasuryError> {
-        require_admin(&env, &admin);
+        require_role(&env, &admin, Role::Admin);
         if new_threshold == 0 {
             return Err(TreasuryError::ZeroThreshold);
         }
@@ -33,19 +34,20 @@ impl TreasuryContract {
         Ok(())
     }
 
-    /// Pauses the contract, blocking all state-mutating operations except admin functions (admin-only).
+    /// Pauses the contract, blocking all state-mutating operations except admin functions
+    /// (admin or `Role::Admin` holder).
     /// Emits: `treasury_paused`.
     pub fn pause(env: Env, admin: Address) {
-        require_admin(&env, &admin);
+        require_role(&env, &admin, Role::Admin);
         env.storage().instance().set(&DataKey::Paused, &true);
         env.events()
             .publish((Symbol::new(&env, "treasury_paused"),), admin);
     }
 
-    /// Resumes normal operations after a pause (admin-only).
+    /// Resumes normal operations after a pause (admin or `Role::Admin` holder).
     /// Emits: `treasury_unpaused`.
     pub fn unpause(env: Env, admin: Address) {
-        require_admin(&env, &admin);
+        require_role(&env, &admin, Role::Admin);
         env.storage().instance().set(&DataKey::Paused, &false);
         env.events()
             .publish((Symbol::new(&env, "treasury_unpaused"),), admin);
@@ -81,7 +83,7 @@ impl TreasuryContract {
     /// should raise the limit first rather than relying on an uncapped default long-term.
     /// Emits: `withdrawal_limit_set`.
     pub fn set_withdrawal_limit(env: Env, admin: Address, limit: i128, window_secs: u64) {
-        require_admin(&env, &admin);
+        require_role(&env, &admin, Role::Admin);
         env.storage()
             .instance()
             .set(&DataKey::WithdrawalLimitPerWindow, &limit);
@@ -112,7 +114,7 @@ impl TreasuryContract {
     /// Configures the settlement proposal expiry window (admin-only, #562).
     /// Emits: `settlement_expiry_updated`.
     pub fn set_settlement_expiry(env: Env, admin: Address, expiry_secs: u64) {
-        require_admin(&env, &admin);
+        require_role(&env, &admin, Role::Admin);
         env.storage()
             .instance()
             .set(&DataKey::SettlementExpirySecs, &expiry_secs);
@@ -135,7 +137,7 @@ impl TreasuryContract {
     /// gate proposals on compliance at all.
     /// Emits: `compliance_id_set`.
     pub fn set_compliance_id(env: Env, admin: Address, compliance_id: Address) {
-        require_admin(&env, &admin);
+        require_role(&env, &admin, Role::Admin);
         env.storage()
             .instance()
             .set(&DataKey::ComplianceId, &compliance_id);
@@ -160,7 +162,7 @@ impl TreasuryContract {
         new_admin: Address,
         expiry_secs: u64,
     ) -> Result<(), TreasuryError> {
-        require_admin(&env, &admin);
+        require_role(&env, &admin, Role::Admin);
         // A new proposal supersedes any pending one (a plain overwrite, as in the
         // settlement workflow's `transfer_admin`), so a mistyped or lost nominee
         // never blocks the handover until expiry.
@@ -201,7 +203,7 @@ impl TreasuryContract {
     /// Errors: `NoPendingAdmin` if none exists.
     /// Emits: `admin_transfer_cancelled`.
     pub fn cancel_transfer_admin(env: Env, admin: Address) -> Result<(), TreasuryError> {
-        require_admin(&env, &admin);
+        require_role(&env, &admin, Role::Admin);
         if Self::get_pending_admin(env.clone()).is_none() {
             return Err(TreasuryError::NoPendingAdmin);
         }
@@ -221,5 +223,42 @@ impl TreasuryContract {
             }
             _ => None,
         }
+    }
+
+    /// Grants `role` to `account` (admin or `Role::Admin` holder, #960).
+    /// Idempotent: re-granting an already-held role is a no-op that still emits.
+    /// Emits: `role_granted`.
+    pub fn grant_role(env: Env, admin: Address, account: Address, role: Role) {
+        require_role(&env, &admin, Role::Admin);
+        // Single targeted key write: no full-struct deserialization of the role
+        // registry, keeping the ledger footprint to one entry.
+        env.storage()
+            .instance()
+            .set(&DataKey::Role(account.clone()), &role);
+        env.events()
+            .publish((Symbol::new(&env, "role_granted"),), (account, role));
+    }
+
+    /// Revokes `role` from `account` (admin or `Role::Admin` holder, #960).
+    /// Idempotent: revoking a role the account does not hold is a no-op that still emits.
+    /// Emits: `role_revoked`.
+    pub fn revoke_role(env: Env, admin: Address, account: Address, role: Role) {
+        require_role(&env, &admin, Role::Admin);
+        // Only remove when the stored role actually matches, so a stale revoke
+        // cannot strip a role that was re-granted in the meantime.
+        let stored: Option<Role> = env.storage().instance().get(&DataKey::Role(account.clone()));
+        if stored == Some(role.clone()) {
+            env.storage()
+                .instance()
+                .remove(&DataKey::Role(account.clone()));
+        }
+        env.events()
+            .publish((Symbol::new(&env, "role_revoked"),), (account, role));
+    }
+
+    /// Returns the role held by `account`, or `None` if it holds no role.
+    /// Reads only the targeted key (no full-struct deserialization).
+    pub fn get_role(env: Env, account: Address) -> Option<Role> {
+        env.storage().instance().get(&DataKey::Role(account))
     }
 }

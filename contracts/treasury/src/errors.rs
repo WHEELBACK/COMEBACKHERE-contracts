@@ -24,4 +24,8 @@ pub enum TreasuryError {
     TooManySigners = 9,
     /// The signer weight must be greater than zero; use `remove_signer` to remove a signer.
     ZeroSignerWeight = 10,
+    /// An arithmetic operation would underflow during partial settlement computation.
+    ArithmeticUnderflow = 11,
+    /// The caller does not hold the role required for this parameter modification.
+    RoleUnauthorized = 12,
 }
