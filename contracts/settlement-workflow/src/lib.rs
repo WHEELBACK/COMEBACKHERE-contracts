@@ -1,11 +1,16 @@
 #![no_std]
 
 use compliance_client::ComplianceClient;
-use multisig::{Settlement, TreasuryError};
+use multisig::{Settlement, SettlementStatus};
 use soroban_sdk::{
-    contract, contractclient, contractimpl, contracttype, Address, Env, Symbol, Vec,
+    contract, contractclient, contractimpl, contracttype, Address, Env, String, Symbol, Vec,
 };
-pub use workflow_errors::WorkflowError;
+
+pub mod errors;
+pub mod invariants;
+pub mod ttl;
+
+pub use errors::{TreasuryError, WorkflowError};
 
 /// Cross-contract call surface this crate needs from the treasury contract.
 /// `#[contractclient]` on a bare trait generates only an invocation client, not
@@ -127,6 +132,7 @@ impl SettlementWorkflowContract {
         env.storage()
             .instance()
             .set(&DataKey::TreasuryId, &treasury_id);
+        ttl::extend_instance(&env);
         env.events().publish(
             (Symbol::new(&env, "workflow_initialized"),),
             (admin, compliance_id, treasury_id),
@@ -161,6 +167,8 @@ impl SettlementWorkflowContract {
         env.storage()
             .instance()
             .set(&DataKey::PendingAdmin, &new_admin);
+        invariants::enforce(&env);
+        ttl::extend_instance(&env);
         env.events()
             .publish((Symbol::new(&env, "admin_transfer_initiated"),), new_admin);
         Ok(())
@@ -193,25 +201,29 @@ impl SettlementWorkflowContract {
         }
         env.storage().instance().set(&DataKey::Admin, &new_admin);
         env.storage().instance().remove(&DataKey::PendingAdmin);
+        invariants::enforce(&env);
+        ttl::extend_instance(&env);
         env.events()
             .publish((Symbol::new(&env, "admin_transferred"),), new_admin);
         Ok(())
     }
 
-    /// Returns the pinned compliance contract instance.
-    fn compliance_id(env: &Env) -> Address {
-        env.storage()
-            .instance()
-            .get(&DataKey::ComplianceId)
-            .unwrap_or_else(|| soroban_sdk::panic_with_error!(env, WorkflowError::NotConfigured))
+    /// Returns the pinned `(compliance, treasury)` instances, trapping with
+    /// `NotConfigured` if either is missing or `InvariantViolation` if they are
+    /// the same contract or the workflow itself (#873).
+    fn pinned_contracts(env: &Env) -> (Address, Address) {
+        invariants::checked_pinned_contracts(env)
+            .unwrap_or_else(|e| soroban_sdk::panic_with_error!(env, e))
     }
 
-    /// Returns the pinned treasury contract instance.
-    fn treasury_id(env: &Env) -> Address {
-        env.storage()
-            .instance()
-            .get(&DataKey::TreasuryId)
-            .unwrap_or_else(|| soroban_sdk::panic_with_error!(env, WorkflowError::NotConfigured))
+    /// Post-condition of a successful treasury execution (#873): the settlement
+    /// must now be `Executed`. Anything else means treasury and workflow
+    /// disagree about what happened, so the invocation is reverted instead of
+    /// emitting a `settlement_workflow_executed` event for it.
+    fn require_executed(env: &Env, settlement: &Settlement) {
+        if settlement.status != SettlementStatus::Executed {
+            soroban_sdk::panic_with_error!(env, WorkflowError::SettlementNotExecuted);
+        }
     }
 
     /// Returns the pinned compliance contract instance so ops can confirm
@@ -242,6 +254,7 @@ impl SettlementWorkflowContract {
     pub fn pause(env: Env, admin: Address) -> Result<(), TreasuryError> {
         Self::require_admin(&env, &admin)?;
         env.storage().instance().set(&DataKey::Paused, &true);
+        ttl::extend_instance(&env);
         env.events()
             .publish((Symbol::new(&env, "settlement_workflow_paused"),), admin);
         Ok(())
@@ -252,6 +265,7 @@ impl SettlementWorkflowContract {
     pub fn unpause(env: Env, admin: Address) -> Result<(), TreasuryError> {
         Self::require_admin(&env, &admin)?;
         env.storage().instance().set(&DataKey::Paused, &false);
+        ttl::extend_instance(&env);
         env.events()
             .publish((Symbol::new(&env, "settlement_workflow_unpaused"),), admin);
         Ok(())
@@ -271,6 +285,27 @@ impl SettlementWorkflowContract {
             .instance()
             .get(&DataKey::Admin)
             .ok_or(TreasuryError::Unauthorized)
+    }
+
+    /// Checks every stored-state invariant (#873) and returns the first
+    /// violation as `InvariantViolation`. Read-only, so operators and monitors
+    /// can audit a live deployment.
+    pub fn verify_invariants(env: Env) -> Result<(), WorkflowError> {
+        invariants::check(&env)
+    }
+
+    /// Human-readable explanation of a `WorkflowError` code (#874), so a client
+    /// holding only the raw `Error(Contract, #n)` can show what went wrong and
+    /// how to recover. Returns `None` for codes this contract never returns.
+    pub fn get_error_message(env: Env, code: u32) -> Option<String> {
+        errors::message_for(code).map(|msg| String::from_str(&env, msg))
+    }
+
+    /// Extends the contract instance TTL (#875). Permissionless, so a keeper
+    /// can keep an idle workflow from being archived; state-changing
+    /// entrypoints already do this automatically.
+    pub fn extend_ttl(env: Env) {
+        ttl::extend_instance(&env);
     }
 
     /// Traps with [`TreasuryError::ContractPaused`] while the workflow is paused (#616).
@@ -324,9 +359,11 @@ impl SettlementWorkflowContract {
         merchant: Address,
     ) -> Result<(), TreasuryError> {
         Self::require_not_paused(&env);
-        let compliance = ComplianceClient::new(&env, &Self::compliance_id(&env));
+        let (compliance_id, treasury_id) = Self::pinned_contracts(&env);
+        ttl::extend_instance(&env);
+        let compliance = ComplianceClient::new(&env, &compliance_id);
         compliance.require_allowed_for_treasury(&merchant)?;
-        let treasury = TreasuryOnlyClient::new(&env, &Self::treasury_id(&env));
+        let treasury = TreasuryOnlyClient::new(&env, &treasury_id);
         treasury.execute_settlement(
             &env.current_contract_address(),
             &settlement_id,
@@ -335,7 +372,9 @@ impl SettlementWorkflowContract {
         // Read the amount *after* execution, so a non-existent / already-executed
         // settlement still fails inside `execute_settlement` exactly as before this
         // event existed instead of trapping in this read first.
-        let amount = treasury.get_settlement(&settlement_id).amount;
+        let settlement = treasury.get_settlement(&settlement_id);
+        Self::require_executed(&env, &settlement);
+        let amount = settlement.amount;
         env.events().publish(
             (
                 Symbol::new(&env, "settlement_workflow_executed"),
@@ -368,9 +407,11 @@ impl SettlementWorkflowContract {
         merchant: Address,
     ) -> Result<Vec<u64>, TreasuryError> {
         Self::require_not_paused(&env);
-        let compliance = ComplianceClient::new(&env, &Self::compliance_id(&env));
+        let (compliance_id, treasury_id) = Self::pinned_contracts(&env);
+        ttl::extend_instance(&env);
+        let compliance = ComplianceClient::new(&env, &compliance_id);
         compliance.require_allowed_for_treasury(&merchant)?;
-        let treasury = TreasuryOnlyClient::new(&env, &Self::treasury_id(&env));
+        let treasury = TreasuryOnlyClient::new(&env, &treasury_id);
         let requested = settlement_ids.len();
         let mut executed = Vec::new(&env);
         for id in settlement_ids.iter() {
@@ -383,7 +424,9 @@ impl SettlementWorkflowContract {
                 // Read after execution: a skipped (non-existent) ID is never read,
                 // so `get_settlement`'s `SettlementNotFound` panic can't turn a
                 // skippable ID into a batch-wide abort.
-                let amount = treasury.get_settlement(&id).amount;
+                let settlement = treasury.get_settlement(&id);
+                Self::require_executed(&env, &settlement);
+                let amount = settlement.amount;
                 executed.push_back(id);
                 env.events().publish(
                     (Symbol::new(&env, "settlement_workflow_executed"), id),
@@ -429,8 +472,12 @@ impl SettlementWorkflowContract {
     /// misconfiguration is rejected here rather than half-applied during an
     /// incident.
     ///
+    /// The caller must be the current emergency-pause admin, or — for the
+    /// first configuration — the workflow admin (#872).
+    ///
     /// Errors: `Unauthorized`, `NoPauseTargets`, `TooManyPauseTargets`,
-    /// `DuplicatePauseTarget`, `SelfPauseTarget`, `EmergencyPauseActive`.
+    /// `DuplicatePauseTarget`, `SelfPauseTarget`, `EmergencyPauseActive`,
+    /// `InvariantViolation`.
     /// Emits: `emergency_pause_configured`.
     pub fn initialize_emergency_pause(
         env: Env,
@@ -445,6 +492,17 @@ impl SettlementWorkflowContract {
             // them, so they could never be resumed.
             return Err(WorkflowError::EmergencyPauseActive);
         }
+        // Only the current pause admin may reconfigure, and only the workflow
+        // admin may configure it the first time. Without this any caller could
+        // overwrite `EmergencyPauseAdmin` and take over the emergency pause (#872).
+        let owner: Option<Address> = env
+            .storage()
+            .instance()
+            .get(&DataKey::EmergencyPauseAdmin)
+            .or_else(|| env.storage().instance().get(&DataKey::Admin));
+        if owner.as_ref() != Some(&admin) {
+            return Err(WorkflowError::Unauthorized);
+        }
         Self::validate_pause_targets(&env, &targets)?;
 
         env.storage()
@@ -453,6 +511,8 @@ impl SettlementWorkflowContract {
         env.storage()
             .instance()
             .set(&DataKey::EmergencyPauseTargets, &targets);
+        invariants::check(&env)?;
+        ttl::extend_instance(&env);
         env.events().publish(
             (Symbol::new(&env, "emergency_pause_configured"),),
             (admin, targets),
@@ -508,6 +568,11 @@ impl SettlementWorkflowContract {
     pub fn emergency_pause_all(env: Env, admin: Address) -> Result<Vec<Address>, WorkflowError> {
         admin.require_auth();
         Self::require_pause_admin(&env, &admin)?;
+        if Self::emergency_paused_at(&env).is_some() {
+            // A second sweep would overwrite `EmergencyPausedAt` and restart the
+            // `resume_all` cooling-off window mid-incident (#873).
+            return Err(WorkflowError::EmergencyPauseActive);
+        }
 
         let targets = Self::pause_targets(&env)?;
         let self_address = env.current_contract_address();
@@ -527,6 +592,8 @@ impl SettlementWorkflowContract {
         env.storage()
             .instance()
             .set(&DataKey::EmergencyPausedAt, &env.ledger().timestamp());
+        invariants::check(&env)?;
+        ttl::extend_instance(&env);
         env.events().publish(
             (Symbol::new(&env, "emergency_pause_completed"),),
             (admin, paused.clone()),
@@ -593,6 +660,8 @@ impl SettlementWorkflowContract {
         }
 
         env.storage().instance().remove(&DataKey::EmergencyPausedAt);
+        invariants::check(&env)?;
+        ttl::extend_instance(&env);
         env.events().publish(
             (Symbol::new(&env, "emergency_pause_resumed"),),
             resumed.clone(),
