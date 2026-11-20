@@ -304,18 +304,24 @@ impl TreasuryContract {
         if partial_amount <= 0 || partial_amount >= settlement.amount {
             return Err(TreasuryError::InvalidAmount);
         }
+        verify_settlement_invariants(&env, settlement_id, &settlement)?;
         let approved_total: i128 = env
             .storage()
             .persistent()
             .get(&DataKey::PartialApprovedTotal(settlement_id))
             .unwrap_or(0);
-        if approved_total + partial_amount > settlement.amount {
+        if approved_total < 0 {
+            return Err(TreasuryError::InvariantViolation);
+        }
+        let new_approved = approved_total
+            .checked_add(partial_amount)
+            .ok_or(TreasuryError::ArithmeticOverflow)?;
+        if new_approved > settlement.amount {
             return Err(TreasuryError::InvalidAmount);
         }
-        env.storage().persistent().set(
-            &DataKey::PartialApprovedTotal(settlement_id),
-            &(approved_total + partial_amount),
-        );
+        env.storage()
+            .persistent()
+            .set(&DataKey::PartialApprovedTotal(settlement_id), &new_approved);
         record_approval(
             &env,
             &mut settlement.approvals,
@@ -529,7 +535,15 @@ impl TreasuryContract {
             .persistent()
             .get(&DataKey::PartialExecutedTotal(settlement_id))
             .unwrap_or(0);
-        let remaining = if approved > executed { approved - executed } else { 0 };
+        if approved < 0 || executed < 0 || executed > approved {
+            return Err(TreasuryError::InvariantViolation);
+        }
+        let remaining = approved
+            .checked_sub(executed)
+            .ok_or(TreasuryError::InvariantViolation)?;
+        if remaining < 0 {
+            return Err(TreasuryError::InvariantViolation);
+        }
         Ok((approved, executed, remaining))
     }
 
@@ -562,6 +576,7 @@ impl TreasuryContract {
         if partial_amount <= 0 || partial_amount >= settlement.amount {
             return Err(TreasuryError::InvalidAmount);
         }
+        verify_settlement_invariants(&env, settlement_id, &settlement)?;
         let threshold: u32 = env
             .storage()
             .instance()
@@ -583,11 +598,23 @@ impl TreasuryContract {
             .persistent()
             .get(&DataKey::PartialExecutedTotal(settlement_id))
             .unwrap_or(0i128);
+        if prev_executed < 0 {
+            return Err(TreasuryError::InvariantViolation);
+        }
         let new_executed = prev_executed
             .checked_add(partial_amount)
             .ok_or(TreasuryError::ArithmeticOverflow)?;
         if new_executed > settlement.amount {
             return Err(TreasuryError::InvalidAmount);
+        }
+        // #923: derive the remaining balance with checked arithmetic so a
+        // corrupted or inconsistent executed total can never underflow.
+        let remaining = settlement
+            .amount
+            .checked_sub(new_executed)
+            .ok_or(TreasuryError::InvariantViolation)?;
+        if remaining < 0 {
+            return Err(TreasuryError::InvariantViolation);
         }
         env.storage().persistent().set(
             &DataKey::PartialExecutedTotal(settlement_id),
@@ -597,6 +624,7 @@ impl TreasuryContract {
         let token_client = token::Client::new(&env, &token_contract);
         token_client.transfer(&treasury, &settlement.merchant_address, &partial_amount);
         settlement.status = SettlementStatus::PartiallyExecuted;
+        verify_settlement_invariants(&env, settlement_id, &settlement)?;
         write_settlement(&env, settlement_id, &settlement);
         env.events().publish(
             (
@@ -1036,6 +1064,69 @@ impl TreasuryContract {
         }
         Ok((signers, weight))
     }
+}
+
+/// Verifies the core accounting invariants of a settlement before and after mutation
+/// (#927). Checks that the settlement's amount is positive, that the tracked partial
+/// approved/executed totals are non-negative and never exceed the settlement amount,
+/// that `executed <= approved`, and that the settlement's status is consistent with
+/// its recorded totals. Returns `TreasuryError::InvariantViolation` on any failure.
+fn verify_settlement_invariants(
+    env: &Env,
+    settlement_id: u64,
+    settlement: &Settlement,
+) -> Result<(), TreasuryError> {
+    if settlement.amount <= 0 {
+        return Err(TreasuryError::InvariantViolation);
+    }
+    let approved: i128 = env
+        .storage()
+        .persistent()
+        .get(&DataKey::PartialApprovedTotal(settlement_id))
+        .unwrap_or(0);
+    let executed: i128 = env
+        .storage()
+        .persistent()
+        .get(&DataKey::PartialExecutedTotal(settlement_id))
+        .unwrap_or(0);
+    if approved < 0 || executed < 0 {
+        return Err(TreasuryError::InvariantViolation);
+    }
+    if approved > settlement.amount || executed > settlement.amount {
+        return Err(TreasuryError::InvariantViolation);
+    }
+    if executed > approved {
+        return Err(TreasuryError::InvariantViolation);
+    }
+    let remaining = settlement
+        .amount
+        .checked_sub(executed)
+        .ok_or(TreasuryError::InvariantViolation)?;
+    if remaining < 0 {
+        return Err(TreasuryError::InvariantViolation);
+    }
+    // Status must be consistent with the recorded executed total: a settlement
+    // that has paid out anything must be `PartiallyExecuted` (or fully
+    // `Executed`), and a `Pending` settlement must not have paid out anything.
+    match settlement.status {
+        SettlementStatus::Pending => {
+            if executed != 0 {
+                return Err(TreasuryError::InvariantViolation);
+            }
+        }
+        SettlementStatus::PartiallyExecuted => {
+            if executed == 0 || executed >= settlement.amount {
+                return Err(TreasuryError::InvariantViolation);
+            }
+        }
+        SettlementStatus::Executed => {
+            if executed != settlement.amount {
+                return Err(TreasuryError::InvariantViolation);
+            }
+        }
+        _ => {}
+    }
+    Ok(())
 }
 
 /// Whether a settlement's approvals should still be considered active, i.e. the settlement is

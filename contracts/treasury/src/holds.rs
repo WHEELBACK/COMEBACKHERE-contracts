@@ -1,6 +1,7 @@
 use crate::{
-    require_admin, write_settlement, DataKey, Settlement, SettlementHoldReason, SettlementStatus,
-    TreasuryContract, TreasuryContractArgs, TreasuryContractClient, TreasuryError,
+    require_admin, verify_settlement_invariants, write_settlement, DataKey, Settlement,
+    SettlementHoldReason, SettlementStatus, TreasuryContract, TreasuryContractArgs,
+    TreasuryContractClient, TreasuryError,
 };
 use soroban_sdk::{contractimpl, Address, Env, Symbol};
 
@@ -61,6 +62,9 @@ impl TreasuryContract {
 
         settlement.status = SettlementStatus::OnHold;
         settlement.hold_reason = reason.clone();
+        // Reject any hold placement that would leave the settlement in an
+        // inconsistent state (e.g. negative or overflowing amounts).
+        verify_settlement_invariants(&settlement)?;
         write_settlement(&env, settlement_id, &settlement);
 
         // Store or clear the expiry timestamp.
@@ -142,6 +146,9 @@ impl TreasuryContract {
         }
         settlement.status = SettlementStatus::Pending;
         settlement.hold_reason = SettlementHoldReason::None;
+        // Verify invariants before persisting the released state so a corrupt
+        // settlement can never be written back to storage.
+        verify_settlement_invariants(&settlement)?;
         write_settlement(&env, settlement_id, &settlement);
         // Clean up expiry regardless of whether it was set.
         env.storage()

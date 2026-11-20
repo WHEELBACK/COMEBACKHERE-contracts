@@ -96,3 +96,35 @@ fn execute_settlement_pays_exact_amount_and_marks_executed() {
     assert_eq!(token_client.balance(&merchant), 10_000_000);
     assert_eq!(token_client.balance(&treasury_id), 0);
 }
+
+#[test]
+fn invariant_verifier_rejects_executed_settlement_with_remaining_mismatch() {
+    let env = Env::default();
+    let (client, admin, merchant, treasury_id) = setup_treasury(&env);
+    let token_id = env.register_contract(None, TestToken);
+    let token_client = TestTokenClient::new(&env, &token_id);
+    token_client.mint(&treasury_id, &10_000_000);
+
+    let settlement_id = client.propose_settlement(&admin, &merchant, &10_000_000, &0_u64);
+    client.execute_settlement(&admin, &settlement_id, &token_id);
+
+    // Corrupt the recorded remaining amount so executed + remaining != total.
+    client.test_set_remaining(&settlement_id, &1);
+
+    let result = client.try_verify_invariants();
+    assert!(result.is_err());
+}
+
+#[test]
+fn invariant_verifier_rejects_negative_hold_amount() {
+    let env = Env::default();
+    let (client, admin, merchant, _) = setup_treasury(&env);
+
+    let settlement_id = client.propose_settlement(&admin, &merchant, &10_000_000, &0_u64);
+
+    // Corrupt the settlement with a negative hold amount.
+    client.test_set_remaining(&settlement_id, &-1);
+
+    let result = client.try_verify_invariants();
+    assert!(result.is_err());
+}
