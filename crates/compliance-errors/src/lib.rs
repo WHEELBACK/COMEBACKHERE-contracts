@@ -30,5 +30,9 @@ declare_contract_error! {
         InvalidJurisdictionCode = 10,
         /// `accept_admin` or `cancel_admin_transfer` called with no pending admin transfer.
         NoPendingAdmin = 11,
+        /// `set_tier_limit` was given a negative limit, which would make every
+        /// partial-settlement headroom computation (`limit - amount`) underflow
+        /// below zero (#887).
+        InvalidTierLimit = 12,
     }
 }

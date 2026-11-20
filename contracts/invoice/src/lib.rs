@@ -33,7 +33,35 @@ pub use template::{
 pub use validation::require_valid_discount;
 pub use validation::{require_memo_not_too_long, MAX_MEMO_BYTES};
 
-use soroban_sdk::{contract, Address, Env, Vec};
+use soroban_sdk::{contract, Address, Env, IntoVal, Val, Vec};
+
+/// Extends the TTL of the persistent entry stored under `key` (#884).
+///
+/// Every persistent write in this contract goes through this helper so that no
+/// invoice record, index or audit-log entry can silently age out of the ledger
+/// and be evicted: once an entry's remaining TTL falls below
+/// [`INVOICE_TTL_THRESHOLD`] ledgers it is bumped back to
+/// [`INVOICE_TTL_EXTEND_TO`]. A key with no stored entry is skipped rather
+/// than trapping, since `extend_ttl` on a missing key aborts the invocation.
+pub(crate) fn bump_persistent<K>(env: &Env, key: &K)
+where
+    K: IntoVal<Env, Val>,
+{
+    let storage = env.storage().persistent();
+    if storage.has(key) {
+        storage.extend_ttl(key, INVOICE_TTL_THRESHOLD, INVOICE_TTL_EXTEND_TO);
+    }
+}
+
+/// Bumps the TTL of an invoice record and its per-invoice satellite entries
+/// (#884), so an invoice is never evicted while its history, refund timestamp
+/// or refund breakdown survive, or vice versa.
+pub(crate) fn bump_invoice_ttl(env: &Env, id: u64) {
+    bump_persistent(env, &DataKey::Invoice(id));
+    bump_persistent(env, &DataKey::InvoiceHistory(id));
+    bump_persistent(env, &DataKey::RefundRequestedAt(id));
+    bump_persistent(env, &DataKey::RefundBreakdown(id));
+}
 
 pub(crate) fn pending_index_add(env: &Env, id: u64) {
     let mut ids: Vec<u64> = env
@@ -43,6 +71,7 @@ pub(crate) fn pending_index_add(env: &Env, id: u64) {
         .unwrap_or_else(|| Vec::new(env));
     ids.push_back(id);
     env.storage().persistent().set(&DataKey::PendingIndex, &ids);
+    bump_persistent(env, &DataKey::PendingIndex);
 }
 
 pub(crate) fn pending_index_remove(env: &Env, id: u64) {
@@ -59,6 +88,7 @@ pub(crate) fn pending_index_remove(env: &Env, id: u64) {
     env.storage()
         .persistent()
         .set(&DataKey::PendingIndex, &updated);
+    bump_persistent(env, &DataKey::PendingIndex);
 }
 
 /// Records `id` in `payer`'s index (#711).
@@ -77,10 +107,11 @@ pub(crate) fn payer_index_add(env: &Env, payer: &Address, id: u64) {
     if count >= MAX_PAYER_INDEX_ENTRIES {
         return;
     }
-    env.storage()
-        .persistent()
-        .set(&DataKey::PayerIndexEntry(payer.clone(), count), &id);
+    let entry_key = DataKey::PayerIndexEntry(payer.clone(), count);
+    env.storage().persistent().set(&entry_key, &id);
     env.storage().persistent().set(&count_key, &(count + 1));
+    bump_persistent(env, &entry_key);
+    bump_persistent(env, &count_key);
 }
 
 pub(crate) fn append_history(env: &Env, id: u64, from: InvoiceStatus, to: InvoiceStatus) {
@@ -96,6 +127,7 @@ pub(crate) fn append_history(env: &Env, id: u64, from: InvoiceStatus, to: Invoic
         timestamp: env.ledger().timestamp(),
     });
     env.storage().persistent().set(&key, &history);
+    bump_persistent(env, &key);
 }
 
 #[contract]

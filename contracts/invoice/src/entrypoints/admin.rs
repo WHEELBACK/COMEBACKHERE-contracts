@@ -260,6 +260,7 @@ impl InvoiceContract {
         env.storage()
             .persistent()
             .set(&DataKey::Invoice(id), &invoice);
+        crate::bump_invoice_ttl(&env, id);
         events::invoice_expiry_extended(
             &env,
             &InvoiceExpiryExtendedEvent {
