@@ -1,3 +1,4 @@
+use proptest::prelude::*;
 use soroban_sdk::{testutils::Address as _, Address, Env};
 use treasury::{SettlementStatus, TreasuryContract, TreasuryContractClient};
 
@@ -168,4 +169,101 @@ fn partial_execution_cumulative_guard_rejects_exact_amount() {
     // partial_amount == settlement.amount → first gate `partial_amount >= settlement.amount`
     // already rejects this, confirming the existing + new guards are layered correctly.
     client.partially_execute_settlement(&admin, &sid, &10_000_000, &token_id);
+}
+
+/// Underflow guard: a partial amount of 0 must be rejected with `InvalidAmount`
+/// (#7) rather than reaching a subtraction that could underflow the remaining
+/// balance.
+#[test]
+#[should_panic(expected = "Error(Contract, #7)")]
+fn partial_execution_zero_amount_rejected_without_underflow() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, admin, token_id, sid) = setup(&env, 10_000_000);
+
+    client.partially_execute_settlement(&admin, &sid, &0, &token_id);
+}
+
+/// Underflow guard: a partial amount strictly greater than the remaining
+/// settlement amount must be rejected with `InvalidAmount` (#7) instead of
+/// underflowing `remaining - partial_amount`.
+#[test]
+#[should_panic(expected = "Error(Contract, #7)")]
+fn partial_execution_greater_than_remaining_rejected_without_underflow() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, admin, token_id, sid) = setup(&env, 10_000_000);
+
+    // First partial execution leaves 7_000_000 remaining.
+    client.partially_execute_settlement(&admin, &sid, &3_000_000, &token_id);
+    // Attempting to settle more than the remaining balance must not underflow.
+    client.partially_execute_settlement(&admin, &sid, &7_000_001, &token_id);
+}
+
+/// Boundary: a partial amount exactly equal to the remaining amount is the
+/// largest value that must not underflow. It is still rejected by the
+/// cumulative guard (`new_executed > settlement.amount`), which fires before
+/// any subtraction, so the error is `InvalidAmount` (#7) rather than a panic.
+#[test]
+#[should_panic(expected = "Error(Contract, #7)")]
+fn partial_execution_exactly_remaining_rejected_without_underflow() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, admin, token_id, sid) = setup(&env, 10_000_000);
+
+    client.partially_execute_settlement(&admin, &sid, &3_000_000, &token_id);
+    client.partially_execute_settlement(&admin, &sid, &7_000_000, &token_id);
+}
+
+/// Boundary: a partial amount of exactly `remaining - 1` is the largest
+/// accepted value and must succeed without underflowing.
+#[test]
+fn partial_execution_remaining_minus_one_succeeds() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, admin, token_id, sid) = setup(&env, 10_000_000);
+
+    client.partially_execute_settlement(&admin, &sid, &3_000_000, &token_id);
+    client.partially_execute_settlement(&admin, &sid, &6_999_999, &token_id);
+
+    let settlement = client.get_settlement(&sid);
+    assert_eq!(settlement.status, SettlementStatus::PartiallyExecuted);
+}
+
+proptest! {
+    #![proptest_config(ProptestConfig::with_cases(64))]
+
+    /// Property: for any settlement amount and any partial amount, the contract
+    /// either succeeds (when `0 < partial < amount`) or returns the
+    /// `InvalidAmount` (#7) error. It must never panic with an arithmetic
+    /// underflow / overflow host error.
+    #[test]
+    fn prop_partial_execution_never_underflows(
+        total in 1i128..=1_000_000_000i128,
+        partial in 0i128..=1_000_000_001i128,
+    ) {
+        let env = Env::default();
+        env.mock_all_auths();
+        let (client, admin, token_id, sid) = setup(&env, total);
+
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            client.partially_execute_settlement(&admin, &sid, &partial, &token_id);
+        }));
+
+        let should_succeed = partial > 0 && partial < total;
+        match result {
+            Ok(()) => prop_assert!(
+                should_succeed,
+                "unexpected success for total={} partial={}",
+                total,
+                partial
+            ),
+            Err(_) => prop_assert!(
+                !should_succeed,
+                "unexpected failure for total={} partial={}",
+                total,
+                partial
+            ),
+        }
+    }
 }

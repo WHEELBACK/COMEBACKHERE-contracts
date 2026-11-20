@@ -309,12 +309,24 @@ impl TreasuryContract {
             .persistent()
             .get(&DataKey::PartialApprovedTotal(settlement_id))
             .unwrap_or(0);
-        if approved_total + partial_amount > settlement.amount {
+        // #914: checked arithmetic so the approved total can never overflow or
+        // underflow past the settlement amount.
+        let remaining = settlement
+            .amount
+            .checked_sub(approved_total)
+            .ok_or(TreasuryError::ArithmeticUnderflow)?;
+        if remaining < 0 {
+            return Err(TreasuryError::ArithmeticUnderflow);
+        }
+        if partial_amount > remaining {
             return Err(TreasuryError::InvalidAmount);
         }
+        let new_approved_total = approved_total
+            .checked_add(partial_amount)
+            .ok_or(TreasuryError::ArithmeticOverflow)?;
         env.storage().persistent().set(
             &DataKey::PartialApprovedTotal(settlement_id),
-            &(approved_total + partial_amount),
+            &new_approved_total,
         );
         record_approval(
             &env,
@@ -529,7 +541,10 @@ impl TreasuryContract {
             .persistent()
             .get(&DataKey::PartialExecutedTotal(settlement_id))
             .unwrap_or(0);
-        let remaining = if approved > executed { approved - executed } else { 0 };
+        // #914: use checked subtraction so a corrupted/over-settled state can never
+        // wrap around; treat an executed total exceeding the approved total as zero
+        // remaining rather than panicking.
+        let remaining = approved.checked_sub(executed).unwrap_or(0);
         Ok((approved, executed, remaining))
     }
 
@@ -583,6 +598,18 @@ impl TreasuryContract {
             .persistent()
             .get(&DataKey::PartialExecutedTotal(settlement_id))
             .unwrap_or(0i128);
+        // #914: validate the remaining amount with checked subtraction before any
+        // token transfer so a partial settlement can never underflow.
+        let remaining = settlement
+            .amount
+            .checked_sub(prev_executed)
+            .ok_or(TreasuryError::ArithmeticUnderflow)?;
+        if remaining < 0 {
+            return Err(TreasuryError::ArithmeticUnderflow);
+        }
+        if partial_amount > remaining {
+            return Err(TreasuryError::InvalidAmount);
+        }
         let new_executed = prev_executed
             .checked_add(partial_amount)
             .ok_or(TreasuryError::ArithmeticOverflow)?;
