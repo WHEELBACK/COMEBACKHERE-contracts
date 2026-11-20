@@ -1,4 +1,7 @@
-use crate::invoice::{DataKey, InvoiceError, MaybeBytes, MAX_HASH_BYTES, USDC_FACTOR};
+use crate::invoice::{
+    DataKey, InvoiceError, InvoiceRole, MaybeBytes, INVOICE_TTL_EXTEND_TO, INVOICE_TTL_THRESHOLD,
+    MAX_HASH_BYTES, USDC_FACTOR,
+};
 use soroban_sdk::{Address, Env};
 
 /// Maximum allowed expiry duration: 5 years in seconds.
@@ -27,6 +30,26 @@ pub fn require_admin(env: &Env, admin: &Address) -> Result<(), InvoiceError> {
         return Err(InvoiceError::Unauthorized);
     }
     Ok(())
+}
+
+/// Requires `caller` to authorize and to be either the admin or a holder of
+/// `role` (#879). The admin implicitly holds every role, so existing admin
+/// flows are unchanged; a role holder can modify only the parameters that
+/// role covers. Fails closed as `Unauthorized`.
+pub fn require_role(env: &Env, caller: &Address, role: InvoiceRole) -> Result<(), InvoiceError> {
+    caller.require_auth();
+    let admin: Option<Address> = env.storage().instance().get(&DataKey::Admin);
+    if admin.as_ref() == Some(caller) {
+        return Ok(());
+    }
+    let key = DataKey::RoleMember(role, caller.clone());
+    if env.storage().persistent().has(&key) {
+        env.storage()
+            .persistent()
+            .extend_ttl(&key, INVOICE_TTL_THRESHOLD, INVOICE_TTL_EXTEND_TO);
+        return Ok(());
+    }
+    Err(InvoiceError::Unauthorized)
 }
 
 pub fn require_positive_amount(amount_usdc: i128, gross_usdc: i128) -> Result<(), InvoiceError> {
@@ -88,6 +111,7 @@ pub fn require_valid_payment_link_hash(hash: &MaybeBytes) -> Result<(), InvoiceE
 /// Two invariants must hold for a discount to be economically sound:
 /// - `discount_amount` must be strictly less than `amount_usdc` so that the
 ///   discounted price stays positive.
+/// - `discount_amount` must be non-negative (#878).
 /// - `discount_deadline` must be ≤ `expires_at` so there exists a time window
 ///   in which the payer can claim the discount before the invoice expires.
 pub fn require_valid_discount(
@@ -98,6 +122,12 @@ pub fn require_valid_discount(
 ) -> Result<(), InvoiceError> {
     if discount_amount >= amount_usdc {
         return Err(InvoiceError::DiscountExceedsAmount);
+    }
+    // #878: a negative discount would make `amount_usdc - discount_amount`
+    // exceed the invoice amount (and overflow at the i128 edges), so the
+    // discounted settlement figure is only well-defined for discounts >= 0.
+    if discount_amount < 0 {
+        return Err(InvoiceError::InvalidAmount);
     }
     if discount_deadline > expires_at {
         return Err(InvoiceError::DiscountDeadlineAfterExpiry);
