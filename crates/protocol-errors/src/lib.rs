@@ -71,45 +71,10 @@ impl ProtocolError {
 }
 
 // Exhaustive matches: adding a variant without a description fails to compile.
+// Invoice messages are owned by `invoice-errors` itself (#883), so they are
+// defined once next to the enum rather than duplicated here.
 fn invoice_description(e: InvoiceError) -> &'static str {
-    use InvoiceError::*;
-    match e {
-        Unauthorized => "Caller is not authorized for this action.",
-        ContractPaused => "The invoice contract is paused.",
-        InvalidAmount => "The invoice amount is invalid.",
-        NotPending => "The invoice is not pending.",
-        Expired => "The invoice has expired.",
-        NotFound => "Invoice not found.",
-        AlreadyInitialized => "The invoice contract is already initialized.",
-        ZeroDuration => "The invoice duration must be greater than zero.",
-        ExpiryOverflow => "The invoice expiry time is out of range.",
-        NotPaid => "The invoice has not been paid.",
-        NotReleased => "The invoice escrow has not been released.",
-        AmountPrecision => "The amount has too many decimal places.",
-        DuplicateNonce => "This invoice nonce has already been used.",
-        ExpiryTooLong => "The invoice expiry is too far in the future.",
-        MetadataMismatch => "The invoice metadata does not match.",
-        NoPendingAdmin => "There is no pending admin transfer.",
-        InvalidPaymentLinkHash => "The payment link hash is invalid.",
-        NotRefundRequested => "No refund has been requested for this invoice.",
-        TokenMismatch => "The payment token does not match the invoice.",
-        BatchTooLarge => "Too many items in one batch.",
-        CooldownActive => "Please wait before trying this action again.",
-        InvoiceCountOverflow => "The invoice limit has been reached.",
-        HashTooLong => "The provided hash is too long.",
-        PaymentStateInconsistent => "The invoice does not describe a completed payment.",
-        RefundTransferFailed => "The refund transfer failed.",
-        RefundTokenNotSet => "The invoice has no token to refund through.",
-        RefundFeeTooHigh => "The refund fee is too high.",
-        ArithmeticOverflow => "The calculation overflowed.",
-        DiscountExceedsAmount => "The discount amount exceeds the invoice amount.",
-        DiscountDeadlineAfterExpiry => "The discount deadline is after the invoice expiry.",
-        MemoTooLong => "The memo field is too long.",
-        RefundWindowClosed => "The refund window for this invoice has closed.",
-        SelfPayNotAllowed => "A merchant cannot pay its own invoice.",
-        TemplateDisabled => "The invoice template is disabled.",
-        InvalidLateFee => "The late fee exceeds 100%.",
-    }
+    e.message()
 }
 
 fn treasury_description(e: TreasuryError) -> &'static str {
