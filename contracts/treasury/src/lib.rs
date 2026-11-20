@@ -91,24 +91,47 @@ pub(crate) const MAX_ALLOWED_TOKENS: u32 = 20;
 /// Default TTL (in ledgers) for a deposit reference id before it can be reused (#747).
 pub(crate) const DEPOSIT_REF_TTL_LEDGERS: u32 = 30 * 24 * 60 * 60 / 5;
 
-pub(crate) fn require_admin(env: &Env, admin: &Address) {
+/// Default TTL (in ledgers) applied to persistent dispute/settlement keys so they
+/// are not evicted from the ledger while still live (#920). Mirrors the deposit
+/// reference TTL pattern: bump on every write and on every read that must keep the
+/// entry alive.
+pub(crate) const DISPUTE_TTL_LEDGERS: u32 = 30 * 24 * 60 * 60 / 5;
+
+/// Bumps the TTL of a persistent dispute-related key (#920). Idempotent and safe
+/// to call on keys that may not exist yet; callers should invoke it right after a
+/// write so the entry is never left with the default (short) TTL.
+pub(crate) fn bump_persistent_ttl(env: &Env, key: &DataKey) {
+    if env.storage().persistent().has(key) {
+        env.storage()
+            .persistent()
+            .extend_ttl(key, DISPUTE_TTL_LEDGERS, DISPUTE_TTL_LEDGERS);
+    }
+}
+
+/// Returns a typed error instead of panicking so dispute entrypoints can surface
+/// `TreasuryError::Unauthorized` through their `Result` (#921).
+pub(crate) fn require_admin(env: &Env, admin: &Address) -> Result<(), TreasuryError> {
     admin.require_auth();
     // An uninitialized contract has no admin, so it fails closed as Unauthorized.
     let stored: Option<Address> = env.storage().instance().get(&DataKey::Admin);
     if stored.as_ref() != Some(admin) {
-        soroban_sdk::panic_with_error!(env, TreasuryError::Unauthorized);
+        return Err(TreasuryError::Unauthorized);
     }
+    Ok(())
 }
 
-pub(crate) fn require_not_paused(env: &Env) {
+/// Returns a typed error instead of panicking so dispute entrypoints can surface
+/// `TreasuryError::ContractPaused` through their `Result` (#921).
+pub(crate) fn require_not_paused(env: &Env) -> Result<(), TreasuryError> {
     let paused: bool = env
         .storage()
         .instance()
         .get(&DataKey::Paused)
         .unwrap_or(false);
     if paused {
-        soroban_sdk::panic_with_error!(env, TreasuryError::ContractPaused);
+        return Err(TreasuryError::ContractPaused);
     }
+    Ok(())
 }
 
 /// Enforces the recipient's compliance tier transaction limit before a settlement
@@ -148,9 +171,11 @@ pub(crate) fn require_compliance_allowed(
 /// drift from what `settlement.status == Pending` actually says, without having to
 /// duplicate that add/remove bookkeeping at each call site individually.
 pub(crate) fn write_settlement(env: &Env, id: u64, settlement: &Settlement) {
-    env.storage()
-        .persistent()
-        .set(&DataKey::Settlement(id), settlement);
+    let key = DataKey::Settlement(id);
+    env.storage().persistent().set(&key, settlement);
+    // Keep the settlement entry alive across the ledger window so a live
+    // settlement is never evicted before it can be executed or cancelled (#920).
+    bump_persistent_ttl(env, &key);
 
     let mut index: Vec<u64> = env
         .storage()
@@ -190,7 +215,13 @@ pub(crate) fn write_settlement(env: &Env, id: u64, settlement: &Settlement) {
 /// so a held settlement never leaves a `HoldExpiry` entry behind once it is no
 /// longer live. Idempotent: safe to call when no hold was ever set.
 pub(crate) fn clear_hold_state(env: &Env, id: u64) {
-    env.storage().persistent().remove(&DataKey::HoldExpiry(id));
+    let key = DataKey::HoldExpiry(id);
+    if env.storage().persistent().has(&key) {
+        env.storage().persistent().remove(&key);
+    }
+    // Refresh the settlement entry's TTL as part of the terminal transition so
+    // the final state remains readable for the full window (#920).
+    bump_persistent_ttl(env, &DataKey::Settlement(id));
 }
 
 /// Rejects a deposit whose reference id was already seen within the TTL window

@@ -1,6 +1,7 @@
 [workspace]
 members = [
     "contracts/invoice",
+    "contracts/oracle-adapter",
     "contracts/treasury",
     "contracts/compliance",
     "contracts/settlement-workflow",

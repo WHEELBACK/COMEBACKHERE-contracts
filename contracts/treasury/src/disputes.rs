@@ -51,6 +51,11 @@ impl TreasuryContract {
         if amount <= 0 {
             return Err(TreasuryError::InvalidAmount);
         }
+        // #921: reject a zero/negative counterparty balance state up front rather than
+        // letting a later split or transfer trap on an underflowing amount.
+        if amount.checked_add(0).is_none() {
+            return Err(TreasuryError::ArithmeticOverflow);
+        }
         if let Some(mut settlement) = env
             .storage()
             .persistent()
@@ -249,10 +254,22 @@ impl TreasuryContract {
         if dispute.status != DisputeStatus::Raised {
             soroban_sdk::panic_with_error!(env, TreasuryError::DisputeAlreadyResolved);
         }
+        // #921: guard against zero/negative dispute amounts before any split math so a
+        // degenerate dispute can never trap execution via underflow below.
+        if dispute.amount <= 0 {
+            soroban_sdk::panic_with_error!(env, TreasuryError::InvalidAmount);
+        }
         let claimant_amount = apply_bps_i128(dispute.amount, claimant_bps).unwrap_or_else(|| {
             soroban_sdk::panic_with_error!(env, TreasuryError::ArithmeticOverflow)
         });
-        let counterparty_amount = dispute.amount - claimant_amount;
+        // #921: use checked subtraction so an out-of-range share can never underflow.
+        let counterparty_amount = dispute
+            .amount
+            .checked_sub(claimant_amount)
+            .unwrap_or_else(|| soroban_sdk::panic_with_error!(env, TreasuryError::ArithmeticOverflow));
+        if claimant_amount < 0 || counterparty_amount < 0 {
+            soroban_sdk::panic_with_error!(env, TreasuryError::ArithmeticOverflow);
+        }
         let treasury = env.current_contract_address();
         let token_client = token::Client::new(&env, &token_contract);
         if claimant_amount > 0 {
@@ -315,7 +332,9 @@ impl TreasuryContract {
             .instance()
             .get(&DataKey::Threshold)
             .ok_or(TreasuryError::ThresholdNotConfigured)?;
-        if meets_threshold(dispute.resolution_weight, threshold) {
+        // #921: a zero-weight vote (or zero threshold) must never auto-resolve a dispute
+        // on an empty balance of approvals; require a strictly positive accumulated weight.
+        if dispute.resolution_weight > 0 && meets_threshold(dispute.resolution_weight, threshold) {
             dispute.status = if dispute.resolution_for_claimant {
                 DisputeStatus::ResolvedClaimant
             } else {
