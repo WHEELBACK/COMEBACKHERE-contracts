@@ -23,12 +23,14 @@ whether a human would consider the record active.
 grep -rn "extend_ttl\|bump_ttl" contracts/*/src
 ```
 
-This returns **zero matches** anywhere in the four contract crates. No contract in
-this repo currently calls `extend_ttl` on any storage instance (persistent,
-instance, or temporary). The rest of this document catalogs every persistent key
-by contract, notes read/write frequency characteristics that would determine
-natural TTL bumps if any existed, and calls out where that absence is a genuine
-gap versus effectively harmless.
+Historically this returned **zero matches** anywhere in the four contract crates.
+That is no longer true: `contracts/oracle-adapter` now routes every persistent
+storage write through a shared TTL-bump helper (see "Oracle-adapter automatic TTL
+bumps" below), and the invoice batch entrypoints extend TTL on the invoices they
+write (see "Invoice batch entrypoints (#713)"). The rest of this document
+catalogs every persistent key by contract, notes read/write frequency
+characteristics that would determine natural TTL bumps, and calls out where the
+absence of a bump is a genuine gap versus effectively harmless.
 
 Instance storage (`env.storage().instance()`) shares a single TTL for the whole
 contract instance and is out of scope here except where noted — the interesting
@@ -132,6 +134,50 @@ storage TTL is a single contract-wide value rather than per-record — out of sc
 for the per-record archival risk this audit is about. No persistent keys exist in
 this contract. **No gap.**
 
+## Oracle-adapter automatic TTL bumps (#929)
+
+`contracts/oracle-adapter` previously wrote its persistent keys without ever
+extending their TTL, leaving price feeds and configuration records exposed to
+ledger eviction. Every persistent write now goes through a single helper that
+bumps the key's TTL immediately after the write, so no persistent key can be
+written without its live-until ledger being pushed forward.
+
+The helper uses two constants defined alongside the storage keys:
+
+| Constant | Value (ledgers) | Meaning |
+|---|---|---|
+| `PERSISTENT_TTL_THRESHOLD` | `518_400` (~30 days) | Bump only when the remaining TTL drops below this |
+| `PERSISTENT_TTL_EXTEND_TO` | `1_036_800` (~60 days) | New live-until horizon after a bump |
+
+Design notes:
+
+- **Threshold-gated, not unconditional.** `extend_ttl` is only invoked when the
+  current remaining TTL is below `PERSISTENT_TTL_THRESHOLD`, so repeated writes
+  in a short window do not pay for redundant bumps and host metering stays flat.
+- **Write-adjacent.** The bump happens in the same call as the write, so a key
+  that is actively being updated can never drift toward archival.
+- **Reads do not bump.** As with every Soroban contract, `is_allowed`-style read
+  paths do not extend TTL; only writes (and explicit admin bumps) do.
+
+### Zero-balance defensive behaviour (#930)
+
+The TTL helper and the surrounding storage paths are written to tolerate
+edge-case zero-balance states without panicking contract execution:
+
+- A zero balance is treated as a valid state, not an error: arithmetic that
+  would otherwise underflow is guarded, and the resulting state is persisted
+  normally rather than trapping.
+- The TTL bump is skipped (not attempted, not panicked on) when there is no
+  entry to extend, e.g. a key that was just removed or never written.
+- Any failure to extend TTL degrades to "no bump" rather than aborting the
+  enclosing contract call, so a metering or footprint hiccup cannot turn a
+  legitimate zero-balance write into a failed transaction.
+
+Unit and fuzz tests in the oracle-adapter test suite cover both the bump path
+(threshold crossing, repeated writes) and the zero-balance edge cases (zero
+amounts, missing entries, repeated zero writes) to confirm no host metering
+regression and no panics.
+
 ## Summary table
 
 | Contract | Persistent keys audited | TTL bump exists? | Verdict |
@@ -140,6 +186,7 @@ this contract. **No gap.**
 | Compliance | `Allowed`, `Blocked`, `AllowedUntil`, `BlockedUntil`, `BlockReason` | No | **Genuine gap** — stale `Blocked`/`Allowed` entries can archive |
 | Invoice | `Invoice` and secondary indices | No | Acceptable — bounded lifecycle, archival is the intended terminal state |
 | Settlement-workflow | none persistent | N/A | No gap |
+| Oracle-adapter | price feed / config keys | Yes — automatic bump on every persistent write | **Resolved (#929)** — threshold-gated `extend_ttl`; zero-balance states handled defensively (#930) |
 
 ## Follow-up issues
 

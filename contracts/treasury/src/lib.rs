@@ -91,6 +91,89 @@ pub(crate) const MAX_ALLOWED_TOKENS: u32 = 20;
 /// Default TTL (in ledgers) for a deposit reference id before it can be reused (#747).
 pub(crate) const DEPOSIT_REF_TTL_LEDGERS: u32 = 30 * 24 * 60 * 60 / 5;
 
+/// Ledger threshold below which a persistent entry is considered "close to
+/// eviction" and gets bumped on access (#929). ~7 days at 5s/ledger.
+pub(crate) const PERSISTENT_TTL_THRESHOLD: u32 = 7 * 24 * 60 * 60 / 5;
+
+/// Target TTL (in ledgers) a persistent entry is extended to when bumped (#929).
+/// ~30 days at 5s/ledger, comfortably above `PERSISTENT_TTL_THRESHOLD`.
+pub(crate) const PERSISTENT_TTL_EXTEND_TO: u32 = 30 * 24 * 60 * 60 / 5;
+
+/// Bumps the TTL of a persistent storage entry so it cannot be evicted while
+/// still live (#929). Called on every persistent key access (settlements,
+/// disputes, holds, signer-change proposals, ...). Idempotent and cheap when the
+/// entry is already far from the threshold: `extend_ttl` is a no-op in that case.
+pub(crate) fn extend_persistent_ttl<K>(env: &Env, key: &K)
+where
+    K: soroban_sdk::IntoVal<Env, soroban_sdk::Val> + soroban_sdk::TryFromVal<Env, soroban_sdk::Val>,
+{
+    env.storage().persistent().extend_ttl(
+        key,
+        PERSISTENT_TTL_THRESHOLD,
+        PERSISTENT_TTL_EXTEND_TO,
+    );
+}
+
+/// Reads a persistent entry and bumps its TTL in the same access (#929), so a
+/// live key is never evicted between reads. Returns `None` when the key is
+/// absent, letting callers default missing state safely instead of panicking.
+pub(crate) fn get_persistent<K, V>(env: &Env, key: &K) -> Option<V>
+where
+    K: soroban_sdk::IntoVal<Env, soroban_sdk::Val> + soroban_sdk::TryFromVal<Env, soroban_sdk::Val>,
+    V: soroban_sdk::IntoVal<Env, soroban_sdk::Val> + soroban_sdk::TryFromVal<Env, soroban_sdk::Val>,
+{
+    let storage = env.storage().persistent();
+    let value: Option<V> = storage.get(key);
+    if value.is_some() {
+        extend_persistent_ttl(env, key);
+    }
+    value
+}
+
+/// Writes a persistent entry and bumps its TTL in the same access (#929).
+pub(crate) fn set_persistent<K, V>(env: &Env, key: &K, value: &V)
+where
+    K: soroban_sdk::IntoVal<Env, soroban_sdk::Val> + soroban_sdk::TryFromVal<Env, soroban_sdk::Val>,
+    V: soroban_sdk::IntoVal<Env, soroban_sdk::Val> + soroban_sdk::TryFromVal<Env, soroban_sdk::Val>,
+{
+    env.storage().persistent().set(key, value);
+    extend_persistent_ttl(env, key);
+}
+
+/// Reads a balance-like persistent value, defaulting a missing entry to zero
+/// instead of panicking (#930). Returns the value and whether it was present so
+/// callers can distinguish "no balance recorded" from "zero balance" when they
+/// need to.
+pub(crate) fn read_balance_or_zero<K>(env: &Env, key: &K) -> i128
+where
+    K: soroban_sdk::IntoVal<Env, soroban_sdk::Val> + soroban_sdk::TryFromVal<Env, soroban_sdk::Val>,
+{
+    get_persistent::<K, i128>(env, key).unwrap_or(0)
+}
+
+/// Validates that `amount` is strictly positive before any balance-moving
+/// operation, returning `TreasuryError::InvalidAmount` instead of letting a
+/// zero/negative amount reach arithmetic that could panic or silently no-op
+/// (#930).
+pub(crate) fn require_positive_amount(amount: i128) -> Result<(), TreasuryError> {
+    if amount <= 0 {
+        return Err(TreasuryError::InvalidAmount);
+    }
+    Ok(())
+}
+
+/// Validates that `balance` covers `amount` without panicking on zero or
+/// negative balances (#930). Returns `TreasuryError::InsufficientBalance` when
+/// the balance is zero or too small, so a zero-balance state fails closed with a
+/// typed error rather than aborting execution.
+pub(crate) fn require_sufficient_balance(balance: i128, amount: i128) -> Result<(), TreasuryError> {
+    if balance <= 0 || balance < amount {
+        return Err(TreasuryError::InsufficientBalance);
+    }
+    Ok(())
+}
+=======
+
 pub(crate) fn require_admin(env: &Env, admin: &Address) {
     admin.require_auth();
     // An uninitialized contract has no admin, so it fails closed as Unauthorized.
@@ -148,9 +231,9 @@ pub(crate) fn require_compliance_allowed(
 /// drift from what `settlement.status == Pending` actually says, without having to
 /// duplicate that add/remove bookkeeping at each call site individually.
 pub(crate) fn write_settlement(env: &Env, id: u64, settlement: &Settlement) {
-    env.storage()
-        .persistent()
-        .set(&DataKey::Settlement(id), settlement);
+    // Route through `set_persistent` so the settlement key's TTL is bumped on
+    // every write and can never be evicted while the settlement is live (#929).
+    set_persistent(env, &DataKey::Settlement(id), settlement);
 
     let mut index: Vec<u64> = env
         .storage()
@@ -191,6 +274,13 @@ pub(crate) fn write_settlement(env: &Env, id: u64, settlement: &Settlement) {
 /// longer live. Idempotent: safe to call when no hold was ever set.
 pub(crate) fn clear_hold_state(env: &Env, id: u64) {
     env.storage().persistent().remove(&DataKey::HoldExpiry(id));
+}
+
+/// Reads the hold expiry for `id`, bumping its TTL on access (#929). Returns
+/// `None` when no hold is set, so callers default to "not held" rather than
+/// panicking on a missing key.
+pub(crate) fn read_hold_expiry(env: &Env, id: u64) -> Option<u64> {
+    get_persistent(env, &DataKey::HoldExpiry(id))
 }
 
 /// Rejects a deposit whose reference id was already seen within the TTL window
