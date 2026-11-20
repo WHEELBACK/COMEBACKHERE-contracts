@@ -24,4 +24,12 @@ pub enum TreasuryError {
     TooManySigners = 9,
     /// The signer weight must be greater than zero; use `remove_signer` to remove a signer.
     ZeroSignerWeight = 10,
+    /// The balance is zero where a non-zero balance is required.
+    ZeroBalance = 11,
+    /// The available balance is insufficient for the requested operation.
+    InsufficientBalance = 12,
+    /// The caller does not hold the role required for this action.
+    UnauthorizedRole = 13,
+    /// The provided role is invalid or unknown.
+    InvalidRole = 14,
 }

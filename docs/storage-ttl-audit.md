@@ -132,11 +132,34 @@ storage TTL is a single contract-wide value rather than per-record — out of sc
 for the per-record archival risk this audit is about. No persistent keys exist in
 this contract. **No gap.**
 
+## Dispute-resolver (`contracts/dispute-resolver/src`)
+
+The dispute lifecycle lives in the treasury crate's `disputes.rs` (the
+`dispute-resolver` contract crate is not present in this repo; the dispute
+entrypoints are implemented on the treasury contract). Persistent keys touched
+by the dispute lifecycle:
+
+| Key | Written by | Read by | TTL bump anywhere? |
+|---|---|---|---|
+| `DataKey::Dispute(u64)` | `raise_dispute`, `resolve_dispute`, `vote_dispute_resolution` | `resolve_dispute`'s open-dispute scan, `get_dispute` | **Yes** (#920) |
+| `DataKey::SettlementDisputes(u64)` | `raise_dispute` | `resolve_dispute`'s open-dispute scan | **Yes** (#920) |
+| `DataKey::Settlement(u64)` | `hold_settlement` (dispute path) | `raise_dispute`, `resolve_dispute`, `vote_dispute_resolution` | **Yes** (#920) |
+
+**Resolved (#920):** every dispute-lifecycle path now bumps TTL on the
+persistent keys it touches via a shared helper, using
+`DISPUTE_TTL_THRESHOLD = 518_400` (~30 days) and
+`DISPUTE_TTL_EXTEND_TO = 1_036_800` (~60 days) ledgers, both defined in
+`contracts/treasury/src/disputes.rs`. The helper is applied on `raise_dispute`,
+`expire_dispute`, `resolve_dispute`, `resolve_dispute_split`,
+`vote_dispute_resolution`, and `get_dispute`, so an open dispute (or a
+settlement held by one) can no longer archive purely from elapsed time.
+
 ## Summary table
 
 | Contract | Persistent keys audited | TTL bump exists? | Verdict |
 |---|---|---|---|
 | Treasury | `Settlement`, `Dispute` | No | **Genuine gap** — long-pending settlement/dispute can archive |
+| Dispute-resolver (treasury `disputes.rs`) | `Dispute`, `SettlementDisputes`, `Settlement` | **Yes** (#920) | Resolved — dispute lifecycle bumps TTL on every touched key |
 | Compliance | `Allowed`, `Blocked`, `AllowedUntil`, `BlockedUntil`, `BlockReason` | No | **Genuine gap** — stale `Blocked`/`Allowed` entries can archive |
 | Invoice | `Invoice` and secondary indices | No | Acceptable — bounded lifecycle, archival is the intended terminal state |
 | Settlement-workflow | none persistent | N/A | No gap |
