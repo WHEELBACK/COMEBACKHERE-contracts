@@ -169,3 +169,119 @@ fn partial_execution_cumulative_guard_rejects_exact_amount() {
     // already rejects this, confirming the existing + new guards are layered correctly.
     client.partially_execute_settlement(&admin, &sid, &10_000_000, &token_id);
 }
+
+/// Underflow boundary: a single partial execution that consumes the entire
+/// remaining balance must be rejected with the typed `InvalidAmount` error
+/// rather than allowing `remaining = amount - executed` to reach zero and
+/// later underflow on a subsequent subtraction.
+#[test]
+#[should_panic(expected = "Error(Contract, #7)")]
+fn partial_execution_consuming_full_remaining_rejected() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, admin, token_id, sid) = setup(&env, 10_000_000);
+
+    // First partial execution leaves 6_000_000 remaining.
+    client.partially_execute_settlement(&admin, &sid, &4_000_000, &token_id);
+    // Second partial execution consumes the remaining balance exactly.
+    // The cumulative guard must reject this with InvalidAmount (#7).
+    client.partially_execute_settlement(&admin, &sid, &6_000_000, &token_id);
+}
+
+/// Underflow boundary: `executed > total` must be rejected with the typed
+/// `InvalidAmount` error. This exercises the `checked_add` overflow guard on
+/// the cumulative executed total.
+#[test]
+#[should_panic(expected = "Error(Contract, #7)")]
+fn partial_execution_exceeding_remaining_rejected() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, admin, token_id, sid) = setup(&env, 10_000_000);
+
+    client.partially_execute_settlement(&admin, &sid, &4_000_000, &token_id);
+    // 4_000_000 + 6_000_001 > 10_000_000 → InvalidAmount (#7).
+    client.partially_execute_settlement(&admin, &sid, &6_000_001, &token_id);
+}
+
+/// Zero-amount partial executions must be rejected with the typed
+/// `InvalidAmount` error and must not mutate the executed total.
+#[test]
+#[should_panic(expected = "Error(Contract, #7)")]
+fn partial_execution_zero_amount_rejected() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, admin, token_id, sid) = setup(&env, 10_000_000);
+
+    client.partially_execute_settlement(&admin, &sid, &0, &token_id);
+}
+
+/// Extreme boundary: an `i128::MAX` partial amount must be rejected with the
+/// typed `InvalidAmount` error. The `checked_add` guard must catch the
+/// overflow instead of wrapping or panicking with an arithmetic trap.
+#[test]
+#[should_panic(expected = "Error(Contract, #7)")]
+fn partial_execution_i128_max_rejected() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, admin, token_id, sid) = setup(&env, 10_000_000);
+
+    client.partially_execute_settlement(&admin, &sid, &i128::MAX, &token_id);
+}
+
+/// Extreme boundary: `i128::MAX` as the settlement amount with an `i128::MAX`
+/// partial amount must be rejected with the typed `InvalidAmount` error
+/// without triggering an arithmetic overflow in the cumulative guard.
+#[test]
+#[should_panic(expected = "Error(Contract, #7)")]
+fn partial_execution_i128_max_amount_and_partial_rejected() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let admin = Address::generate(&env);
+    let merchant = Address::generate(&env);
+    let contract_id = env.register_contract(None, TreasuryContract);
+    let client = TreasuryContractClient::new(&env, &contract_id);
+    client.initialize(&admin, &1, &soroban_sdk::Vec::new(&env));
+
+    let token_id = env.register_stellar_asset_contract(admin.clone());
+    soroban_sdk::token::StellarAssetClient::new(&env, &token_id).mint(&contract_id, &i128::MAX);
+
+    let sid = client.propose_settlement(&admin, &merchant, &i128::MAX, &0_u64);
+    client.partially_execute_settlement(&admin, &sid, &i128::MAX, &token_id);
+}
+
+/// Repeated partial executions that previously could underflow must now be
+/// rejected with the typed `InvalidAmount` error once the cumulative executed
+/// total would reach or exceed the settlement amount.
+#[test]
+#[should_panic(expected = "Error(Contract, #7)")]
+fn repeated_partial_executions_reject_underflow_boundary() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, admin, token_id, sid) = setup(&env, 10_000_000);
+
+    // Three successful partial executions totalling 9_000_000.
+    client.partially_execute_settlement(&admin, &sid, &3_000_000, &token_id);
+    client.partially_execute_settlement(&admin, &sid, &3_000_000, &token_id);
+    client.partially_execute_settlement(&admin, &sid, &3_000_000, &token_id);
+
+    // Fourth execution would push the total to 10_000_000 (== amount) and
+    // must be rejected with InvalidAmount (#7) rather than underflowing.
+    client.partially_execute_settlement(&admin, &sid, &1_000_000, &token_id);
+}
+
+/// Repeated partial executions that stay strictly below the settlement amount
+/// must succeed and accumulate the executed total without underflow.
+#[test]
+fn repeated_partial_executions_accumulate_without_underflow() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, admin, token_id, sid) = setup(&env, 10_000_000);
+
+    client.partially_execute_settlement(&admin, &sid, &3_000_000, &token_id);
+    client.partially_execute_settlement(&admin, &sid, &3_000_000, &token_id);
+    client.partially_execute_settlement(&admin, &sid, &3_000_000, &token_id);
+
+    let settlement = client.get_settlement(&sid);
+    assert_eq!(settlement.status, SettlementStatus::PartiallyExecuted);
+    assert_eq!(settlement.executed_amount, 9_000_000);
+}

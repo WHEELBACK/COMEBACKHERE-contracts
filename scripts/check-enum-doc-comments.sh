@@ -52,6 +52,11 @@ trap 'rm -f "$status_file"' EXIT
 # Macro invocations that stand in for `#[contracterror] pub enum <Name> { ... }`.
 ERROR_ENUM_MACROS='declare_contract_error'
 
+# #928: the oracle-adapter contract declares its settlement error enum through
+# this macro, so it must be covered by the same enum-level doc-comment check.
+ORACLE_ADAPTER_ERROR_ENUM_MACROS='declare_settlement_error'
+ERROR_ENUM_MACROS="$ERROR_ENUM_MACROS|$ORACLE_ADAPTER_ERROR_ENUM_MACROS"
+
 find contracts crates -name '*.rs' -type f | sort | while read -r file; do
     # Skip test files
     if echo "$file" | grep -qE '/tests/|_test\.rs$'; then

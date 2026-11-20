@@ -18,6 +18,10 @@ pub use multisig::{
 // full rationale.
 pub use multisig::TreasuryError;
 
+// Re-export the invariant-verification helper so tests and off-chain clients can
+// assert storage consistency against the same logic the contract uses (#927).
+pub use multisig::verify_invariants;
+
 use soroban_sdk::{contract, contractimpl, Address, Bytes, Env, IntoVal, Symbol, Vec};
 
 mod admin;

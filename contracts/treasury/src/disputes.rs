@@ -252,7 +252,19 @@ impl TreasuryContract {
         let claimant_amount = apply_bps_i128(dispute.amount, claimant_bps).unwrap_or_else(|| {
             soroban_sdk::panic_with_error!(env, TreasuryError::ArithmeticOverflow)
         });
-        let counterparty_amount = dispute.amount - claimant_amount;
+        // #923/#927: enforce the split invariant `0 <= claimant_amount <= dispute.amount`
+        // before computing the counterparty share. `apply_bps_i128` is already bounded by
+        // `dispute.amount`, but we re-validate defensively so a future change to the math
+        // helper can never turn this into an underflow (or an over-payout).
+        if claimant_amount < 0 || claimant_amount > dispute.amount {
+            soroban_sdk::panic_with_error!(env, TreasuryError::ArithmeticOverflow);
+        }
+        let counterparty_amount = dispute
+            .amount
+            .checked_sub(claimant_amount)
+            .unwrap_or_else(|| {
+                soroban_sdk::panic_with_error!(env, TreasuryError::ArithmeticOverflow)
+            });
         let treasury = env.current_contract_address();
         let token_client = token::Client::new(&env, &token_contract);
         if claimant_amount > 0 {
