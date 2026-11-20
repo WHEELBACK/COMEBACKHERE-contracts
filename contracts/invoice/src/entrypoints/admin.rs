@@ -257,9 +257,7 @@ impl InvoiceContract {
             .checked_add(additional_seconds)
             .filter(|new_expires_at| *new_expires_at > old_expires_at)
             .ok_or(InvoiceError::ExpiryOverflow)?;
-        env.storage()
-            .persistent()
-            .set(&DataKey::Invoice(id), &invoice);
+        crate::store_invoice(&env, &invoice)?;
         events::invoice_expiry_extended(
             &env,
             &InvoiceExpiryExtendedEvent {

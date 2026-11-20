@@ -56,9 +56,7 @@ impl InvoiceContract {
 
         let now = env.ledger().timestamp();
         invoice.status = InvoiceStatus::RefundRequested;
-        env.storage()
-            .persistent()
-            .set(&DataKey::Invoice(id), &invoice);
+        crate::store_invoice(&env, &invoice)?;
         // Store the request timestamp for get_refund_status (#700).
         env.storage()
             .persistent()
@@ -99,9 +97,7 @@ impl InvoiceContract {
         verify_payment_state(&invoice)?;
 
         invoice.status = InvoiceStatus::Refunded;
-        env.storage()
-            .persistent()
-            .set(&DataKey::Invoice(id), &invoice);
+        crate::store_invoice(&env, &invoice)?;
         append_history(
             &env,
             id,
@@ -181,9 +177,7 @@ impl InvoiceContract {
         transfer_net_refund(&env, &token_id, &payer, refund.net_amount)?;
 
         invoice.status = InvoiceStatus::Refunded;
-        env.storage()
-            .persistent()
-            .set(&DataKey::Invoice(id), &invoice);
+        crate::store_invoice(&env, &invoice)?;
         env.storage()
             .persistent()
             .set(&DataKey::RefundBreakdown(id), &refund);
@@ -300,9 +294,7 @@ impl InvoiceContract {
         verify_payment_state(&invoice)?;
 
         invoice.status = InvoiceStatus::Paid;
-        env.storage()
-            .persistent()
-            .set(&DataKey::Invoice(id), &invoice);
+        crate::store_invoice(&env, &invoice)?;
         append_history(
             &env,
             id,

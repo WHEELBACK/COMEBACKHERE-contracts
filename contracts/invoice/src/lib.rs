@@ -8,6 +8,7 @@
 
 mod entrypoints;
 mod events;
+mod invariants;
 mod invoice;
 mod refund;
 mod template;
@@ -19,7 +20,7 @@ pub use events::{
 };
 pub use invoice::StatusTransition;
 pub use invoice::{
-    BatchInvoiceParams, DataKey, Invoice, InvoiceError, InvoiceStatus, InvoiceSummary,
+    BatchInvoiceParams, DataKey, Invoice, InvoiceError, InvoiceErrorCategory, InvoiceStatus, InvoiceSummary,
     MaybeAddress, MaybeBytes, MaybeU64, RefundStatus, INVOICE_TTL_EXTEND_TO, INVOICE_TTL_THRESHOLD,
     MAX_BATCH_EXPIRE, MAX_BATCH_SIZE, MAX_LATE_FEE_BPS, MAX_PAGE_LIMIT, MAX_PAYER_INDEX_ENTRIES,
 };
@@ -30,10 +31,26 @@ pub use refund::{
 pub use template::{
     InvoiceTemplate, RecurrenceInterval, TEMPLATE_KEEPER_BATCH_SIZE, TEMPLATE_PAGE_LIMIT,
 };
+pub use invariants::verify_invoice_invariants;
 pub use validation::require_valid_discount;
 pub use validation::{require_memo_not_too_long, MAX_MEMO_BYTES};
 
 use soroban_sdk::{contract, Address, Env, Vec};
+
+/// Persists `invoice` under `DataKey::Invoice(invoice.id)` after checking the
+/// state invariants every stored invoice must satisfy (#882).
+///
+/// Every invoice write goes through here, so no entrypoint can leave an
+/// internally inconsistent record behind; a violation aborts the invocation
+/// with `InvoiceError::InvariantViolation` and all of its writes are rolled
+/// back.
+pub(crate) fn store_invoice(env: &Env, invoice: &Invoice) -> Result<(), InvoiceError> {
+    verify_invoice_invariants(invoice)?;
+    env.storage()
+        .persistent()
+        .set(&DataKey::Invoice(invoice.id), invoice);
+    Ok(())
+}
 
 pub(crate) fn pending_index_add(env: &Env, id: u64) {
     let mut ids: Vec<u64> = env
@@ -45,20 +62,54 @@ pub(crate) fn pending_index_add(env: &Env, id: u64) {
     env.storage().persistent().set(&DataKey::PendingIndex, &ids);
 }
 
+/// Appends several ids to the pending index with a single read and a single
+/// write (#880), instead of one read-modify-write of the whole index per id.
+pub(crate) fn pending_index_add_many(env: &Env, new_ids: &Vec<u64>) {
+    if new_ids.is_empty() {
+        return;
+    }
+    let mut ids: Vec<u64> = env
+        .storage()
+        .persistent()
+        .get(&DataKey::PendingIndex)
+        .unwrap_or_else(|| Vec::new(env));
+    ids.append(new_ids);
+    env.storage().persistent().set(&DataKey::PendingIndex, &ids);
+}
+
 pub(crate) fn pending_index_remove(env: &Env, id: u64) {
-    let ids: Vec<u64> = match env.storage().persistent().get(&DataKey::PendingIndex) {
+    let mut ids: Vec<u64> = match env.storage().persistent().get(&DataKey::PendingIndex) {
         Some(v) => v,
         None => return,
     };
-    let mut updated = Vec::new(env);
-    for existing in ids.iter() {
-        if existing != id {
-            updated.push_back(existing);
+    // #880: remove in place rather than rebuilding a fresh host vector element
+    // by element, and skip the write entirely when `id` is not indexed.
+    if let Some(index) = ids.first_index_of(id) {
+        ids.remove(index);
+        env.storage().persistent().set(&DataKey::PendingIndex, &ids);
+    }
+}
+
+/// Removes several ids from the pending index with a single read and at most
+/// a single write (#880).
+pub(crate) fn pending_index_remove_many(env: &Env, removed: &Vec<u64>) {
+    if removed.is_empty() {
+        return;
+    }
+    let mut ids: Vec<u64> = match env.storage().persistent().get(&DataKey::PendingIndex) {
+        Some(v) => v,
+        None => return,
+    };
+    let mut changed = false;
+    for id in removed.iter() {
+        if let Some(index) = ids.first_index_of(id) {
+            ids.remove(index);
+            changed = true;
         }
     }
-    env.storage()
-        .persistent()
-        .set(&DataKey::PendingIndex, &updated);
+    if changed {
+        env.storage().persistent().set(&DataKey::PendingIndex, &ids);
+    }
 }
 
 /// Records `id` in `payer`'s index (#711).

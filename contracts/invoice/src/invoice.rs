@@ -1,6 +1,6 @@
 use soroban_sdk::{contracttype, Address, Bytes};
 
-pub use invoice_errors::InvoiceError;
+pub use invoice_errors::{InvoiceError, InvoiceErrorCategory};
 
 /// USDC on Stellar uses 7 decimal places: 1 USDC = 10_000_000 stroops.
 pub const USDC_FACTOR: i128 = 10_000_000;
