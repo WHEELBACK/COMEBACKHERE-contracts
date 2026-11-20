@@ -24,4 +24,12 @@ pub enum TreasuryError {
     TooManySigners = 9,
     /// The signer weight must be greater than zero; use `remove_signer` to remove a signer.
     ZeroSignerWeight = 10,
+    /// A strict invariant check failed, indicating internal state inconsistency.
+    InvariantViolation = 11,
+    /// The recorded vote weight does not match the expected weight for the signer.
+    VoteWeightMismatch = 12,
+    /// The recorded hold amount does not match the expected amount for the proposal.
+    HoldAmountMismatch = 13,
+    /// The requested state transition is not valid from the current state.
+    InvalidStateTransition = 14,
 }

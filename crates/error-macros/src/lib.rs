@@ -96,6 +96,47 @@
 //! `scripts/check-enum-doc-comments.sh` validate hand-written and macro-generated
 //! enums alike.
 //!
+//! # Escrow-vault errors (#910)
+//!
+//! `escrow-vault` declares its error enum through this same macro, so it gets
+//! the identical attribute block as every other contract error. The enum is
+//! grouped by concern (lifecycle, authorization, amounts, state) purely through
+//! doc comments and explicit discriminants — the macro does not partition or
+//! renumber anything:
+//!
+//! ```ignore
+//! use error_macros::declare_contract_error;
+//!
+//! declare_contract_error! {
+//!     /// Error codes for the escrow-vault contract.
+//!     ///
+//!     /// Variants are append-only and must never be renumbered; discriminants
+//!     /// are part of the on-chain ABI. See `scripts/check-enum-ordering.sh`.
+//!     pub enum EscrowVaultError {
+//!         // -- lifecycle --
+//!         /// The vault has already been initialized.
+//!         AlreadyInitialized = 1,
+//!         /// The vault has not been initialized yet.
+//!         NotInitialized = 2,
+//!         // -- authorization --
+//!         /// The caller is not authorized for this operation.
+//!         Unauthorized = 3,
+//!         // -- amounts --
+//!         /// The supplied amount is zero or otherwise invalid.
+//!         InvalidAmount = 4,
+//!         /// The vault holds insufficient funds for the operation.
+//!         InsufficientFunds = 5,
+//!         // -- state --
+//!         /// The operation is not valid in the vault's current state.
+//!         InvalidState = 6,
+//!     }
+//! }
+//! ```
+//!
+//! New variants are appended with the next unused discriminant; existing codes
+//! are never reused or reordered, and per-variant doc comments are what make a
+//! returned code debuggable on the client side.
+//!
 //! # Adding a new error crate
 //!
 //! 1. `crates/<name>-errors/Cargo.toml`, mirroring the other error crates:
@@ -134,6 +175,25 @@ pub use soroban_sdk;
 ///     pub enum WidgetError {
 ///         Unauthorized = 1,
 ///         NotFound = 2,
+///     }
+/// }
+/// ```
+///
+/// Per-variant doc comments and explicit discriminants are passed through
+/// untouched, so a contract can document each code for client debugging without
+/// the macro inferring, reordering or renumbering anything:
+///
+/// ```ignore
+/// declare_contract_error! {
+///     /// Error codes for the escrow-vault contract. Append-only; see
+///     /// `scripts/check-enum-ordering.sh`.
+///     pub enum EscrowVaultError {
+///         /// The vault has already been initialized.
+///         AlreadyInitialized = 1,
+///         /// The caller is not authorized for this operation.
+///         Unauthorized = 2,
+///         /// The supplied amount is zero or otherwise invalid.
+///         InvalidAmount = 3,
 ///     }
 /// }
 /// ```
