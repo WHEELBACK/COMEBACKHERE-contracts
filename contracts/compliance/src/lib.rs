@@ -179,6 +179,30 @@ pub enum ContractError {
     NoPendingAdmin = 11,
 }
 
+impl ContractError {
+    /// Human-readable description of the error, useful for client debugging.
+    ///
+    /// Soroban `#[contracterror]` variants are transmitted as numeric codes, so
+    /// clients rely on this mapping (or the README) to surface a friendly message.
+    pub fn message(&self) -> &'static str {
+        match self {
+            ContractError::Unauthorized => "caller is not authorised for this operation",
+            ContractError::ContractPaused => "contract is paused",
+            ContractError::AlreadyInitialized => "contract has already been initialised",
+            ContractError::BatchTooLarge => "batch exceeds the maximum allowed size",
+            ContractError::AddressIndexFull => "address index is full",
+            ContractError::BulkOperationCooldown => "bulk operation cooldown has not elapsed",
+            ContractError::UnexpectedSchemaVersion => "unexpected schema version",
+            ContractError::OperatorCannotClearAdminBlock => {
+                "operator cannot clear an admin-placed block"
+            }
+            ContractError::OperatorSetFull => "operator set is full",
+            ContractError::InvalidJurisdictionCode => "invalid jurisdiction code",
+            ContractError::NoPendingAdmin => "no pending admin transfer",
+        }
+    }
+}
+
 /// Standardised reason codes recorded when an address is blocked (#594).
 ///
 /// Replaces the previous free-form `Bytes` reason so that downstream systems
@@ -249,6 +273,16 @@ pub const MAX_OPERATORS: u32 = 10;
 /// without limit. Once full, the oldest entry is dropped when a new one is appended.
 pub const MAX_STATUS_HISTORY: u32 = 10;
 
+/// Ledger-count TTL threshold below which a persistent storage entry is
+/// considered "expiring" and gets bumped. Bumping only when the remaining TTL
+/// is below this threshold keeps the cost of reads/writes predictable while
+/// guaranteeing entries are never evicted mid-flight.
+pub const PERSISTENT_TTL_THRESHOLD: u32 = 1_000;
+/// Ledger count a persistent storage entry is extended to when it is about to
+/// expire. Chosen to comfortably outlive a typical contract interaction
+/// window without holding storage for the full ledger retention period.
+pub const PERSISTENT_TTL_EXTEND_TO: u32 = 10_000;
+
 #[contract]
 pub struct ComplianceContract;
 
@@ -297,6 +331,7 @@ impl ComplianceContract {
             env.storage()
                 .persistent()
                 .set(&DataKey::Allowed(address.clone()), &true);
+            Self::bump_persistent_ttl(&env, &DataKey::Allowed(address.clone()));
             env.storage()
                 .persistent()
                 .remove(&DataKey::AllowedUntil(address.clone()));
@@ -345,6 +380,16 @@ impl ComplianceContract {
 
     pub fn is_allowed(env: Env, address: Address) -> bool {
         Self::is_allowed_at(&env, &address, env.ledger().timestamp())
+    }
+
+    /// Bump the TTL of a persistent storage entry so it is not evicted by the
+    /// ledger. No-op when the key is absent. Centralising the bump keeps the
+    /// threshold/extend-to values consistent across every read and write path.
+    fn bump_persistent_ttl(env: &Env, key: &DataKey) {
+        let storage = env.storage().persistent();
+        if storage.has(key) {
+            storage.extend_ttl(key, PERSISTENT_TTL_THRESHOLD, PERSISTENT_TTL_EXTEND_TO);
+        }
     }
 
     /// The shared `is_allowed` decision, with the ledger timestamp passed in.
@@ -448,6 +493,7 @@ impl ComplianceContract {
         env.storage()
             .persistent()
             .set(&DataKey::Allowed(address.clone()), &true);
+        Self::bump_persistent_ttl(&env, &DataKey::Allowed(address.clone()));
         // Remove any expiry so this becomes a permanent allow.
         env.storage()
             .persistent()
@@ -489,12 +535,14 @@ impl ComplianceContract {
         env.storage()
             .persistent()
             .set(&DataKey::Allowed(address.clone()), &true);
+        Self::bump_persistent_ttl(&env, &DataKey::Allowed(address.clone()));
         env.storage()
             .persistent()
             .remove(&DataKey::AllowedUntil(address.clone()));
         env.storage()
             .persistent()
             .set(&DataKey::Tier(address.clone()), &tier);
+        Self::bump_persistent_ttl(&env, &DataKey::Tier(address.clone()));
         Self::append_status_history(&env, &address, AddressState::Allowed, &admin);
         Self::track_address(&env, &address)?;
         env.events()
@@ -586,6 +634,7 @@ impl ComplianceContract {
         env.storage()
             .persistent()
             .set(&DataKey::Jurisdiction(address.clone()), &code.clone());
+        Self::bump_persistent_ttl(&env, &DataKey::Jurisdiction(address.clone()));
         env.events()
             .publish((Symbol::new(&env, "jurisdiction_set"),), (address, code));
         Ok(())
@@ -618,6 +667,7 @@ impl ComplianceContract {
             env.storage()
                 .persistent()
                 .set(&DataKey::Blocked(address.clone()), &true);
+            Self::bump_persistent_ttl(&env, &DataKey::Blocked(address.clone()));
             // Admin-placed by construction: `bulk_block_addresses` is admin-only, so
             // no operator may clear these afterwards (#604).
             Self::record_block_placer(&env, &address, &admin);
@@ -659,11 +709,13 @@ impl ComplianceContract {
         env.storage()
             .persistent()
             .set(&DataKey::Blocked(address.clone()), &true);
+        Self::bump_persistent_ttl(&env, &DataKey::Blocked(address.clone()));
         Self::record_block_placer(&env, &address, &caller);
         if let Some(r) = reason {
             env.storage()
                 .persistent()
                 .set(&DataKey::BlockReason(address.clone()), &r);
+            Self::bump_persistent_ttl(&env, &DataKey::BlockReason(address.clone()));
         }
         Self::append_status_history(&env, &address, AddressState::Blocked, &caller);
         Self::track_address(&env, &address)?;
@@ -687,14 +739,17 @@ impl ComplianceContract {
         env.storage()
             .persistent()
             .set(&DataKey::Blocked(address.clone()), &true);
+        Self::bump_persistent_ttl(&env, &DataKey::Blocked(address.clone()));
         env.storage()
             .persistent()
             .set(&DataKey::BlockedUntil(address.clone()), &unblock_at);
+        Self::bump_persistent_ttl(&env, &DataKey::BlockedUntil(address.clone()));
         Self::record_block_placer(&env, &address, &caller);
         if let Some(r) = reason {
             env.storage()
                 .persistent()
                 .set(&DataKey::BlockReason(address.clone()), &r);
+            Self::bump_persistent_ttl(&env, &DataKey::BlockReason(address.clone()));
         }
         Self::append_status_history(&env, &address, AddressState::Blocked, &caller);
         Self::track_address(&env, &address)?;
@@ -797,9 +852,11 @@ impl ComplianceContract {
         env.storage()
             .persistent()
             .set(&DataKey::Allowed(address.clone()), &true);
+        Self::bump_persistent_ttl(&env, &DataKey::Allowed(address.clone()));
         env.storage()
             .persistent()
             .set(&DataKey::AllowedUntil(address.clone()), &expires_at);
+        Self::bump_persistent_ttl(&env, &DataKey::AllowedUntil(address.clone()));
         Self::append_status_history(&env, &address, AddressState::Allowed, &admin);
         Self::track_address(&env, &address)?;
         env.events().publish(
@@ -947,6 +1004,7 @@ impl ComplianceContract {
         env.storage()
             .persistent()
             .set(&DataKey::Blocked(address.clone()), &false);
+        Self::bump_persistent_ttl(&env, &DataKey::Blocked(address.clone()));
         env.storage()
             .persistent()
             .remove(&DataKey::BlockedUntil(address.clone()));
@@ -961,6 +1019,7 @@ impl ComplianceContract {
         env.storage()
             .persistent()
             .set(&DataKey::Allowed(address.clone()), &true);
+        Self::bump_persistent_ttl(&env, &DataKey::Allowed(address.clone()));
         // Clear allow expiry
         env.storage()
             .persistent()
@@ -1305,6 +1364,7 @@ impl ComplianceContract {
                     env.storage()
                         .persistent()
                         .set(&DataKey::Allowed(addr.clone()), &false);
+                    Self::bump_persistent_ttl(&env, &DataKey::Allowed(addr.clone()));
                     env.storage()
                         .persistent()
                         .remove(&DataKey::AllowedUntil(addr.clone()));
@@ -1376,6 +1436,9 @@ impl ComplianceContract {
         }
         let end = (start.saturating_add(limit)).min(total);
         let page_size = ADDR_INDEX_PAGE_SIZE as u64;
+        if page_size == 0 {
+            return Vec::new(&env);
+        }
         let mut i = start;
         // Only touch the pages the requested window actually spans — cost is
         // O(window), not O(total index size).
@@ -1459,6 +1522,7 @@ impl ComplianceContract {
         env.storage()
             .persistent()
             .set(&DataKey::BlockedBy(address.clone()), placer);
+        Self::bump_persistent_ttl(env, &DataKey::BlockedBy(address.clone()));
     }
 
     /// Enforces that `caller` may reverse the block on `address` (#604).
@@ -1629,9 +1693,11 @@ impl ComplianceContract {
             .unwrap_or(Vec::new(env));
         page.push_back(address.clone());
         env.storage().persistent().set(&page_key, &page);
+        Self::bump_persistent_ttl(env, &page_key);
         env.storage()
             .persistent()
             .set(&DataKey::AddrTracked(address.clone()), &());
+        Self::bump_persistent_ttl(env, &DataKey::AddrTracked(address.clone()));
         env.storage()
             .instance()
             .set(&DataKey::AddrIndexCount, &(count + 1));
