@@ -259,10 +259,7 @@ impl SettlementWorkflowContract {
 
     /// Returns `true` while the workflow is paused (#616).
     pub fn is_paused(env: Env) -> bool {
-        env.storage()
-            .instance()
-            .get(&DataKey::Paused)
-            .unwrap_or(false)
+        Self::is_paused_flag(&env)
     }
 
     /// Returns the current workflow admin.
@@ -273,14 +270,19 @@ impl SettlementWorkflowContract {
             .ok_or(TreasuryError::Unauthorized)
     }
 
+    /// Returns `true` while the workflow is paused. Single function used by
+    /// both `is_paused` and `require_not_paused` to eliminate duplicate
+    /// instance storage reads (#871).
+    fn is_paused_flag(env: &Env) -> bool {
+        env.storage()
+            .instance()
+            .get::<_, bool>(&DataKey::Paused)
+            .unwrap_or(false)
+    }
+
     /// Traps with [`TreasuryError::ContractPaused`] while the workflow is paused (#616).
     fn require_not_paused(env: &Env) {
-        let paused: bool = env
-            .storage()
-            .instance()
-            .get(&DataKey::Paused)
-            .unwrap_or(false);
-        if paused {
+        if Self::is_paused_flag(env) {
             soroban_sdk::panic_with_error!(env, TreasuryError::ContractPaused);
         }
     }
