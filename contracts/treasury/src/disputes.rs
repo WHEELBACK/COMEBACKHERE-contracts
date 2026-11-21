@@ -4,10 +4,26 @@ use crate::{
     TreasuryContractClient, TreasuryError,
 };
 use multisig::{meets_threshold, record_approval, require_authorized_signer};
+use protocol_math::{apply_bps_i128, is_valid_bps};
 use soroban_sdk::{contractimpl, token, Address, BytesN, Env, Symbol, Vec};
 
-/// Basis-points denominator for `resolve_dispute_split`'s ratio (10_000 = 100.00%).
-pub const BPS_DENOMINATOR: u32 = 10_000;
+// The basis-point denominator (`BPS_DENOMINATOR`, 10 000 = 100.00%) used by
+// `resolve_dispute_split` comes from `crates/protocol-math`, the single
+// protocol-wide definition (#707), and is re-exported at the crate root.
+
+/// Maximum length (in bytes) of the optional resolution `memo` accepted by
+/// `resolve_dispute` and `resolve_dispute_split` (#744).
+pub const MAX_RESOLUTION_MEMO_LEN: u32 = 256;
+
+/// Validates an optional resolution memo against [`MAX_RESOLUTION_MEMO_LEN`].
+fn validate_resolution_memo(memo: &Option<soroban_sdk::String>) -> Result<(), TreasuryError> {
+    if let Some(m) = memo {
+        if m.len() > MAX_RESOLUTION_MEMO_LEN {
+            return Err(TreasuryError::LabelTooLong);
+        }
+    }
+    Ok(())
+}
 
 #[contractimpl]
 impl TreasuryContract {
@@ -66,11 +82,22 @@ impl TreasuryContract {
             dispute_expires_at: expires_at,
             claimant_share_bps: 0,
             evidence_hash,
+            resolution_memo: None,
         };
         env.storage()
             .persistent()
             .set(&DataKey::Dispute(id), &dispute);
         env.storage().instance().set(&DataKey::DisputeCount, &id);
+        let mut by_settlement: Vec<u64> = env
+            .storage()
+            .persistent()
+            .get(&DataKey::SettlementDisputes(settlement_id))
+            .unwrap_or_else(|| Vec::new(&env));
+        by_settlement.push_back(id);
+        env.storage().persistent().set(
+            &DataKey::SettlementDisputes(settlement_id),
+            &by_settlement,
+        );
         env.events()
             .publish((Symbol::new(&env, "dispute_raised"), id), dispute);
         Ok(id)
@@ -117,9 +144,33 @@ impl TreasuryContract {
             .ok_or(TreasuryError::DisputeNotFound)
     }
 
+    /// Returns every dispute raised against `settlement_id`, in the order they were
+    /// raised. Bounded by the (small) number of disputes a single settlement can
+    /// accumulate; returns an empty `Vec` when none have been raised.
+    pub fn get_disputes_by_settlement(env: Env, settlement_id: u64) -> Vec<Dispute> {
+        let ids: Vec<u64> = env
+            .storage()
+            .persistent()
+            .get(&DataKey::SettlementDisputes(settlement_id))
+            .unwrap_or_else(|| Vec::new(&env));
+        let mut disputes = Vec::new(&env);
+        for id in ids.iter() {
+            if let Some(dispute) = env
+                .storage()
+                .persistent()
+                .get::<DataKey, Dispute>(&DataKey::Dispute(id))
+            {
+                disputes.push_back(dispute);
+            }
+        }
+        disputes
+    }
+
     /// Resolves an open dispute in favour of claimant or counterparty (admin-only).
     /// When the last open dispute for a settlement is resolved, the settlement hold is released.
-    /// Errors: `DisputeNotFound`, `DisputeAlreadyResolved`, `ContractPaused`.
+    /// `memo` is an optional bounded rationale (max [`MAX_RESOLUTION_MEMO_LEN`] bytes) recorded
+    /// on the dispute and included in the `dispute_resolved` event (#744).
+    /// Errors: `DisputeNotFound`, `DisputeAlreadyResolved`, `ContractPaused`, `InvalidResolutionMemo`.
     /// Panics: `Unauthorized`.
     /// Emits: `dispute_resolved`.
     pub fn resolve_dispute(
@@ -127,9 +178,11 @@ impl TreasuryContract {
         admin: Address,
         dispute_id: u64,
         in_favor_of_claimant: bool,
+        memo: Option<soroban_sdk::String>,
     ) -> Result<(), TreasuryError> {
         require_admin(&env, &admin);
         require_not_paused(&env);
+        validate_resolution_memo(&memo)?;
         let mut dispute: Dispute = env
             .storage()
             .persistent()
@@ -143,6 +196,7 @@ impl TreasuryContract {
         } else {
             DisputeStatus::ResolvedCounterparty
         };
+        dispute.resolution_memo = memo;
         let settlement_id = dispute.settlement_id;
         env.storage()
             .persistent()
@@ -154,7 +208,8 @@ impl TreasuryContract {
     }
 
     /// Resolves an open dispute by splitting `dispute.amount` between claimant and
-    /// counterparty according to `claimant_bps` (out of [`BPS_DENOMINATOR`]) instead of the
+    /// counterparty according to `claimant_bps` (out of the protocol-wide
+    /// `BPS_DENOMINATOR` = 10 000 bps, see `crates/protocol-math`) instead of the
     /// binary claimant/counterparty outcome `resolve_dispute` supports (admin-only).
     ///
     /// Design note: like `resolve_dispute`, this only ever pays out `dispute.amount` (the
@@ -164,7 +219,10 @@ impl TreasuryContract {
     /// settlement becomes eligible for its own `execute_settlement`/`partially_execute_settlement`
     /// payout again — callers must ensure the disputed amount and the settlement's payout are
     /// not double-counted when both eventually execute, exactly as with a binary resolution.
-    /// Panics: `DisputeNotFound`, `DisputeAlreadyResolved`, `ContractPaused`, `InvalidSplitRatio`.
+    /// `memo` is an optional bounded rationale (max [`MAX_RESOLUTION_MEMO_LEN`] bytes) recorded
+    /// on the dispute and included in the `dispute_resolved_split` event (#744).
+    /// Panics: `DisputeNotFound`, `DisputeAlreadyResolved`, `ContractPaused`, `InvalidSplitRatio`,
+    /// `InvalidResolutionMemo`.
     /// Emits: `dispute_resolved_split`.
     pub fn resolve_dispute_split(
         env: Env,
@@ -172,27 +230,28 @@ impl TreasuryContract {
         dispute_id: u64,
         claimant_bps: u32,
         token_contract: Address,
+        memo: Option<soroban_sdk::String>,
     ) {
         require_admin(&env, &admin);
         require_not_paused(&env);
-        if claimant_bps > BPS_DENOMINATOR {
+        if !is_valid_bps(claimant_bps) {
             soroban_sdk::panic_with_error!(env, TreasuryError::InvalidSplitRatio);
+        }
+        if let Err(e) = validate_resolution_memo(&memo) {
+            soroban_sdk::panic_with_error!(env, e);
         }
         let mut dispute: Dispute = env
             .storage()
             .persistent()
             .get(&DataKey::Dispute(dispute_id))
-            .unwrap_or_else(|| soroban_sdk::panic_with_error!(env, TreasuryError::DisputeNotFound));
+            .ok_or(TreasuryError::DisputeNotFound)
+            .unwrap_or_else(|e| soroban_sdk::panic_with_error!(env, e));
         if dispute.status != DisputeStatus::Raised {
             soroban_sdk::panic_with_error!(env, TreasuryError::DisputeAlreadyResolved);
         }
-        let claimant_amount = dispute
-            .amount
-            .checked_mul(claimant_bps as i128)
-            .unwrap_or_else(|| {
-                soroban_sdk::panic_with_error!(env, TreasuryError::ArithmeticOverflow)
-            })
-            / BPS_DENOMINATOR as i128;
+        let claimant_amount = apply_bps_i128(dispute.amount, claimant_bps).unwrap_or_else(|| {
+            soroban_sdk::panic_with_error!(env, TreasuryError::ArithmeticOverflow)
+        });
         let counterparty_amount = dispute.amount - claimant_amount;
         let treasury = env.current_contract_address();
         let token_client = token::Client::new(&env, &token_contract);
@@ -204,14 +263,13 @@ impl TreasuryContract {
         }
         dispute.status = DisputeStatus::ResolvedSplit;
         dispute.claimant_share_bps = claimant_bps;
+        dispute.resolution_memo = memo;
         let settlement_id = dispute.settlement_id;
         env.storage()
             .persistent()
             .set(&DataKey::Dispute(dispute_id), &dispute);
-        env.events().publish(
-            (Symbol::new(&env, "dispute_resolved_split"), dispute_id),
-            dispute,
-        );
+        env.events()
+            .publish((Symbol::new(&env, "dispute_resolved_split"), dispute_id), dispute);
         release_settlement_hold_if_no_open_disputes(&env, settlement_id);
     }
 

@@ -5,7 +5,7 @@
 //! Each bulk entrypoint must:
 //!   1. Accept a list of exactly `MAX_BATCH_SIZE` addresses without error.
 //!   2. Reject a list of `MAX_BATCH_SIZE + 1` addresses with the typed error
-//!      `ContractError::BatchTooLarge` before performing *any* state mutations.
+//!      `ComplianceError::BatchTooLarge` before performing *any* state mutations.
 //!
 //! Testing both boundaries (cap and cap + 1) means the limit is explicitly
 //! documented in the test suite and cannot silently change — a future refactor
@@ -23,7 +23,7 @@
 //! `address_index_full_boundary_test.rs`.
 
 use compliance::{
-    ComplianceContract, ComplianceContractClient, ContractError, BULK_OP_COOLDOWN_SECS,
+    ComplianceContract, ComplianceContractClient, ComplianceError, BULK_OP_COOLDOWN_SECS,
     MAX_BATCH_SIZE,
 };
 use soroban_sdk::{
@@ -92,7 +92,7 @@ fn bulk_allow_one_over_max_batch_size_is_rejected() {
     let result = client.try_bulk_allow_addresses(&admin, &addresses);
     assert_eq!(
         result,
-        Err(Ok(ContractError::BatchTooLarge)),
+        Err(Ok(ComplianceError::BatchTooLarge)),
         "bulk_allow_addresses with MAX_BATCH_SIZE + 1 addresses must return BatchTooLarge"
     );
 
@@ -139,7 +139,7 @@ fn bulk_block_one_over_max_batch_size_is_rejected() {
     let result = client.try_bulk_block_addresses(&admin, &addresses);
     assert_eq!(
         result,
-        Err(Ok(ContractError::BatchTooLarge)),
+        Err(Ok(ComplianceError::BatchTooLarge)),
         "bulk_block_addresses with MAX_BATCH_SIZE + 1 addresses must return BatchTooLarge"
     );
 
@@ -206,7 +206,7 @@ fn bulk_check_one_over_max_batch_size_is_rejected() {
     let result = client.try_bulk_check_addresses(&addresses);
     assert_eq!(
         result,
-        Err(Ok(ContractError::BatchTooLarge)),
+        Err(Ok(ComplianceError::BatchTooLarge)),
         "bulk_check_addresses with MAX_BATCH_SIZE + 1 addresses must return BatchTooLarge"
     );
 }
@@ -222,12 +222,12 @@ fn bulk_allow_and_bulk_block_share_the_same_cap() {
 
     let allow_batch = gen_addresses(&env, MAX_BATCH_SIZE + 1);
     let allow_result = client.try_bulk_allow_addresses(&admin, &allow_batch);
-    assert_eq!(allow_result, Err(Ok(ContractError::BatchTooLarge)));
+    assert_eq!(allow_result, Err(Ok(ComplianceError::BatchTooLarge)));
 
     // Advance clock so the block call is not rejected by the cooldown instead.
     advance_past_cooldown(&env);
 
     let block_batch = gen_addresses(&env, MAX_BATCH_SIZE + 1);
     let block_result = client.try_bulk_block_addresses(&admin, &block_batch);
-    assert_eq!(block_result, Err(Ok(ContractError::BatchTooLarge)));
+    assert_eq!(block_result, Err(Ok(ComplianceError::BatchTooLarge)));
 }

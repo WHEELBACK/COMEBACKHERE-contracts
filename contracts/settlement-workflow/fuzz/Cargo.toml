@@ -41,3 +41,10 @@ path = "fuzz_targets/execute_with_compliance.rs"
 test = false
 doc = false
 bench = false
+
+[[bin]]
+name = "execute_with_compliance_batch"
+path = "fuzz_targets/execute_with_compliance_batch.rs"
+test = false
+doc = false
+bench = false

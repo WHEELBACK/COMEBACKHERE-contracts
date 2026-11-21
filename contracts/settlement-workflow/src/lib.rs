@@ -3,8 +3,9 @@
 use compliance_client::ComplianceClient;
 use multisig::{Settlement, TreasuryError};
 use soroban_sdk::{
-    contract, contractclient, contracterror, contractimpl, contracttype, Address, Env, Symbol, Vec,
+    contract, contractclient, contractimpl, contracttype, Address, Env, Symbol, Vec,
 };
+pub use workflow_errors::WorkflowError;
 
 /// Cross-contract call surface this crate needs from the treasury contract.
 /// `#[contractclient]` on a bare trait generates only an invocation client, not
@@ -52,50 +53,6 @@ pub trait PausableInterface {
 /// covers this repository's contracts with room to grow.
 pub const MAX_PAUSE_TARGETS: u32 = 8;
 
-/// Errors raised by the workflow contract's own coordination role.
-///
-/// Distinct from [`TreasuryError`], which this crate returns from its settlement
-/// path only because it already depends on `multisig` and had no error type of
-/// its own. A coordination failure — a target would not pause, the workflow was
-/// never configured, the caller is not the pause admin — is not a treasury
-/// failure, and reporting it as one would send an operator debugging the wrong
-/// contract during an incident.
-#[contracterror]
-#[derive(Copy, Clone, Debug, Eq, PartialEq)]
-#[repr(u32)]
-pub enum WorkflowError {
-    /// The caller is not the address registered as the emergency-pause admin.
-    Unauthorized = 1,
-    /// `initialize_emergency_pause` has not been called, so there is no target
-    /// set to coordinate.
-    NotConfigured = 2,
-    /// A target refused to pause, or the invocation itself failed. The whole
-    /// fan-out is rolled back, so no target is left paused by a partial sweep.
-    PauseTargetFailed = 3,
-    /// A target refused to unpause. The whole fan-out is rolled back, so the
-    /// protocol is never left partially resumed.
-    UnpauseTargetFailed = 4,
-    /// An empty target set was supplied; there would be nothing to coordinate.
-    NoPauseTargets = 5,
-    /// More targets than [`MAX_PAUSE_TARGETS`].
-    TooManyPauseTargets = 6,
-    /// The same address appears twice, which would pause it twice and make the
-    /// second call the one that decides whether the fan-out succeeds.
-    DuplicatePauseTarget = 7,
-    /// The workflow contract itself was supplied as a target. Pausing itself
-    /// part-way through the fan-out would make every remaining call fail,
-    /// turning a recoverable incident into a workflow that cannot be resumed.
-    SelfPauseTarget = 8,
-    /// The target set cannot be reconfigured while an emergency pause is active:
-    /// the new set would not match the state that is actually paused.
-    EmergencyPauseActive = 9,
-    /// `resume_all` was called while no emergency pause is active. Distinct from
-    /// `NotConfigured` so an operator can tell "never set up" from "nothing to
-    /// undo", and so the orchestrator cannot be used to unpause a protocol that
-    /// somebody else paused through their own admin key.
-    NotEmergencyPaused = 10,
-}
-
 /// Storage keys for the workflow contract.
 ///
 /// `ComplianceId` / `TreasuryId` pin the compliance and treasury instances this
@@ -123,6 +80,9 @@ pub enum DataKey {
     /// while no emergency pause is active. Doubles as the flag that blocks
     /// reconfiguration and `resume_all` while an incident is open.
     EmergencyPausedAt,
+    /// Targets that were already paused before `emergency_pause_all` ran.
+    /// `resume_all` skips these so it only reverses its own sweep.
+    AlreadyPaused,
     /// The active administrator. Set once at initialization and thereafter only
     /// changed through `accept_admin`. See #621.
     Admin,
@@ -146,21 +106,19 @@ impl SettlementWorkflowContract {
     /// Pins the compliance and treasury contract instances this workflow trusts,
     /// and records `admin` as the initial administrator.
     ///
-    /// Must be called exactly once before any `execute_with_compliance*` call; a
-    /// second call traps with `AlreadyInitialized` (#364). Callers can no longer
-    /// redirect the gate at an arbitrary compliance/treasury instance per-call.
-    /// The same guard also covers the admin role (#621), so a repeat call cannot
-    /// hand the admin key to an attacker either.
+    /// Runs exactly once as the deployment constructor (via `register_contract`
+    /// with constructor args), so there is no window after deployment in which a
+    /// third party could front-run `initialize` and seize control of the workflow.
+    /// Because it is a constructor, it cannot be called again — there is no
+    /// `AlreadyInitialized` path to hit; the constructor arguments are the
+    /// pinned values for the lifetime of the contract.
     /// Emits: `workflow_initialized`.
-    ///
-    /// The guard reads `ComplianceId` rather than `Admin`; the two are written in
-    /// the same call and so are always present or absent together, but
-    /// `ComplianceId` is what this check has always keyed on and what the pinned
-    /// trust relationship is expressed in terms of.
-    pub fn initialize(env: Env, admin: Address, compliance_id: Address, treasury_id: Address) {
-        if env.storage().instance().has(&DataKey::ComplianceId) {
-            soroban_sdk::panic_with_error!(env, TreasuryError::AlreadyInitialized);
-        }
+    pub fn __constructor(
+        env: Env,
+        admin: Address,
+        compliance_id: Address,
+        treasury_id: Address,
+    ) {
         admin.require_auth();
         env.storage().instance().set(&DataKey::Admin, &admin);
         env.storage()
@@ -254,6 +212,28 @@ impl SettlementWorkflowContract {
             .instance()
             .get(&DataKey::TreasuryId)
             .unwrap_or_else(|| soroban_sdk::panic_with_error!(env, WorkflowError::NotConfigured))
+    }
+
+    /// Returns the pinned compliance contract instance so ops can confirm
+    /// on-chain which compliance contract the workflow calls (#775).
+    ///
+    /// Errors: `NotConfigured` if the workflow has not been initialized.
+    pub fn get_compliance_id(env: Env) -> Result<Address, WorkflowError> {
+        env.storage()
+            .instance()
+            .get(&DataKey::ComplianceId)
+            .ok_or(WorkflowError::NotConfigured)
+    }
+
+    /// Returns the pinned treasury contract instance so ops can confirm
+    /// on-chain which treasury contract the workflow calls (#775).
+    ///
+    /// Errors: `NotConfigured` if the workflow has not been initialized.
+    pub fn get_treasury_id(env: Env) -> Result<Address, WorkflowError> {
+        env.storage()
+            .instance()
+            .get(&DataKey::TreasuryId)
+            .ok_or(WorkflowError::NotConfigured)
     }
 
     /// Pauses the workflow (admin-only, #616): both `execute_with_compliance*`
@@ -572,15 +552,32 @@ impl SettlementWorkflowContract {
     /// to unpause a protocol somebody else paused through their own admin key:
     /// the orchestrator only ever reverses its own sweep.
     ///
+    /// `min_delay_secs` enforces a minimum cooling-off period between the
+    /// emergency pause and this resume call (#780). When non-zero, `resume_all`
+    /// returns [`WorkflowError::ResumeTooEarly`] if fewer than `min_delay_secs`
+    /// seconds have elapsed since `EmergencyPausedAt`. A value of `0` means no
+    /// delay is required and the call proceeds immediately — preserving full
+    /// backward compatibility with callers that pass `0`.
+    ///
     /// Errors: `Unauthorized`, `NotConfigured`, `NotEmergencyPaused`,
-    /// `UnpauseTargetFailed`.
+    /// `ResumeTooEarly`, `UnpauseTargetFailed`.
     /// Emits: `emergency_pause_resumed`.
-    pub fn resume_all(env: Env, admin: Address) -> Result<Vec<Address>, WorkflowError> {
+    pub fn resume_all(
+        env: Env,
+        admin: Address,
+        min_delay_secs: u64,
+    ) -> Result<Vec<Address>, WorkflowError> {
         admin.require_auth();
         Self::require_pause_admin(&env, &admin)?;
 
-        if Self::emergency_paused_at(&env).is_none() {
-            return Err(WorkflowError::NotEmergencyPaused);
+        let paused_at = Self::emergency_paused_at(&env).ok_or(WorkflowError::NotEmergencyPaused)?;
+
+        if min_delay_secs > 0 {
+            let now = env.ledger().timestamp();
+            let earliest_resume = paused_at.saturating_add(min_delay_secs);
+            if now < earliest_resume {
+                return Err(WorkflowError::ResumeTooEarly);
+            }
         }
 
         let targets = Self::pause_targets(&env)?;

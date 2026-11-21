@@ -108,6 +108,8 @@ Persistent keys (`contracts/invoice/src/invoice.rs:131-152`):
 | `DataKey::PendingIndex` | `lib.rs:30,34` | expiry enumeration | **No** |
 | `DataKey::LastCreatedAt(Address)` | `create_invoice` cooldown check | cooldown check | **No** |
 | `DataKey::RefundBreakdown(u64)` (#71) | `process_refund`, alongside the `Refunded` transition | `get_refund_breakdown` | **No** |
+| `DataKey::PayerIndexCount(Address)` | `mark_paid` | `get_invoices_by_payer` | **No** |
+| `DataKey::PayerIndexEntry(Address, u64)` | `mark_paid` | `get_invoices_by_payer` | **No** |
 
 **Assessment — lower risk, not a genuine gap today.** Invoices are designed
 around a bounded lifecycle (`expires_at`, with an admin-tunable grace window);
@@ -164,3 +166,10 @@ follow-ups should be filed and linked from the parent audit issue:
 
 Both follow-ups are scoped as their own PRs; this audit's job is documentation
 and detection, not remediation.
+
+## Invoice batch entrypoints (#713)
+
+`batch_create_invoice` and `batch_expire` now extend the TTL of every
+`DataKey::Invoice(id)` they write, using `INVOICE_TTL_THRESHOLD = 518_400`
+(~30 days) and `INVOICE_TTL_EXTEND_TO = 1_036_800` (~60 days) ledgers, both
+defined in `contracts/invoice/src/invoice.rs`.

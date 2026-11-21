@@ -94,6 +94,15 @@ fn every_variant_serializes_uniquely() {
         ),
         ("RefundBreakdown(1)", xdr(&env, DataKey::RefundBreakdown(1))),
         ("RefundBreakdown(2)", xdr(&env, DataKey::RefundBreakdown(2))),
+        ("RefundWindow", xdr(&env, DataKey::RefundWindow)),
+        (
+            "RefundRequestedAt(1)",
+            xdr(&env, DataKey::RefundRequestedAt(1)),
+        ),
+        (
+            "RefundRequestedAt(2)",
+            xdr(&env, DataKey::RefundRequestedAt(2)),
+        ),
     ]);
 }
 
@@ -107,6 +116,10 @@ fn same_id_keyed_collections_stay_separate() {
         ("Invoice(7)", xdr(&env, DataKey::Invoice(7))),
         ("InvoiceHistory(7)", xdr(&env, DataKey::InvoiceHistory(7))),
         ("RefundBreakdown(7)", xdr(&env, DataKey::RefundBreakdown(7))),
+        (
+            "RefundRequestedAt(7)",
+            xdr(&env, DataKey::RefundRequestedAt(7)),
+        ),
     ]);
 }
 
@@ -123,5 +136,6 @@ fn unit_variants_are_distinct() {
         ("GraceWindow", xdr(&env, DataKey::GraceWindow)),
         ("PendingIndex", xdr(&env, DataKey::PendingIndex)),
         ("CreationCooldown", xdr(&env, DataKey::CreationCooldown)),
+        ("RefundWindow", xdr(&env, DataKey::RefundWindow)),
     ]);
 }

@@ -29,7 +29,7 @@ fn dispute_resolved_while_hold_active_releases_to_pending() {
 
     // Resolve the dispute — this should release the settlement back to Pending
     // since no other open disputes remain
-    client.resolve_dispute(&admin, &did, &true);
+    client.resolve_dispute(&admin, &did, &true, &None);
     assert_eq!(
         client.get_settlement(&sid).status,
         SettlementStatus::Pending
@@ -52,11 +52,11 @@ fn second_dispute_keeps_hold_after_first_resolved() {
     assert_eq!(client.get_settlement(&sid).status, SettlementStatus::OnHold);
 
     // Resolve dispute A — dispute B is still open so settlement stays OnHold
-    client.resolve_dispute(&admin, &did_a, &true);
+    client.resolve_dispute(&admin, &did_a, &true, &None);
     assert_eq!(client.get_settlement(&sid).status, SettlementStatus::OnHold);
 
     // Resolve dispute B — now no open disputes remain, settlement released
-    client.resolve_dispute(&admin, &did_b, &false);
+    client.resolve_dispute(&admin, &did_b, &false, &None);
     assert_eq!(
         client.get_settlement(&sid).status,
         SettlementStatus::Pending
@@ -85,7 +85,7 @@ fn dispute_raised_after_hold_settlement_produces_consistent_state() {
     assert_eq!(client.get_settlement(&sid).status, SettlementStatus::OnHold);
 
     // Resolve dispute — settlement transitions to Pending
-    client.resolve_dispute(&admin, &did, &true);
+    client.resolve_dispute(&admin, &did, &true, &None);
     assert_eq!(
         client.get_settlement(&sid).status,
         SettlementStatus::Pending

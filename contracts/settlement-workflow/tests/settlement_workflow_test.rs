@@ -148,22 +148,21 @@ fn emits_settlement_workflow_executed_event() {
 }
 
 #[test]
-fn initialize_is_idempotent_and_pins_trusted_instances() {
+fn constructor_pins_compliance_and_treasury_ids() {
     let env = Env::default();
     env.mock_all_auths();
     let admin = Address::generate(&env);
     let compliance_id = Address::generate(&env);
     let treasury_id = Address::generate(&env);
-    let workflow_id = env.register_contract(None, SettlementWorkflowContract);
+    let workflow_id = env.register(
+        SettlementWorkflowContract,
+        (admin.clone(), compliance_id.clone(), treasury_id.clone()),
+    );
     let workflow = SettlementWorkflowContractClient::new(&env, &workflow_id);
 
-    workflow.initialize(&admin, &compliance_id, &treasury_id);
-    // Second initialize must trap with AlreadyInitialized.
-    let err = workflow
-        .try_initialize(&admin, &compliance_id, &treasury_id)
-        .unwrap_err()
-        .unwrap();
-    assert_eq!(err, TreasuryError::AlreadyInitialized.into());
+    assert_eq!(workflow.get_compliance_id(), compliance_id);
+    assert_eq!(workflow.get_treasury_id(), treasury_id);
+    assert_eq!(workflow.get_admin(), admin);
 }
 
 #[test]
@@ -857,9 +856,11 @@ fn emitted_events_match_abi_event_snapshot() {
 
     // `setup()` already initialized `workflow`, so initialize a second instance to
     // cover `workflow_initialized` too.
-    let other_id = env.register_contract(None, SettlementWorkflowContract);
+    let other_id = env.register(
+        SettlementWorkflowContract,
+        (admin.clone(), compliance_id.clone(), other_id.clone()),
+    );
     let other = SettlementWorkflowContractClient::new(&env, &other_id);
-    other.initialize(&admin, &compliance_id, &other_id);
     emitted.extend(drain(&env, &other_id));
 
     for name in &emitted {

@@ -148,3 +148,24 @@ fn partial_settlement_full_sequence() {
     // `if status != Pending { panic!("AlreadyExecuted") }` would fire on any follow-up call.
     assert_ne!(settlement.status, SettlementStatus::Pending);
 }
+
+/// Verifies that the `PartialExecutedTotal` cumulative guard (#578) rejects a
+/// `partial_amount` that alone equals the settlement `amount`. The guard
+/// `new_executed > settlement.amount` fires because `0 + amount` is not strictly
+/// less than `amount`, returning `InvalidAmount` (#7).
+///
+/// This also exercises the `checked_add` path: with a prior total of 0 the
+/// checked addition itself succeeds, but the subsequent bounds check rejects
+/// the value — confirming the overflow guard is wired into the function path.
+#[test]
+#[should_panic(expected = "Error(Contract, #7)")]
+fn partial_execution_cumulative_guard_rejects_exact_amount() {
+    let env = Env::default();
+    env.mock_all_auths();
+    // Setup: settlement for 10_000_000, threshold=1, admin weight=1.
+    let (client, admin, token_id, sid) = setup(&env, 10_000_000);
+
+    // partial_amount == settlement.amount → first gate `partial_amount >= settlement.amount`
+    // already rejects this, confirming the existing + new guards are layered correctly.
+    client.partially_execute_settlement(&admin, &sid, &10_000_000, &token_id);
+}

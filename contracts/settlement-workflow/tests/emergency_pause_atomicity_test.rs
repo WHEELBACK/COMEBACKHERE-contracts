@@ -16,7 +16,7 @@
 //! rollback that only appears to work — because the test read a flag instead of
 //! exercising the contract's behaviour — cannot pass.
 
-use compliance::{ComplianceContract, ComplianceContractClient, ContractError};
+use compliance::{ComplianceContract, ComplianceContractClient, ComplianceError};
 use settlement_workflow::{
     SettlementWorkflowContract, SettlementWorkflowContractClient, WorkflowError, MAX_PAUSE_TARGETS,
 };
@@ -106,22 +106,25 @@ fn setup() -> Fixture {
     env.mock_all_auths();
 
     let operator = Address::generate(&env);
-    let workflow_id = env.register(SettlementWorkflowContract, ());
-    let workflow = SettlementWorkflowContractClient::new(&env, &workflow_id);
 
     let compliance_id = env.register(ComplianceContract, ());
     let compliance = ComplianceContractClient::new(&env, &compliance_id);
-    compliance.initialize(&workflow_id);
 
     let treasury_id = env.register(TreasuryContract, ());
     let treasury = TreasuryContractClient::new(&env, &treasury_id);
+
+    let workflow_id = env.register(
+        SettlementWorkflowContract,
+        (operator.clone(), compliance_id.clone(), treasury_id.clone()),
+    );
+    let workflow = SettlementWorkflowContractClient::new(&env, &workflow_id);
+
+    compliance.initialize(&workflow_id);
     treasury.initialize(&workflow_id, &1, &Vec::new(&env));
 
     let token_id = env.register_stellar_asset_contract(operator.clone());
     let bystander = Address::generate(&env);
     let third_party = Address::generate(&env);
-
-    workflow.initialize(&operator, &compliance_id, &treasury_id);
 
     Fixture {
         env,
@@ -171,7 +174,7 @@ impl Fixture {
         !matches!(
             self.compliance
                 .try_allow_address(&self.workflow_id, &self.third_party),
-            Err(Ok(ContractError::ContractPaused))
+            Err(Ok(ComplianceError::ContractPaused))
         )
     }
 
@@ -294,6 +297,63 @@ fn resume_restores_every_target_and_clears_the_incident() {
     let resumed = f.workflow.resume_all(&f.operator);
     assert_eq!(resumed.len(), 2);
     assert!(f.protocol_is_live());
+    assert_eq!(f.workflow.get_emergency_paused_at(), None);
+}
+
+// ── already-paused targets (#773) ────────────────────────────────────────────
+
+/// The sweep must tolerate a target that was already paused before the sweep
+/// began: pause is idempotent, so a pre-paused target does not make the fan-out
+/// fail, and every target ends up paused.
+#[test]
+fn emergency_pause_all_tolerates_an_already_paused_target() {
+    let f = setup();
+    f.configure(&f.both_targets());
+
+    // An operator pauses compliance independently, outside the sweep. The
+    // workflow is compliance's pinned admin, so this call is authorized.
+    f.compliance.pause(&f.workflow_id);
+    assert!(!f.compliance_is_running());
+    assert!(f.treasury_is_running());
+
+    assert_eq!(
+        f.workflow.emergency_pause_all(&f.operator).unwrap(),
+        f.both_targets(),
+        "a pre-paused target must not fail the sweep"
+    );
+    assert!(!f.compliance_is_running());
+    assert!(!f.treasury_is_running());
+    assert_eq!(
+        f.workflow.get_emergency_paused_at(),
+        Some(f.env.ledger().timestamp())
+    );
+}
+
+/// `resume_all` reverses only what the sweep itself paused. A target paused
+/// independently before the sweep is left paused, so the orchestrator never
+/// reverses an action it did not take.
+#[test]
+fn resume_all_leaves_independently_paused_target_paused() {
+    let f = setup();
+    f.configure(&f.both_targets());
+
+    // Treasury is paused independently before the sweep.
+    f.treasury.pause(&f.workflow_id);
+    assert!(!f.treasury_is_running());
+    assert!(f.compliance_is_running());
+
+    f.workflow.emergency_pause_all(&f.operator);
+    assert!(!f.compliance_is_running());
+    assert!(!f.treasury_is_running());
+
+    // Only compliance was paused by the sweep; treasury was already paused.
+    let resumed = f.workflow.resume_all(&f.operator).unwrap();
+    assert_eq!(resumed, vec![&f.env, f.compliance_id()]);
+    assert!(f.compliance_is_running(), "the sweep-paused target must resume");
+    assert!(
+        !f.treasury_is_running(),
+        "an independently-paused target must stay paused"
+    );
     assert_eq!(f.workflow.get_emergency_paused_at(), None);
 }
 

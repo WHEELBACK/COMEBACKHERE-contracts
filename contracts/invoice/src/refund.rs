@@ -39,6 +39,19 @@ pub const MAX_REFUND_FEE_BPS: u32 = BPS_DENOMINATOR;
 /// micro-value refund nets to `0` instead of going negative.
 pub const REFUND_NETWORK_FEE: i128 = 100;
 
+/// Hard upper bound for an admin-configured refund network fee (#701): 10 USDC
+/// in stroops, so a misconfiguration cannot eat an entire refund.
+pub const MAX_REFUND_NETWORK_FEE: i128 = 100_000_000;
+
+/// The refund network fee currently in force: the admin-configured value
+/// (`set_refund_network_fee`, #701) or [`REFUND_NETWORK_FEE`] when unset.
+pub fn configured_network_fee(env: &Env) -> i128 {
+    env.storage()
+        .instance()
+        .get(&crate::invoice::DataKey::RefundNetworkFee)
+        .unwrap_or(REFUND_NETWORK_FEE)
+}
+
 /// The fee breakdown of one refund, in the token's smallest unit.
 ///
 /// Returned by `process_refund` and `calculate_net_refund`, stored under
@@ -158,6 +171,21 @@ pub fn refund_recipient(invoice: &Invoice) -> Result<Address, InvoiceError> {
 /// - [`InvoiceError::InvalidAmount`] if `gross_amount <= 0`.
 /// - [`InvoiceError::ArithmeticOverflow`] if the fee arithmetic exceeds `i128`.
 pub fn calculate_net_refund(gross_amount: i128, fee_bps: u32) -> Result<NetRefund, InvoiceError> {
+    calculate_net_refund_with_network_fee(gross_amount, fee_bps, REFUND_NETWORK_FEE)
+}
+
+/// [`calculate_net_refund`] with an explicit flat `network_fee` in place of the
+/// default [`REFUND_NETWORK_FEE`], used once an admin has configured one (#701).
+/// `network_fee` must be non-negative; it is capped at `gross_amount` exactly
+/// as the default is.
+pub fn calculate_net_refund_with_network_fee(
+    gross_amount: i128,
+    fee_bps: u32,
+    network_fee: i128,
+) -> Result<NetRefund, InvoiceError> {
+    if network_fee < 0 {
+        return Err(InvoiceError::InvalidAmount);
+    }
     if fee_bps > MAX_REFUND_FEE_BPS {
         return Err(InvoiceError::RefundFeeTooHigh);
     }
@@ -187,7 +215,7 @@ pub fn calculate_net_refund(gross_amount: i128, fee_bps: u32) -> Result<NetRefun
     // `network_fee <= gross_amount`, both established above. So each subtraction
     // only ever runs on a non-negative difference, and the payout floors at `0`
     // without any intermediate sum that could overflow `i128`.
-    let network_fee = core::cmp::min(gross_amount, REFUND_NETWORK_FEE);
+    let network_fee = core::cmp::min(gross_amount, network_fee);
     let after_processing = if processing_fee >= gross_amount {
         0
     } else {

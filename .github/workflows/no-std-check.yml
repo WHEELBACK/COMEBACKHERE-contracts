@@ -39,3 +39,6 @@ jobs:
 
       - name: Check comebackhere-protocol-errors (wasm32)
         run: cargo check --target wasm32-unknown-unknown -p comebackhere-protocol-errors
+
+      - name: Check comebackhere-protocol-math (wasm32)
+        run: cargo check --target wasm32-unknown-unknown -p comebackhere-protocol-math

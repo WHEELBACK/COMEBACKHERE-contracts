@@ -5,13 +5,19 @@ use crate::{
 use multisig::{meets_threshold, record_approval, require_authorized_signer, signer_weight};
 use soroban_sdk::{contractimpl, Address, Env, String, Symbol, Vec};
 
-/// Maximum length (in bytes) accepted for an optional signer label (#568).
+/// Maximum length (in bytes) accepted for an optional signer label (#568, #740).
 /// Labels are purely informational and are never consulted for authorisation.
+/// `set_signer_label` rejects any label longer than this to bound storage costs.
 pub(crate) const MAX_SIGNER_LABEL_LEN: u32 = 64;
 
 #[contractimpl]
 impl TreasuryContract {
-    /// Registers or updates the approval weight of `signer` (admin-only). Weight 0 deactivates the signer.
+    /// Registers or updates the approval weight of `signer` (admin-only).
+    ///
+    /// Weight must be strictly positive: a zero-weight signer would remain in
+    /// `SignerList` with no voting power, confusing `get_all_signers` and the
+    /// quorum math. Use `remove_signer` to deactivate a signer instead.
+    /// Errors: `ZeroSignerWeight`.
     /// Emits: `signer_weight_set`.
     pub fn set_signer(
         env: Env,
@@ -20,6 +26,9 @@ impl TreasuryContract {
         weight: u32,
     ) -> Result<(), TreasuryError> {
         require_admin(&env, &admin);
+        if weight == 0 {
+            return Err(TreasuryError::InvalidAmount);
+        }
         env.storage()
             .instance()
             .set(&DataKey::Signer(signer.clone()), &weight);
@@ -28,19 +37,9 @@ impl TreasuryContract {
             .instance()
             .get(&DataKey::SignerList)
             .unwrap_or_else(|| Vec::new(&env));
-        if weight > 0 {
-            if !list.contains(&signer) {
-                list.push_back(signer.clone());
-                env.storage().instance().set(&DataKey::SignerList, &list);
-            }
-        } else {
-            let mut updated = Vec::new(&env);
-            for s in list.iter() {
-                if s != signer {
-                    updated.push_back(s);
-                }
-            }
-            env.storage().instance().set(&DataKey::SignerList, &updated);
+        if !list.contains(&signer) {
+            list.push_back(signer.clone());
+            env.storage().instance().set(&DataKey::SignerList, &list);
         }
         env.events()
             .publish((Symbol::new(&env, "signer_weight_set"), signer), weight);
@@ -164,6 +163,15 @@ impl TreasuryContract {
             result.push_back((signer, weight, label));
         }
         result
+    }
+
+    /// Returns the signer-rotation proposal with the given `rotation_id`, or `None`
+    /// if it does not exist. Works for pending, executed and cancelled proposals
+    /// alike so signers can confirm exactly what they are approving (or have approved).
+    pub fn get_rotation(env: Env, rotation_id: u64) -> Option<SignerRotationProposal> {
+        env.storage()
+            .persistent()
+            .get(&DataKey::SignerRotation(rotation_id))
     }
 
     /// Returns the ledger timestamp of the most recent approval recorded for

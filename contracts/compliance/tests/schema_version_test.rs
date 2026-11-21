@@ -28,7 +28,7 @@
 //   2. Add an entry to CHANGELOG.md describing the storage migration path.
 //   3. Include both changes in the same PR so reviewers see the full picture.
 
-use compliance::{ComplianceContract, ComplianceContractClient, ContractError, DataKey};
+use compliance::{ComplianceContract, ComplianceContractClient, ComplianceError, DataKey};
 use soroban_sdk::{testutils::Address as _, Address, Env};
 
 /// The schema version that compliance::initialize stores and
@@ -129,7 +129,7 @@ fn migrate_rejects_unexpected_version() {
     let (_env, admin, client) = setup_with_version(EXPECTED_SCHEMA_VERSION + 5);
     assert_eq!(
         client.try_migrate(&admin),
-        Err(Ok(ContractError::UnexpectedSchemaVersion))
+        Err(Ok(ComplianceError::UnexpectedSchemaVersion))
     );
     assert_eq!(client.get_schema_version(), EXPECTED_SCHEMA_VERSION + 5);
 }
@@ -140,6 +140,139 @@ fn migrate_rejects_non_admin() {
     let stranger = Address::generate(&env);
     assert_eq!(
         client.try_migrate(&stranger),
-        Err(Ok(ContractError::Unauthorized))
+        Err(Ok(ComplianceError::Unauthorized))
     );
+}
+
+// ── #763 migrate from v1 to v2 with populated state ──────────────────────────
+
+/// Seeds v1-shaped storage with allowed, blocked and expiring addresses,
+/// runs `migrate`, and checks that every query returns the same answers.
+#[test]
+fn migrate_v1_to_v2_preserves_populated_state() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let admin = Address::generate(&env);
+    let allowed_addr = Address::generate(&env);
+    let blocked_addr = Address::generate(&env);
+    let expiring_addr = Address::generate(&env);
+    let now = env.ledger().timestamp();
+    let far_future = now + 3600;
+
+    let id = env.register_contract(None, ComplianceContract);
+    let client = ComplianceContractClient::new(&env, &id);
+    client.initialize(&admin);
+
+    // Force storage to v1 while keeping the populated v1-shaped state.
+    env.as_contract(&id, || {
+        env.storage()
+            .instance()
+            .set(&DataKey::SchemaVersion, &1u32);
+        env.storage().persistent().set(&DataKey::Allowed(allowed_addr.clone()), &true);
+        env.storage().persistent().set(&DataKey::Blocked(blocked_addr.clone()), &true);
+        env.storage()
+            .persistent()
+            .set(&DataKey::Allowed(expiring_addr.clone()), &true);
+        env.storage()
+            .persistent()
+            .set(&DataKey::AllowedUntil(expiring_addr.clone()), &far_future);
+    });
+
+    // Snapshot query answers before migration.
+    let before_allowed = client.is_allowed(&allowed_addr);
+    let before_blocked_allowed = client.is_allowed(&blocked_addr);
+    let before_expiring_allowed = client.is_allowed(&expiring_addr);
+    let before_blocked = client.is_blocked(&blocked_addr);
+    let before_expiring_blocked = client.is_blocked(&expiring_addr);
+    let before_expiring_status = client.address_status(&expiring_addr);
+
+    // Migrate from v1 to v2.
+    let version = client.migrate(&admin);
+    assert_eq!(version, CURRENT_SCHEMA_VERSION);
+    assert_eq!(client.get_schema_version(), CURRENT_SCHEMA_VERSION);
+
+    // Every query must return the same answers after migration.
+    assert_eq!(client.is_allowed(&allowed_addr), before_allowed);
+    assert_eq!(client.is_allowed(&blocked_addr), before_blocked_allowed);
+    assert_eq!(client.is_allowed(&expiring_addr), before_expiring_allowed);
+    assert_eq!(client.is_blocked(&blocked_addr), before_blocked);
+    assert_eq!(client.is_blocked(&expiring_addr), before_expiring_blocked);
+    assert_eq!(client.address_status(&expiring_addr), before_expiring_status);
+}
+
+/// `address_status` must be callable and consistent before and after migration
+/// for an address that has both an allow expiry and a block override.
+#[test]
+fn migrate_preserves_address_status_for_blocked_and_expiring() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let admin = Address::generate(&env);
+    let addr = Address::generate(&env);
+    let now = env.ledger().timestamp();
+    let far_future = now + 3600;
+
+    let id = env.register_contract(None, ComplianceContract);
+    let client = ComplianceContractClient::new(&env, &id);
+    client.initialize(&admin);
+
+    env.as_contract(&id, || {
+        env.storage()
+            .instance()
+            .set(&DataKey::SchemaVersion, &1u32);
+        env.storage()
+            .persistent()
+            .set(&DataKey::Allowed(addr.clone()), &true);
+        env.storage()
+            .persistent()
+            .set(&DataKey::Blocked(addr.clone()), &true);
+        env.storage()
+            .persistent()
+            .set(&DataKey::AllowedUntil(addr.clone()), &far_future);
+    });
+
+    let before = client.address_status(&addr);
+    client.migrate(&admin);
+    let after = client.address_status(&addr);
+    assert_eq!(before, after);
+    assert_eq!(client.get_schema_version(), CURRENT_SCHEMA_VERSION);
+}
+
+// ── #764 migrate at current schema version is a clean no-op ──────────────────
+
+/// Calling `migrate` when already at `CURRENT_SCHEMA_VERSION` must be a clean
+/// no-op: it returns the current version, emits no `schema_migrated` event, and
+/// leaves storage untouched.
+#[test]
+fn migrate_at_current_version_is_noop() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let admin = Address::generate(&env);
+
+    let id = env.register_contract(None, ComplianceContract);
+    let client = ComplianceContractClient::new(&env, &id);
+    client.initialize(&admin);
+
+    // Already at CURRENT_SCHEMA_VERSION (= 2) after initialize.
+    assert_eq!(client.get_schema_version(), CURRENT_SCHEMA_VERSION);
+
+    let before_events: std::vec::Vec<String> = env
+        .events()
+        .all()
+        .iter()
+        .map(|(_, topics, _)| Symbol::from_val(&env, &topics.get_unchecked(0)).to_string())
+        .collect();
+    assert!(!before_events.iter().any(|n| n == "schema_migrated"));
+
+    let result = client.migrate(&admin);
+    assert_eq!(result, CURRENT_SCHEMA_VERSION);
+    assert_eq!(client.get_schema_version(), CURRENT_SCHEMA_VERSION);
+
+    // No `schema_migrated` event should have been emitted by the no-op call.
+    let after_events: std::vec::Vec<String> = env
+        .events()
+        .all()
+        .iter()
+        .map(|(_, topics, _)| Symbol::from_val(&env, &topics.get_unchecked(0)).to_string())
+        .collect();
+    assert_eq!(before_events, after_events);
 }

@@ -80,11 +80,11 @@ pub fn setup_with_workflow(env: &Env, register_workflow_signer: bool) -> Workflo
     let treasury = TreasuryContractClient::new(env, &treasury_contract_id);
     treasury.initialize(&admin, &1, &Vec::new(env));
 
-    let workflow_contract_id = env.register(SettlementWorkflowContract, ());
+    let workflow_contract_id = env.register(
+        SettlementWorkflowContract,
+        (admin.clone(), compliance_contract_id.clone(), treasury_contract_id.clone()),
+    );
     let workflow = SettlementWorkflowContractClient::new(env, &workflow_contract_id);
-    // Pin the trusted compliance/treasury instances and the admin once at init
-    // (#364, #621).
-    workflow.initialize(&admin, &compliance_contract_id, &treasury_contract_id);
     // The workflow contract executes settlements as itself, so it must be an
     // authorized Treasury signer.
     if register_workflow_signer {
