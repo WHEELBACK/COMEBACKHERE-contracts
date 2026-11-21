@@ -35,3 +35,14 @@ contracts/*/fuzz/corpus/
 testsnapshot/
 **/testsnapshot
 *.testsnapshot
+
+# ── IDE and editor ────────────────────────────────────────────────────────────
+.vscode/
+.idea/
+*.iml
+
+# ── OS ────────────────────────────────────────────────────────────────────────
+Thumbs.db
+
+# ── Rust incremental ─────────────────────────────────────────────────────────
+**/*.rs.bk
