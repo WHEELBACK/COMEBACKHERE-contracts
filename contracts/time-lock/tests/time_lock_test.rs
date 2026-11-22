@@ -78,6 +78,45 @@ fn unknown_address_has_no_role() {
 }
 
 #[test]
+fn stranger_cannot_set_role() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, _) = setup(&env);
+    let stranger = Address::generate(&env);
+    let target = Address::generate(&env);
+    let result = client.try_set_role(&stranger, &target, &Role::Operator);
+    assert_eq!(
+        result,
+        Err(Ok(TimeLockError::Unauthorized)),
+        "stranger must not be able to set roles"
+    );
+}
+
+#[test]
+fn operator_cannot_set_role() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, _, operator) = setup_with_operator(&env);
+    let target = Address::generate(&env);
+    let result = client.try_set_role(&operator, &target, &Role::Operator);
+    assert_eq!(
+        result,
+        Err(Ok(TimeLockError::Unauthorized)),
+        "operator must not be able to set roles"
+    );
+}
+
+#[test]
+fn admin_can_assign_admin_role() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, admin) = setup(&env);
+    let other = Address::generate(&env);
+    client.set_role(&admin, &other, &Role::Admin);
+    assert_eq!(client.get_role(&other), Role::Admin);
+}
+
+#[test]
 fn operator_can_create_lock() {
     let env = Env::default();
     env.mock_all_auths();
