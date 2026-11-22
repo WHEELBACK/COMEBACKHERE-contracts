@@ -322,3 +322,50 @@ fn lock_ids_are_sequential() {
         assert_eq!(id, expected, "lock IDs must be sequential");
     }
 }
+
+#[test]
+fn min_i128_deposit_returns_zero_deposit() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, admin) = setup(&env);
+    let beneficiary = Address::generate(&env);
+    let result = client.try_create_lock(&admin, &beneficiary, &i128::MIN, &3600);
+    assert_eq!(
+        result,
+        Err(Ok(TimeLockError::ZeroDeposit)),
+        "i128::MIN amount must be rejected as ZeroDeposit"
+    );
+}
+
+#[test]
+fn create_lock_with_huge_duration_returns_expiry_overflow() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, admin) = setup(&env);
+    let beneficiary = Address::generate(&env);
+    // Push the ledger timestamp to the very top of the u64 range so that
+    // `now + duration` overflows while computing `release_at`.
+    let now = env.ledger().timestamp();
+    advance_ledger(&env, u64::MAX - now);
+    let result = client.try_create_lock(&admin, &beneficiary, &1_000_000, &u64::MAX);
+    assert_eq!(
+        result,
+        Err(Ok(TimeLockError::ExpiryOverflow)),
+        "release_at overflow must return ExpiryOverflow, not panic"
+    );
+}
+
+#[test]
+fn admin_ops_on_uninitialized_contract_return_error_not_panic() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let cid = env.register_contract(None, TimeLockContract);
+    let client = TimeLockContractClient::new(&env, &cid);
+    let admin = Address::generate(&env);
+    let result = client.try_pause(&admin);
+    assert_eq!(
+        result,
+        Err(Ok(TimeLockError::Unauthorized)),
+        "admin ops before initialize must error, not panic"
+    );
+}

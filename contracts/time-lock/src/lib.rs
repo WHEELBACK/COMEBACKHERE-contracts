@@ -223,11 +223,12 @@ impl TimeLockContract {
     /// Issue #942: require the caller to be the stored contract admin.
     fn require_admin(env: &Env, caller: &Address) -> Result<(), TimeLockError> {
         caller.require_auth();
+        // Issue #948: defensive — no panic if the contract is uninitialized.
         let stored: Address = env
             .storage()
             .instance()
             .get(&DataKey::Admin)
-            .unwrap();
+            .ok_or(TimeLockError::Unauthorized)?;
         if stored != *caller {
             return Err(TimeLockError::Unauthorized);
         }
