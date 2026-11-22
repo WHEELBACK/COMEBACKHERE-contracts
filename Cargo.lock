@@ -290,6 +290,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "comebackhere-event-emitter"
+version = "1.0.0"
+dependencies = [
+ "soroban-sdk",
+]
+
+[[package]]
 name = "comebackhere-invoice"
 version = "1.0.0"
 dependencies = [
