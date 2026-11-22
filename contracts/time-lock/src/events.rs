@@ -17,11 +17,9 @@ pub fn lock_cancelled(env: &Env, id: u64, lock: &TimeLock) {
 }
 
 pub fn contract_paused(env: &Env) {
-    env.events()
-        .publish((symbol_short!("PAUSED"),), ());
+    env.events().publish((symbol_short!("PAUSED"),), ());
 }
 
 pub fn contract_unpaused(env: &Env) {
-    env.events()
-        .publish((symbol_short!("UNPAUSED"),), ());
+    env.events().publish((symbol_short!("UNPAUSED"),), ());
 }

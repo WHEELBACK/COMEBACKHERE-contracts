@@ -408,3 +408,84 @@ fn admin_ops_on_uninitialized_contract_return_error_not_panic() {
         "admin ops before initialize must error, not panic"
     );
 }
+
+// ---------------------------------------------------------------------------
+// Issue #946: modular error enum + custom client messages
+// ---------------------------------------------------------------------------
+
+#[test]
+fn error_variants_expose_custom_messages() {
+    let cases: &[(TimeLockError, &str)] = &[
+        (
+            TimeLockError::AlreadyInitialized,
+            "contract already initialized",
+        ),
+        (
+            TimeLockError::Unauthorized,
+            "caller is not the contract admin",
+        ),
+        (
+            TimeLockError::InsufficientRole,
+            "caller does not hold the required role",
+        ),
+        (
+            TimeLockError::ZeroDuration,
+            "lock duration must be greater than zero",
+        ),
+        (
+            TimeLockError::ZeroAmount,
+            "locked amount must be strictly positive",
+        ),
+        (
+            TimeLockError::LockNotFound,
+            "no lock record exists for the given lock id",
+        ),
+        (TimeLockError::LockNotMatured, "lock has not matured yet"),
+        (
+            TimeLockError::AlreadyReleased,
+            "lock is already released or cancelled",
+        ),
+        (
+            TimeLockError::BeneficiaryMismatch,
+            "claimed beneficiary does not match the lock record",
+        ),
+        (TimeLockError::ExpiryOverflow, "release timestamp overflow"),
+        (TimeLockError::ContractPaused, "contract is paused"),
+        (
+            TimeLockError::ZeroDeposit,
+            "deposit of zero is not allowed; create no lock instead",
+        ),
+    ];
+    for (err, msg) in cases {
+        assert_eq!(
+            err.message(),
+            *msg,
+            "variant {:?} must expose its custom message",
+            err
+        );
+    }
+}
+
+#[test]
+fn error_messages_are_non_empty_for_all_variants() {
+    let variants = [
+        TimeLockError::AlreadyInitialized,
+        TimeLockError::Unauthorized,
+        TimeLockError::InsufficientRole,
+        TimeLockError::ZeroDuration,
+        TimeLockError::ZeroAmount,
+        TimeLockError::LockNotFound,
+        TimeLockError::LockNotMatured,
+        TimeLockError::AlreadyReleased,
+        TimeLockError::BeneficiaryMismatch,
+        TimeLockError::ExpiryOverflow,
+        TimeLockError::ContractPaused,
+        TimeLockError::ZeroDeposit,
+    ];
+    for v in variants {
+        assert!(
+            !v.message().is_empty(),
+            "every error variant must have a non-empty message"
+        );
+    }
+}

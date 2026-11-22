@@ -44,9 +44,7 @@ impl TimeLockContract {
         role: Role,
     ) -> Result<(), TimeLockError> {
         Self::require_admin(&env, &admin)?;
-        env.storage()
-            .instance()
-            .set(&DataKey::Role(target), &role);
+        env.storage().instance().set(&DataKey::Role(target), &role);
         Ok(())
     }
 
@@ -112,9 +110,7 @@ impl TimeLockContract {
             status: LockStatus::Active,
         };
 
-        env.storage()
-            .persistent()
-            .set(&DataKey::Lock(id), &lock);
+        env.storage().persistent().set(&DataKey::Lock(id), &lock);
         env.storage().instance().set(&DataKey::LockCount, &id);
         events::lock_created(&env, id, &lock);
         Ok(id)
@@ -164,11 +160,7 @@ impl TimeLockContract {
 
     /// Cancel an active lock before it matures. Admin-only.
     /// Issue #942: only an admin-role address may cancel.
-    pub fn cancel_lock(
-        env: Env,
-        admin: Address,
-        lock_id: u64,
-    ) -> Result<TimeLock, TimeLockError> {
+    pub fn cancel_lock(env: Env, admin: Address, lock_id: u64) -> Result<TimeLock, TimeLockError> {
         Self::require_admin(&env, &admin)?;
         Self::require_not_paused(&env)?;
 

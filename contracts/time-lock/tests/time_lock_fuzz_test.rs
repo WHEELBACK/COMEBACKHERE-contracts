@@ -38,14 +38,7 @@ fn advance_ledger(env: &Env, seconds: u64) {
 /// the amount or duration passed.
 #[test]
 fn fuzz_stranger_create_lock_always_rejected() {
-    let adversarial_amounts: &[i128] = &[
-        0,
-        -1,
-        i128::MIN,
-        1,
-        1_000_000,
-        i128::MAX,
-    ];
+    let adversarial_amounts: &[i128] = &[0, -1, i128::MIN, 1, 1_000_000, i128::MAX];
     let adversarial_durations: &[u64] = &[0, 1, 3600, u64::MAX];
 
     for &amount in adversarial_amounts {
@@ -308,7 +301,11 @@ fn prop_get_lock_reflects_latest_status() {
     let lock_id = client.create_lock(&admin, &beneficiary, &1_000_000, &1);
 
     let lock = client.get_lock(&lock_id);
-    assert_eq!(lock.status, LockStatus::Active, "newly created lock is Active");
+    assert_eq!(
+        lock.status,
+        LockStatus::Active,
+        "newly created lock is Active"
+    );
 
     advance_ledger(&env, 100);
     client.release(&beneficiary, &lock_id);

@@ -32,6 +32,30 @@ pub enum TimeLockError {
     ZeroDeposit = 12,
 }
 
+impl TimeLockError {
+    /// Human-readable message for each error variant, provided so clients
+    /// and developers can debug failures with context instead of parsing
+    /// numeric codes.
+    pub fn message(&self) -> &'static str {
+        match self {
+            TimeLockError::AlreadyInitialized => "contract already initialized",
+            TimeLockError::Unauthorized => "caller is not the contract admin",
+            TimeLockError::InsufficientRole => "caller does not hold the required role",
+            TimeLockError::ZeroDuration => "lock duration must be greater than zero",
+            TimeLockError::ZeroAmount => "locked amount must be strictly positive",
+            TimeLockError::LockNotFound => "no lock record exists for the given lock id",
+            TimeLockError::LockNotMatured => "lock has not matured yet",
+            TimeLockError::AlreadyReleased => "lock is already released or cancelled",
+            TimeLockError::BeneficiaryMismatch => {
+                "claimed beneficiary does not match the lock record"
+            }
+            TimeLockError::ExpiryOverflow => "release timestamp overflow",
+            TimeLockError::ContractPaused => "contract is paused",
+            TimeLockError::ZeroDeposit => "deposit of zero is not allowed; create no lock instead",
+        }
+    }
+}
+
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum LockStatus {
