@@ -19,4 +19,8 @@ pub enum EventEmitterError {
     /// The partial-settlement subtraction underflowed: `settlement_total -
     /// emitted_amount` had no non-negative result. See #950.
     Underflow = 4,
+    /// Granting a settlement agent that is already authorized. (#951)
+    AgentAlreadyGranted = 5,
+    /// Revoking a settlement agent that is not authorized. (#951)
+    AgentNotGranted = 6,
 }

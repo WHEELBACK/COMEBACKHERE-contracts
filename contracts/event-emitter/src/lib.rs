@@ -31,6 +31,9 @@ pub enum DataKey {
     Admin,
     /// Emission record per settlement (instance storage).
     EmissionRecord(u64),
+    /// Settlement agents authorized to emit partial-settlement events
+    /// (instance storage). (#951)
+    SettlementAgent(Address),
 }
 
 #[contract]
@@ -42,6 +45,27 @@ fn require_admin(env: &Env, admin: &Address) -> Result<(), EventEmitterError> {
         Some(stored) if stored == *admin => Ok(()),
         _ => Err(EventEmitterError::Unauthorized),
     }
+}
+
+/// Returns `true` if `admin` is the stored administrator.
+fn is_admin(env: &Env, admin: &Address) -> bool {
+    env.storage().instance().get(&DataKey::Admin).is_some_and(|stored| stored == *admin)
+}
+
+/// Requires the caller to be the admin or a registered settlement agent.
+///
+/// Granular role-based authorization for #951: only admins and settlement
+/// agents may emit partial-settlement events; other callers get
+/// `Unauthorized`.
+fn require_authorized_emitter(env: &Env, caller: &Address) -> Result<(), EventEmitterError> {
+    caller.require_auth();
+    if is_admin(env, caller) {
+        return Ok(());
+    }
+    if env.storage().instance().get(&DataKey::SettlementAgent(caller.clone())).unwrap_or(false) {
+        return Ok(());
+    }
+    Err(EventEmitterError::Unauthorized)
 }
 
 #[contractimpl]
@@ -91,6 +115,9 @@ impl EventEmitterContract {
     /// Emits a partial-settlement event for `settlement_id` and returns the
     /// still-unemitted remainder.
     ///
+    /// #951: the caller must be the admin or a registered settlement agent
+    /// (`require_authorized_emitter`); other callers get `Unauthorized`.
+    ///
     /// The remainder is computed as `settlement_total - emitted_amount` with
     /// **checked** arithmetic; if `emitted_amount > settlement_total` the call
     /// returns `Err(EventEmitterError::Underflow)` instead of panicking — this
@@ -100,9 +127,11 @@ impl EventEmitterContract {
     /// `InvalidAmount`. Emits: `partial_settlement_emitted`.
     pub fn emit_partial_settlement(
         env: Env,
+        caller: Address,
         settlement_id: u64,
         settlement_total: i128,
     ) -> Result<i128, EventEmitterError> {
+        require_authorized_emitter(&env, &caller)?;
         if settlement_total < 0 {
             return Err(EventEmitterError::InvalidAmount);
         }
@@ -137,5 +166,58 @@ impl EventEmitterContract {
             .get(&DataKey::EmissionRecord(settlement_id))
             .map(|record| record.emitted_amount)
             .unwrap_or(0)
+    }
+
+    /// Grants settlement-agent authorization to `agent` (admin-only, #951).
+    ///
+    /// Strict validation: granting an already-authorized agent returns
+    /// `AgentAlreadyGranted`.
+    /// Emits: `settlement_agent_granted`.
+    pub fn grant_settlement_agent(
+        env: Env,
+        admin: Address,
+        agent: Address,
+    ) -> Result<(), EventEmitterError> {
+        require_admin(&env, &admin)?;
+        if env.storage().instance().get(&DataKey::SettlementAgent(agent.clone())).unwrap_or(false) {
+            return Err(EventEmitterError::AgentAlreadyGranted);
+        }
+        env.storage()
+            .instance()
+            .set(&DataKey::SettlementAgent(agent.clone()), &true);
+        env.events().publish((Symbol::new(&env, "settlement_agent_granted"),), agent);
+        Ok(())
+    }
+
+    /// Revokes settlement-agent authorization from `agent` (admin-only, #951).
+    ///
+    /// Strict validation: revoking a non-authorized agent returns
+    /// `AgentNotGranted`.
+    /// Emits: `settlement_agent_revoked`.
+    pub fn revoke_settlement_agent(
+        env: Env,
+        admin: Address,
+        agent: Address,
+    ) -> Result<(), EventEmitterError> {
+        require_admin(&env, &admin)?;
+        if !env
+            .storage()
+            .instance()
+            .get(&DataKey::SettlementAgent(agent.clone()))
+            .unwrap_or(false)
+        {
+            return Err(EventEmitterError::AgentNotGranted);
+        }
+        env.storage()
+            .instance()
+            .remove(&DataKey::SettlementAgent(agent.clone()));
+        env.events().publish((Symbol::new(&env, "settlement_agent_revoked"),), agent);
+        Ok(())
+    }
+
+    /// Returns `true` if `agent` is authorized to emit partial-settlement
+    /// events (i.e. holds a settlement-agent grant).
+    pub fn has_settlement_agent(env: Env, agent: Address) -> bool {
+        env.storage().instance().get(&DataKey::SettlementAgent(agent)).unwrap_or(false)
     }
 }
