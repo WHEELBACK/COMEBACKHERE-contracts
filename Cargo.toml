@@ -6,6 +6,7 @@ members = [
     "contracts/settlement-workflow",
     "contracts/event-emitter",
     "contracts/role-manager",
+    "contracts/time-lock",
     "tests",
     "crates/compliance-client",
     "crates/multisig",
