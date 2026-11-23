@@ -114,6 +114,18 @@ pub(crate) const DEPOSIT_REF_TTL_LEDGERS: u32 = 30 * 24 * 60 * 60 / 5;
 //
 // Callers: `bump_settlement_ttl` (called from `write_settlement` for live
 // settlements) and the `initialize` instance-TTL bump.
+/// Default TTL (in ledgers) applied to persistent dispute keys (#920).
+pub(crate) const DISPUTE_TTL_LEDGERS: u32 = 30 * 24 * 60 * 60 / 5;
+
+/// Bumps the TTL of a persistent dispute-related key (#920).
+pub(crate) fn bump_persistent_ttl(env: &Env, key: &DataKey) {
+    if env.storage().persistent().has(key) {
+        env.storage()
+            .persistent()
+            .extend_ttl(key, DISPUTE_TTL_LEDGERS, DISPUTE_TTL_LEDGERS);
+    }
+}
+
 pub(crate) const MIN_TTL_LEDGERS: u32 = 100_000;
 pub(crate) const TARGET_TTL_LEDGERS: u32 = 535_000;
 

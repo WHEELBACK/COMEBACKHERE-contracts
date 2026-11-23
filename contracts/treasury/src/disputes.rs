@@ -124,6 +124,10 @@ impl TreasuryContract {
         if amount <= 0 {
             return Err(TreasuryError::InvalidAmount);
         }
+        // #921: reject a zero/negative amount up front.
+        if amount.checked_add(0).is_none() {
+            return Err(TreasuryError::ArithmeticOverflow);
+        }
         // Read the settlement once and cache it in a local (#916).
         if let Some(mut settlement) = env
             .storage()
@@ -329,7 +333,14 @@ impl TreasuryContract {
         let claimant_amount = apply_bps_i128(dispute.amount, claimant_bps).unwrap_or_else(|| {
             soroban_sdk::panic_with_error!(env, TreasuryError::ArithmeticOverflow)
         });
-        let counterparty_amount = dispute.amount - claimant_amount;
+        // #921: use checked subtraction so an out-of-range share can never underflow.
+        let counterparty_amount = dispute
+            .amount
+            .checked_sub(claimant_amount)
+            .unwrap_or_else(|| soroban_sdk::panic_with_error!(env, TreasuryError::ArithmeticOverflow));
+        if claimant_amount < 0 || counterparty_amount < 0 {
+            soroban_sdk::panic_with_error!(env, TreasuryError::ArithmeticOverflow);
+        }
         // The split must conserve the disputed amount exactly (#918).
         if claimant_amount
             .checked_add(counterparty_amount)
@@ -410,7 +421,8 @@ impl TreasuryContract {
             .instance()
             .get(&DataKey::Threshold)
             .ok_or(TreasuryError::ThresholdNotConfigured)?;
-        if meets_threshold(dispute.resolution_weight, threshold) {
+        // #921: require strictly positive accumulated weight before resolving.
+        if dispute.resolution_weight > 0 && meets_threshold(dispute.resolution_weight, threshold) {
             let new_status = if dispute.resolution_for_claimant {
                 DisputeStatus::ResolvedClaimant
             } else {
