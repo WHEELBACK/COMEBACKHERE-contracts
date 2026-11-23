@@ -82,7 +82,7 @@ impl TreasuryContract {
             .map(|(_, weight, _)| weight)
             .sum();
         if threshold > total_weight {
-            return Err(TreasuryError::InvariantViolation);
+            return Err(TreasuryError::InvalidAmount);
         }
         let limit: i128 = env
             .storage()
@@ -95,7 +95,7 @@ impl TreasuryContract {
             .get(&DataKey::WithdrawalWindowSecs)
             .unwrap_or(0);
         if limit > 0 && window_secs == 0 {
-            return Err(TreasuryError::InvariantViolation);
+            return Err(TreasuryError::InvalidAmount);
         }
         Ok(())
     }
@@ -183,7 +183,7 @@ impl TreasuryContract {
     ) -> Result<(), TreasuryError> {
         Self::require_role(&env, &admin, ROLE_ADMIN)?;
         if limit > 0 && window_secs == 0 {
-            return Err(TreasuryError::InvariantViolation);
+            return Err(TreasuryError::InvalidAmount);
         }
         env.storage()
             .instance()

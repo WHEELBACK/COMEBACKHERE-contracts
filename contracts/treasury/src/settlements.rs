@@ -313,7 +313,7 @@ impl TreasuryContract {
         // accumulating, and use checked arithmetic for both the sum and the
         // remaining-amount comparison so neither can underflow/overflow.
         if approved_total < 0 || approved_total > settlement.amount {
-            return Err(TreasuryError::ArithmeticUnderflow);
+            return Err(TreasuryError::ArithmeticOverflow);
         }
         let new_approved = approved_total
             .checked_add(partial_amount)
@@ -543,7 +543,7 @@ impl TreasuryContract {
         // silently saturating (or, if written naively, underflowing).
         let remaining = approved
             .checked_sub(executed)
-            .ok_or(TreasuryError::ArithmeticUnderflow)?;
+            .ok_or(TreasuryError::ArithmeticOverflow)?;
         Ok((approved, executed, remaining))
     }
 
@@ -601,7 +601,7 @@ impl TreasuryContract {
         // accumulating, so the remaining-amount computation below can never
         // underflow.
         if prev_executed < 0 || prev_executed > settlement.amount {
-            return Err(TreasuryError::ArithmeticUnderflow);
+            return Err(TreasuryError::ArithmeticOverflow);
         }
         let new_executed = prev_executed
             .checked_add(partial_amount)
@@ -615,7 +615,7 @@ impl TreasuryContract {
         let _remaining = settlement
             .amount
             .checked_sub(new_executed)
-            .ok_or(TreasuryError::ArithmeticUnderflow)?;
+            .ok_or(TreasuryError::ArithmeticOverflow)?;
         env.storage().persistent().set(
             &DataKey::PartialExecutedTotal(settlement_id),
             &new_executed,

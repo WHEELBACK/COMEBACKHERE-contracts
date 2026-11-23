@@ -103,7 +103,9 @@
 //!    `error-macros = { package = "comebackhere-error-macros", path = "../error-macros" }`.
 //! 2. Pick the crate's numeric range so it does not collide with another
 //!    contract's — see `ARCHITECTURE.md`'s "Error-Code Ranges per Contract" and
-//!    the per-crate READMEs under `crates/`.
+//!    the per-crate READMEs under `crates/`. The `event-emitter` contract's
+//!    codes live in `crates/event-emitter-errors` (`EventEmitterError`, range
+//!    `7000..=7099`), declared with this macro.
 //! 3. Start the enum at `1` and document in its rustdoc that variants are
 //!    append-only.
 //! 4. Add a README with a code/name/meaning table, matching
@@ -157,3 +159,45 @@ macro_rules! declare_contract_error {
 
 #[cfg(test)]
 extern crate std;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // The macro is exercised against the shape used by `dispute-resolver`'s
+    // error enum: doc comments on both the enum and its variants, explicit
+    // discriminants, and an append-only variant list. The test only needs to
+    // prove the macro accepts that shape and passes it through untouched — it
+    // does not (and must not) assert anything about renumbering.
+    declare_contract_error! {
+        /// Error codes for the dispute-resolver contract.
+        ///
+        /// Variants are append-only and must never be renumbered; discriminants
+        /// are part of the on-chain ABI.
+        pub enum DisputeResolverError {
+            /// The contract has already been initialized.
+            AlreadyInitialized = 1,
+            /// The caller is not authorized for this operation.
+            Unauthorized = 2,
+            /// The referenced dispute does not exist.
+            DisputeNotFound = 3,
+        }
+    }
+
+    #[test]
+    fn preserves_explicit_discriminants() {
+        assert_eq!(DisputeResolverError::AlreadyInitialized as u32, 1);
+        assert_eq!(DisputeResolverError::Unauthorized as u32, 2);
+        assert_eq!(DisputeResolverError::DisputeNotFound as u32, 3);
+    }
+
+    #[test]
+    fn derives_are_uniform() {
+        // `Copy`, `Clone`, `Debug`, `PartialEq`, `Eq` must all be present.
+        let a = DisputeResolverError::Unauthorized;
+        let b = a;
+        assert_eq!(a, b);
+        assert_eq!(a.clone(), b);
+        assert!(!std::format!("{:?}", a).is_empty());
+    }
+}
