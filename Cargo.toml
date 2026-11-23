@@ -4,6 +4,7 @@ members = [
     "contracts/treasury",
     "contracts/compliance",
     "contracts/settlement-workflow",
+    "contracts/storage-layout",
     "tests",
     "crates/compliance-client",
     "crates/error-macros",
