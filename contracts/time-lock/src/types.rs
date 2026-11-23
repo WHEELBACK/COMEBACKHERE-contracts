@@ -42,6 +42,12 @@ pub enum TimeLockError {
     ZeroDelay = 17,
     /// `now + delay_secs` overflowed `u64` (#949).
     ArithmeticOverflow = 18,
+    /// A stored record violated a state invariant (#945).
+    StateInconsistency = 19,
+    /// The monotonic lock-ID counter reached `u64::MAX` (#945).
+    LockCountOverflow = 20,
+    /// The stored admin may not be demoted below `Role::Admin` (#945).
+    AdminRoleLoss = 21,
 }
 
 impl TimeLockError {
@@ -70,6 +76,9 @@ impl TimeLockError {
             TimeLockError::TooEarly => "timelock delay has not elapsed yet",
             TimeLockError::ZeroDelay => "timelock delay must be greater than zero",
             TimeLockError::ArithmeticOverflow => "timelock timestamp arithmetic overflowed",
+            TimeLockError::StateInconsistency => "stored state failed an invariant check",
+            TimeLockError::LockCountOverflow => "monotonic lock id counter is exhausted",
+            TimeLockError::AdminRoleLoss => "stored admin cannot lose the admin role",
         }
     }
 }
