@@ -19,7 +19,7 @@ pub use events::{
 };
 pub use invoice::StatusTransition;
 pub use invoice::{
-    BatchInvoiceParams, DataKey, Invoice, InvoiceError, InvoiceStatus, InvoiceSummary,
+    BatchInvoiceParams, DataKey, Invoice, InvoiceError, InvoiceRole, InvoiceStatus, InvoiceSummary,
     MaybeAddress, MaybeBytes, MaybeU64, RefundStatus, INVOICE_TTL_EXTEND_TO, INVOICE_TTL_THRESHOLD,
     MAX_BATCH_EXPIRE, MAX_BATCH_SIZE, MAX_LATE_FEE_BPS, MAX_PAGE_LIMIT, MAX_PAYER_INDEX_ENTRIES,
 };
