@@ -96,6 +96,47 @@
 //! `scripts/check-enum-doc-comments.sh` validate hand-written and macro-generated
 //! enums alike.
 //!
+//! # Escrow-vault errors (#910)
+//!
+//! `escrow-vault` declares its error enum through this same macro, so it gets
+//! the identical attribute block as every other contract error. The enum is
+//! grouped by concern (lifecycle, authorization, amounts, state) purely through
+//! doc comments and explicit discriminants — the macro does not partition or
+//! renumber anything:
+//!
+//! ```ignore
+//! use error_macros::declare_contract_error;
+//!
+//! declare_contract_error! {
+//!     /// Error codes for the escrow-vault contract.
+//!     ///
+//!     /// Variants are append-only and must never be renumbered; discriminants
+//!     /// are part of the on-chain ABI. See `scripts/check-enum-ordering.sh`.
+//!     pub enum EscrowVaultError {
+//!         // -- lifecycle --
+//!         /// The vault has already been initialized.
+//!         AlreadyInitialized = 1,
+//!         /// The vault has not been initialized yet.
+//!         NotInitialized = 2,
+//!         // -- authorization --
+//!         /// The caller is not authorized for this operation.
+//!         Unauthorized = 3,
+//!         // -- amounts --
+//!         /// The supplied amount is zero or otherwise invalid.
+//!         InvalidAmount = 4,
+//!         /// The vault holds insufficient funds for the operation.
+//!         InsufficientFunds = 5,
+//!         // -- state --
+//!         /// The operation is not valid in the vault's current state.
+//!         InvalidState = 6,
+//!     }
+//! }
+//! ```
+//!
+//! New variants are appended with the next unused discriminant; existing codes
+//! are never reused or reordered, and per-variant doc comments are what make a
+//! returned code debuggable on the client side.
+//!
 //! # Adding a new error crate
 //!
 //! 1. `crates/<name>-errors/Cargo.toml`, mirroring the other error crates:
@@ -103,7 +144,9 @@
 //!    `error-macros = { package = "comebackhere-error-macros", path = "../error-macros" }`.
 //! 2. Pick the crate's numeric range so it does not collide with another
 //!    contract's — see `ARCHITECTURE.md`'s "Error-Code Ranges per Contract" and
-//!    the per-crate READMEs under `crates/`.
+//!    the per-crate READMEs under `crates/`. The `event-emitter` contract's
+//!    codes live in `crates/event-emitter-errors` (`EventEmitterError`, range
+//!    `7000..=7099`), declared with this macro.
 //! 3. Start the enum at `1` and document in its rustdoc that variants are
 //!    append-only.
 //! 4. Add a README with a code/name/meaning table, matching
@@ -137,6 +180,25 @@ pub use soroban_sdk;
 ///     }
 /// }
 /// ```
+///
+/// Per-variant doc comments and explicit discriminants are passed through
+/// untouched, so a contract can document each code for client debugging without
+/// the macro inferring, reordering or renumbering anything:
+///
+/// ```ignore
+/// declare_contract_error! {
+///     /// Error codes for the escrow-vault contract. Append-only; see
+///     /// `scripts/check-enum-ordering.sh`.
+///     pub enum EscrowVaultError {
+///         /// The vault has already been initialized.
+///         AlreadyInitialized = 1,
+///         /// The caller is not authorized for this operation.
+///         Unauthorized = 2,
+///         /// The supplied amount is zero or otherwise invalid.
+///         InvalidAmount = 3,
+///     }
+/// }
+/// ```
 #[macro_export]
 macro_rules! declare_contract_error {
     (
@@ -157,3 +219,45 @@ macro_rules! declare_contract_error {
 
 #[cfg(test)]
 extern crate std;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // The macro is exercised against the shape used by `dispute-resolver`'s
+    // error enum: doc comments on both the enum and its variants, explicit
+    // discriminants, and an append-only variant list. The test only needs to
+    // prove the macro accepts that shape and passes it through untouched — it
+    // does not (and must not) assert anything about renumbering.
+    declare_contract_error! {
+        /// Error codes for the dispute-resolver contract.
+        ///
+        /// Variants are append-only and must never be renumbered; discriminants
+        /// are part of the on-chain ABI.
+        pub enum DisputeResolverError {
+            /// The contract has already been initialized.
+            AlreadyInitialized = 1,
+            /// The caller is not authorized for this operation.
+            Unauthorized = 2,
+            /// The referenced dispute does not exist.
+            DisputeNotFound = 3,
+        }
+    }
+
+    #[test]
+    fn preserves_explicit_discriminants() {
+        assert_eq!(DisputeResolverError::AlreadyInitialized as u32, 1);
+        assert_eq!(DisputeResolverError::Unauthorized as u32, 2);
+        assert_eq!(DisputeResolverError::DisputeNotFound as u32, 3);
+    }
+
+    #[test]
+    fn derives_are_uniform() {
+        // `Copy`, `Clone`, `Debug`, `PartialEq`, `Eq` must all be present.
+        let a = DisputeResolverError::Unauthorized;
+        let b = a;
+        assert_eq!(a, b);
+        assert_eq!(a.clone(), b);
+        assert!(!std::format!("{:?}", a).is_empty());
+    }
+}

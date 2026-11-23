@@ -35,3 +35,10 @@ path = "fuzz_targets/net_refund.rs"
 test = false
 doc = false
 bench = false
+
+[[bin]]
+name = "malicious_caller"
+path = "fuzz_targets/malicious_caller.rs"
+test = false
+doc = false
+bench = false
