@@ -214,3 +214,64 @@ the reference implementation for the two follow-ups.)
 `DataKey::Invoice(id)` they write, using `INVOICE_TTL_THRESHOLD = 518_400`
 (~30 days) and `INVOICE_TTL_EXTEND_TO = 1_036_800` (~60 days) ledgers, both
 defined in `contracts/invoice/src/invoice.rs`.
+
+## Storage-layout remediation (#965)
+
+`contracts/storage-layout` previously had the same "no `extend_ttl` anywhere"
+property as the rest of the repo. It now bumps TTL on **every** persistent
+read and write through a single shared helper, so no persistent key can be
+touched without its live-until ledger being pushed forward:
+
+```rust
+env.storage().persistent().extend_ttl(
+    key,
+    STORAGE_LAYOUT_TTL_THRESHOLD,
+    STORAGE_LAYOUT_TTL_EXTEND_TO,
+);
+```
+
+Constants (defined in `contracts/storage-layout/src/lib.rs`):
+
+| Constant | Ledgers | Approx. wall clock |
+|---|---|---|
+| `STORAGE_LAYOUT_TTL_THRESHOLD` | `518_400` | ~30 days |
+| `STORAGE_LAYOUT_TTL_EXTEND_TO` | `1_036_800` | ~60 days |
+
+The threshold is the "bump only if below this" trigger; the extend-to value is
+the new live-until ledger written when the bump fires. Because the helper is
+invoked on the read path as well as the write path (reads alone do not extend
+TTL by default), a storage-layout record that is only ever queried still gets
+refreshed, closing the "set once, never revisited" archival window described
+above for the other contracts.
+
+**Test coverage:** the Soroban test harness in `contracts/storage-layout`
+asserts that (a) a write leaves the entry's live-until ledger at
+`STORAGE_LAYOUT_TTL_EXTEND_TO` past the current sequence, (b) a read of an
+entry whose TTL has fallen below the threshold bumps it back up, and (c) a
+read of an entry still above the threshold leaves its TTL untouched (no
+needless footprint growth / metering regression). These run under the standard
+`Env` test harness with no host metering regressions.
+
+## Storage-layout error modularization (#964)
+
+`contracts/storage-layout` previously returned ad-hoc `panic!`/`unwrap`
+failures. It now exposes a single `StorageLayoutError` enum with **stable
+discriminants** (explicit `#[repr(u32)]`-style values that must not be
+renumbered, since clients decode them from the `ScError` payload):
+
+| Variant | Discriminant | Meaning |
+|---|---|---|
+| `NotInitialized` | `1` | Contract used before `initialize` |
+| `AlreadyInitialized` | `2` | `initialize` called twice |
+| `Unauthorized` | `3` | Caller lacks the required role |
+| `KeyNotFound` | `4` | Requested persistent key is absent |
+| `InvalidKey` | `5` | Key failed validation (e.g. empty/oversized) |
+| `InvalidValue` | `6` | Value failed validation before write |
+
+Every fallible entrypoint validates its inputs up front and returns the
+matching variant via `Result<_, StorageLayoutError>` rather than trapping, so
+clients get a decodable, documented error code instead of an opaque host
+failure. Discriminants are treated as part of the public ABI: new variants are
+appended, never inserted, and existing values are never reused. Unit tests in
+the storage-layout suite cover each variant's trigger path, and the error
+mapping is exercised alongside the TTL tests above.
