@@ -1,206 +1,254 @@
 #![no_std]
 
 use soroban_sdk::{
-    contract, contracterror, contractimpl, contracttype, symbol_short, Address, Env, Symbol,
+    contract, contracterror, contractimpl, contracttype, token, Address, Env, Symbol,
 };
-
-/// Ledger threshold (in ledgers) below which persistent entries are bumped.
-const TTL_THRESHOLD: u32 = 100;
-/// Ledger target (in ledgers) to extend persistent entries to.
-const TTL_EXTEND_TO: u32 = 10_000;
 
 #[contracterror]
 #[derive(Copy, Clone, Debug, Eq, PartialEq, PartialOrd, Ord)]
 #[repr(u32)]
 pub enum Error {
-    /// Arithmetic overflow occurred.
-    Overflow = 1,
-    /// Arithmetic underflow occurred.
-    Underflow = 2,
-    /// Escrow not found.
-    NotFound = 3,
-    /// Escrow already exists.
-    AlreadyExists = 4,
-    /// Escrow is not in a state that permits the operation.
+    AlreadyInitialized = 1,
+    NotInitialized = 2,
+    Unauthorized = 3,
+    InvalidAmount = 4,
     InvalidState = 5,
-    /// Amount must be strictly positive.
-    InvalidAmount = 6,
-    /// Settlement amount exceeds remaining balance.
-    InsufficientFunds = 7,
-    /// Invariant verification failed.
-    InvariantViolation = 8,
-    /// Unauthorized caller.
-    Unauthorized = 9,
+    InsufficientBalance = 6,
+    Reentrancy = 7,
+    InvalidRecipient = 8,
+    SameAddress = 9,
 }
 
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub enum EscrowStatus {
+pub enum VaultState {
+    Uninitialized,
     Active,
-    Settled,
-}
-
-#[contracttype]
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct Escrow {
-    pub depositor: Address,
-    pub beneficiary: Address,
-    pub total: i128,
-    pub settled: i128,
-    pub status: EscrowStatus,
+    Locked,
+    Released,
+    Refunded,
 }
 
 #[contracttype]
 #[derive(Clone)]
 pub enum DataKey {
-    Escrow(Symbol),
+    Admin,
+    Token,
+    Depositor,
+    Beneficiary,
+    Amount,
+    State,
+    Locked,
 }
+
+const MAX_AMOUNT: i128 = i128::MAX / 2;
 
 #[contract]
 pub struct EscrowVault;
 
 #[contractimpl]
 impl EscrowVault {
-    /// Create a new escrow record.
-    pub fn create_escrow(
+    /// Initialize the escrow vault. Can only be called once.
+    pub fn initialize(
         env: Env,
-        id: Symbol,
+        admin: Address,
+        token: Address,
         depositor: Address,
         beneficiary: Address,
-        total: i128,
+        amount: i128,
     ) -> Result<(), Error> {
-        depositor.require_auth();
-
-        if total <= 0 {
+        if env.storage().instance().has(&DataKey::State) {
+            return Err(Error::AlreadyInitialized);
+        }
+        if amount <= 0 || amount > MAX_AMOUNT {
             return Err(Error::InvalidAmount);
         }
-
-        let key = DataKey::Escrow(id.clone());
-        if env.storage().persistent().has(&key) {
-            return Err(Error::AlreadyExists);
+        if depositor == beneficiary {
+            return Err(Error::SameAddress);
         }
 
-        let escrow = Escrow {
-            depositor,
-            beneficiary,
-            total,
-            settled: 0,
-            status: EscrowStatus::Active,
-        };
+        // Admin must authorize initialization.
+        admin.require_auth();
 
-        Self::verify_invariants(&escrow)?;
-        Self::write_escrow(&env, &key, &escrow);
+        env.storage().instance().set(&DataKey::Admin, &admin);
+        env.storage().instance().set(&DataKey::Token, &token);
+        env.storage().instance().set(&DataKey::Depositor, &depositor);
+        env.storage()
+            .instance()
+            .set(&DataKey::Beneficiary, &beneficiary);
+        env.storage().instance().set(&DataKey::Amount, &amount);
+        env.storage()
+            .instance()
+            .set(&DataKey::State, &VaultState::Active);
+        env.storage().instance().set(&DataKey::Locked, &false);
+
         Ok(())
     }
 
-    /// Perform a partial settlement of the escrow.
-    pub fn settle(env: Env, id: Symbol, amount: i128) -> Result<i128, Error> {
+    /// Deposit funds into the vault. Only the depositor may fund.
+    pub fn deposit(env: Env) -> Result<(), Error> {
+        let state = Self::read_state(&env)?;
+        if state != VaultState::Active {
+            return Err(Error::InvalidState);
+        }
+        Self::guard_reentrancy(&env)?;
+
+        let depositor: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::Depositor)
+            .ok_or(Error::NotInitialized)?;
+        let token_addr: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::Token)
+            .ok_or(Error::NotInitialized)?;
+        let amount: i128 = env
+            .storage()
+            .instance()
+            .get(&DataKey::Amount)
+            .ok_or(Error::NotInitialized)?;
+
+        depositor.require_auth();
+
+        let token_client = token::Client::new(&env, &token_addr);
+        token_client.transfer(&depositor, &env.current_contract_address(), &amount);
+
+        env.storage().instance().set(&DataKey::Locked, &false);
+        Ok(())
+    }
+
+    /// Release funds to the beneficiary. Only admin may release.
+    pub fn release(env: Env) -> Result<(), Error> {
+        let state = Self::read_state(&env)?;
+        if state != VaultState::Active {
+            return Err(Error::InvalidState);
+        }
+        Self::guard_reentrancy(&env)?;
+
+        let admin: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::Admin)
+            .ok_or(Error::NotInitialized)?;
+        admin.require_auth();
+
+        let beneficiary: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::Beneficiary)
+            .ok_or(Error::NotInitialized)?;
+        let token_addr: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::Token)
+            .ok_or(Error::NotInitialized)?;
+        let amount: i128 = env
+            .storage()
+            .instance()
+            .get(&DataKey::Amount)
+            .ok_or(Error::NotInitialized)?;
+
         if amount <= 0 {
             return Err(Error::InvalidAmount);
         }
 
-        let key = DataKey::Escrow(id.clone());
-        let mut escrow = Self::read_escrow(&env, &key)?;
+        // Mark released before external call to prevent reentrancy.
+        env.storage()
+            .instance()
+            .set(&DataKey::State, &VaultState::Released);
 
-        if escrow.status != EscrowStatus::Active {
+        let token_client = token::Client::new(&env, &token_addr);
+        token_client.transfer(&env.current_contract_address(), &beneficiary, &amount);
+
+        env.storage().instance().set(&DataKey::Locked, &false);
+        Ok(())
+    }
+
+    /// Refund funds to the depositor. Only admin may refund.
+    pub fn refund(env: Env) -> Result<(), Error> {
+        let state = Self::read_state(&env)?;
+        if state != VaultState::Active {
             return Err(Error::InvalidState);
         }
+        Self::guard_reentrancy(&env)?;
 
-        escrow.beneficiary.require_auth();
-
-        // Compute remaining balance using checked arithmetic to prevent underflow.
-        let remaining = escrow
-            .total
-            .checked_sub(escrow.settled)
-            .ok_or(Error::Underflow)?;
-
-        if amount > remaining {
-            return Err(Error::InsufficientFunds);
-        }
-
-        // Compute new settled amount using checked addition to prevent overflow.
-        let new_settled = escrow
-            .settled
-            .checked_add(amount)
-            .ok_or(Error::Overflow)?;
-
-        escrow.settled = new_settled;
-
-        if escrow.settled == escrow.total {
-            escrow.status = EscrowStatus::Settled;
-        }
-
-        Self::verify_invariants(&escrow)?;
-        Self::write_escrow(&env, &key, &escrow);
-
-        Ok(escrow.settled)
-    }
-
-    /// Read an escrow record, bumping its TTL.
-    pub fn get_escrow(env: Env, id: Symbol) -> Result<Escrow, Error> {
-        let key = DataKey::Escrow(id);
-        Self::read_escrow(&env, &key)
-    }
-
-    // ------------------------------------------------------------------
-    // Internal helpers
-    // ------------------------------------------------------------------
-
-    /// Read an escrow from persistent storage, bumping its TTL.
-    fn read_escrow(env: &Env, key: &DataKey) -> Result<Escrow, Error> {
-        let escrow: Escrow = env
+        let admin: Address = env
             .storage()
-            .persistent()
-            .get(key)
-            .ok_or(Error::NotFound)?;
-        Self::bump_ttl(env, key);
-        Ok(escrow)
-    }
+            .instance()
+            .get(&DataKey::Admin)
+            .ok_or(Error::NotInitialized)?;
+        admin.require_auth();
 
-    /// Write an escrow to persistent storage, bumping its TTL.
-    fn write_escrow(env: &Env, key: &DataKey, escrow: &Escrow) {
-        env.storage().persistent().set(key, escrow);
-        Self::bump_ttl(env, key);
-    }
+        let depositor: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::Depositor)
+            .ok_or(Error::NotInitialized)?;
+        let token_addr: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::Token)
+            .ok_or(Error::NotInitialized)?;
+        let amount: i128 = env
+            .storage()
+            .instance()
+            .get(&DataKey::Amount)
+            .ok_or(Error::NotInitialized)?;
 
-    /// Extend the TTL of a persistent storage key to avoid ledger eviction.
-    fn bump_ttl(env: &Env, key: &DataKey) {
+        if amount <= 0 {
+            return Err(Error::InvalidAmount);
+        }
+
         env.storage()
-            .persistent()
-            .extend_ttl(key, TTL_THRESHOLD, TTL_EXTEND_TO);
+            .instance()
+            .set(&DataKey::State, &VaultState::Refunded);
+
+        let token_client = token::Client::new(&env, &token_addr);
+        token_client.transfer(&env.current_contract_address(), &depositor, &amount);
+
+        env.storage().instance().set(&DataKey::Locked, &false);
+        Ok(())
     }
 
-    /// Verify all escrow invariants hold.
-    fn verify_invariants(escrow: &Escrow) -> Result<(), Error> {
-        // Total must be strictly positive.
-        if escrow.total <= 0 {
-            return Err(Error::InvariantViolation);
-        }
+    /// Read-only view of the current vault state.
+    pub fn get_state(env: Env) -> Result<VaultState, Error> {
+        Self::read_state(&env)
+    }
 
-        // Settled amount must be non-negative.
-        if escrow.settled < 0 {
-            return Err(Error::InvariantViolation);
-        }
+    /// Read-only view of the configured amount.
+    pub fn get_amount(env: Env) -> Result<i128, Error> {
+        env.storage()
+            .instance()
+            .get(&DataKey::Amount)
+            .ok_or(Error::NotInitialized)
+    }
 
-        // Settled amount must never exceed the total.
-        if escrow.settled > escrow.total {
-            return Err(Error::InvariantViolation);
-        }
+    /// Read-only view of the beneficiary.
+    pub fn get_beneficiary(env: Env) -> Result<Address, Error> {
+        env.storage()
+            .instance()
+            .get(&DataKey::Beneficiary)
+            .ok_or(Error::NotInitialized)
+    }
 
-        // Status must be consistent with the settled amount.
-        match escrow.status {
-            EscrowStatus::Active => {
-                if escrow.settled >= escrow.total {
-                    return Err(Error::InvariantViolation);
-                }
-            }
-            EscrowStatus::Settled => {
-                if escrow.settled != escrow.total {
-                    return Err(Error::InvariantViolation);
-                }
-            }
-        }
+    fn read_state(env: &Env) -> Result<VaultState, Error> {
+        env.storage()
+            .instance()
+            .get(&DataKey::State)
+            .ok_or(Error::NotInitialized)
+    }
 
+    fn guard_reentrancy(env: &Env) -> Result<(), Error> {
+        let locked: bool = env
+            .storage()
+            .instance()
+            .get(&DataKey::Locked)
+            .unwrap_or(false);
+        if locked {
+            return Err(Error::Reentrancy);
+        }
+        env.storage().instance().set(&DataKey::Locked, &true);
         Ok(())
     }
 }
@@ -208,254 +256,249 @@ impl EscrowVault {
 #[cfg(test)]
 mod test {
     use super::*;
-    use soroban_sdk::testutils::Address as _;
-    use soroban_sdk::Env;
+    use soroban_sdk::{
+        testutils::{Address as _, MockAuth, MockAuthInvoke},
+        token::{Client as TokenClient, StellarAssetClient},
+        Address, Env, IntoVal,
+    };
 
-    fn setup() -> (Env, EscrowVaultClient<'static>, Address, Address, Symbol) {
+    fn setup() -> (
+        Env,
+        EscrowVaultClient<'static>,
+        Address,
+        Address,
+        Address,
+        Address,
+        Address,
+    ) {
         let env = Env::default();
         env.mock_all_auths();
-        let contract_id = env.register_contract(None, EscrowVault);
-        let client = EscrowVaultClient::new(&env, &contract_id);
+
+        let admin = Address::generate(&env);
         let depositor = Address::generate(&env);
         let beneficiary = Address::generate(&env);
-        let id = symbol_short!("esc1");
-        (env, client, depositor, beneficiary, id)
+
+        let token_admin = Address::generate(&env);
+        let sac = env.register_stellar_asset_contract_v2(token_admin.clone());
+        let token_addr = sac.address();
+        let asset_client = StellarAssetClient::new(&env, &token_addr);
+        asset_client.mint(&depositor, &1_000_000);
+
+        let contract_id = env.register_contract(None, EscrowVault);
+        let client = EscrowVaultClient::new(&env, &contract_id);
+
+        (env, client, admin, token_addr, depositor, beneficiary, contract_id)
     }
 
     #[test]
-    fn test_create_and_settle_full() {
-        let (_env, client, depositor, beneficiary, id) = setup();
-        client.create_escrow(&id, &depositor, &beneficiary, &1000);
-        let settled = client.settle(&id, &1000);
-        assert_eq!(settled, 1000);
-        let escrow = client.get_escrow(&id);
-        assert_eq!(escrow.status, EscrowStatus::Settled);
-        assert_eq!(escrow.settled, escrow.total);
+    fn test_initialize_ok() {
+        let (env, client, admin, token, depositor, beneficiary, _) = setup();
+        let _ = env;
+        client.initialize(&admin, &token, &depositor, &beneficiary, &1000);
+        assert_eq!(client.get_state(), VaultState::Active);
+        assert_eq!(client.get_amount(), 1000);
     }
 
     #[test]
-    fn test_partial_settlements() {
-        let (_env, client, depositor, beneficiary, id) = setup();
-        client.create_escrow(&id, &depositor, &beneficiary, &1000);
-        assert_eq!(client.settle(&id, &250), 250);
-        assert_eq!(client.settle(&id, &250), 500);
-        assert_eq!(client.settle(&id, &500), 1000);
-        let escrow = client.get_escrow(&id);
-        assert_eq!(escrow.status, EscrowStatus::Settled);
+    fn test_initialize_twice_fails() {
+        let (_env, client, admin, token, depositor, beneficiary, _) = setup();
+        client.initialize(&admin, &token, &depositor, &beneficiary, &1000);
+        let res = client.try_initialize(&admin, &token, &depositor, &beneficiary, &1000);
+        assert_eq!(res, Err(Ok(Error::AlreadyInitialized)));
     }
 
     #[test]
-    fn test_settle_exceeds_remaining() {
-        let (_env, client, depositor, beneficiary, id) = setup();
-        client.create_escrow(&id, &depositor, &beneficiary, &1000);
-        client.settle(&id, &600);
-        let res = client.try_settle(&id, &500);
-        assert_eq!(res, Err(Ok(Error::InsufficientFunds)));
-    }
-
-    #[test]
-    fn test_settle_zero_amount() {
-        let (_env, client, depositor, beneficiary, id) = setup();
-        client.create_escrow(&id, &depositor, &beneficiary, &1000);
-        let res = client.try_settle(&id, &0);
+    fn test_initialize_invalid_amount() {
+        let (_env, client, admin, token, depositor, beneficiary, _) = setup();
+        let res = client.try_initialize(&admin, &token, &depositor, &beneficiary, &0);
+        assert_eq!(res, Err(Ok(Error::InvalidAmount)));
+        let res = client.try_initialize(&admin, &token, &depositor, &beneficiary, &-5);
         assert_eq!(res, Err(Ok(Error::InvalidAmount)));
     }
 
     #[test]
-    fn test_settle_negative_amount() {
-        let (_env, client, depositor, beneficiary, id) = setup();
-        client.create_escrow(&id, &depositor, &beneficiary, &1000);
-        let res = client.try_settle(&id, &-1);
-        assert_eq!(res, Err(Ok(Error::InvalidAmount)));
+    fn test_initialize_same_address() {
+        let (_env, client, admin, token, depositor, _, _) = setup();
+        let res = client.try_initialize(&admin, &token, &depositor, &depositor, &1000);
+        assert_eq!(res, Err(Ok(Error::SameAddress)));
     }
 
     #[test]
-    fn test_create_invalid_total() {
-        let (_env, client, depositor, beneficiary, id) = setup();
-        let res = client.try_create_escrow(&id, &depositor, &beneficiary, &0);
-        assert_eq!(res, Err(Ok(Error::InvalidAmount)));
+    fn test_initialize_requires_admin_auth() {
+        let (env, client, admin, token, depositor, beneficiary, _) = setup();
+        env.set_auths(&[]);
+        let res = client.try_initialize(&admin, &token, &depositor, &beneficiary, &1000);
+        assert!(res.is_err());
     }
 
     #[test]
-    fn test_create_duplicate() {
-        let (_env, client, depositor, beneficiary, id) = setup();
-        client.create_escrow(&id, &depositor, &beneficiary, &1000);
-        let res = client.try_create_escrow(&id, &depositor, &beneficiary, &1000);
-        assert_eq!(res, Err(Ok(Error::AlreadyExists)));
+    fn test_deposit_and_release() {
+        let (env, client, admin, token, depositor, beneficiary, contract_id) = setup();
+        client.initialize(&admin, &token, &depositor, &beneficiary, &1000);
+        client.deposit();
+
+        let token_client = TokenClient::new(&env, &token);
+        assert_eq!(token_client.balance(&contract_id), 1000);
+
+        client.release();
+        assert_eq!(client.get_state(), VaultState::Released);
+        assert_eq!(token_client.balance(&beneficiary), 1000);
+        assert_eq!(token_client.balance(&contract_id), 0);
     }
 
     #[test]
-    fn test_settle_after_settled() {
-        let (_env, client, depositor, beneficiary, id) = setup();
-        client.create_escrow(&id, &depositor, &beneficiary, &1000);
-        client.settle(&id, &1000);
-        let res = client.try_settle(&id, &1);
+    fn test_deposit_requires_depositor_auth() {
+        let (env, client, admin, token, depositor, beneficiary, _) = setup();
+        client.initialize(&admin, &token, &depositor, &beneficiary, &1000);
+        env.set_auths(&[]);
+        let res = client.try_deposit();
+        assert!(res.is_err());
+    }
+
+    #[test]
+    fn test_release_requires_admin_auth() {
+        let (env, client, admin, token, depositor, beneficiary, _) = setup();
+        client.initialize(&admin, &token, &depositor, &beneficiary, &1000);
+        client.deposit();
+        env.set_auths(&[]);
+        let res = client.try_release();
+        assert!(res.is_err());
+    }
+
+    #[test]
+    fn test_release_twice_fails() {
+        let (_env, client, admin, token, depositor, beneficiary, _) = setup();
+        client.initialize(&admin, &token, &depositor, &beneficiary, &1000);
+        client.deposit();
+        client.release();
+        let res = client.try_release();
         assert_eq!(res, Err(Ok(Error::InvalidState)));
     }
 
     #[test]
-    fn test_get_missing() {
-        let (_env, client, _depositor, _beneficiary, id) = setup();
-        let res = client.try_get_escrow(&id);
-        assert_eq!(res, Err(Ok(Error::NotFound)));
+    fn test_refund_flow() {
+        let (env, client, admin, token, depositor, beneficiary, contract_id) = setup();
+        client.initialize(&admin, &token, &depositor, &beneficiary, &1000);
+        client.deposit();
+        client.refund();
+        assert_eq!(client.get_state(), VaultState::Refunded);
+        let token_client = TokenClient::new(&env, &token);
+        assert_eq!(token_client.balance(&contract_id), 0);
     }
 
     #[test]
-    fn test_underflow_boundary() {
-        // Settling exactly the remaining amount must succeed; one more must fail.
-        let (_env, client, depositor, beneficiary, id) = setup();
-        client.create_escrow(&id, &depositor, &beneficiary, &100);
-        client.settle(&id, &99);
-        let res = client.try_settle(&id, &2);
-        assert_eq!(res, Err(Ok(Error::InsufficientFunds)));
-        assert_eq!(client.settle(&id, &1), 100);
+    fn test_refund_after_release_fails() {
+        let (_env, client, admin, token, depositor, beneficiary, _) = setup();
+        client.initialize(&admin, &token, &depositor, &beneficiary, &1000);
+        client.deposit();
+        client.release();
+        let res = client.try_refund();
+        assert_eq!(res, Err(Ok(Error::InvalidState)));
     }
 
     #[test]
-    fn test_invariants_hold_after_sequence() {
-        let (_env, client, depositor, beneficiary, id) = setup();
-        client.create_escrow(&id, &depositor, &beneficiary, &1000);
-        for amt in [100i128, 200, 300, 400] {
-            client.settle(&id, &amt);
-            let escrow = client.get_escrow(&id);
-            assert!(escrow.settled >= 0);
-            assert!(escrow.settled <= escrow.total);
-        }
-        let escrow = client.get_escrow(&id);
-        assert_eq!(escrow.settled, escrow.total);
-        assert_eq!(escrow.status, EscrowStatus::Settled);
+    fn test_uninitialized_calls_fail() {
+        let (_env, client, _, _, _, _, _) = setup();
+        assert_eq!(client.try_deposit(), Err(Ok(Error::NotInitialized)));
+        assert_eq!(client.try_release(), Err(Ok(Error::NotInitialized)));
+        assert_eq!(client.try_refund(), Err(Ok(Error::NotInitialized)));
+        assert_eq!(client.try_get_state(), Err(Ok(Error::NotInitialized)));
     }
 
-    #[test]
-    fn test_ttl_extension() {
-        let (env, client, depositor, beneficiary, id) = setup();
-        client.create_escrow(&id, &depositor, &beneficiary, &1000);
-        let key = DataKey::Escrow(id.clone());
-        let contract_id = client.address.clone();
-        let ttl = env.as_contract(&contract_id, || {
-            env.storage().persistent().get_ttl(&key)
-        });
-        assert!(ttl >= TTL_THRESHOLD);
-    }
+    // ---- Fuzz-style tests for malicious caller scenarios ----
 
     #[test]
-    fn test_invariant_verifier_rejects_bad_state() {
-        let env = Env::default();
-        let addr = Address::generate(&env);
-        let bad = Escrow {
-            depositor: addr.clone(),
-            beneficiary: addr.clone(),
-            total: 100,
-            settled: 200,
-            status: EscrowStatus::Active,
-        };
-        assert_eq!(
-            EscrowVault::verify_invariants(&bad),
-            Err(Error::InvariantViolation)
-        );
-
-        let bad_status = Escrow {
-            depositor: addr.clone(),
-            beneficiary: addr.clone(),
-            total: 100,
-            settled: 100,
-            status: EscrowStatus::Active,
-        };
-        assert_eq!(
-            EscrowVault::verify_invariants(&bad_status),
-            Err(Error::InvariantViolation)
-        );
-
-        let bad_negative = Escrow {
-            depositor: addr.clone(),
-            beneficiary: addr.clone(),
-            total: 100,
-            settled: -1,
-            status: EscrowStatus::Active,
-        };
-        assert_eq!(
-            EscrowVault::verify_invariants(&bad_negative),
-            Err(Error::InvariantViolation)
-        );
-    }
-
-    #[test]
-    fn test_fuzz_partial_settlement_amounts() {
-        // Deterministic pseudo-fuzz over many partial settlement amounts.
-        let (_env, client, depositor, beneficiary, id) = setup();
-        let total: i128 = 1_000_000;
-        client.create_escrow(&id, &depositor, &beneficiary, &total);
-
-        let mut seed: u64 = 0xDEAD_BEEF;
-        let mut expected_settled: i128 = 0;
-        for _ in 0..200 {
-            seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
-            let remaining = total - expected_settled;
-            if remaining == 0 {
+    fn fuzz_initialize_amounts() {
+        let (_env, client, admin, token, depositor, beneficiary, _) = setup();
+        let cases: [i128; 8] = [
+            0,
+            -1,
+            i128::MIN,
+            i128::MAX,
+            MAX_AMOUNT + 1,
+            MAX_AMOUNT,
+            1,
+            42,
+        ];
+        for amt in cases {
+            let res = client.try_initialize(&admin, &token, &depositor, &beneficiary, &amt);
+            if amt <= 0 || amt > MAX_AMOUNT {
+                assert_eq!(res, Err(Ok(Error::InvalidAmount)));
+            } else {
+                assert!(res.is_ok());
+                // reset by re-registering is not possible; break after success
                 break;
             }
-            let amount = ((seed >> 33) as i128 % remaining) + 1;
-            let new_settled = client.settle(&id, &amount);
-            expected_settled += amount;
-            assert_eq!(new_settled, expected_settled);
-            let escrow = client.get_escrow(&id);
-            assert_eq!(escrow.settled, expected_settled);
-            assert!(escrow.settled <= escrow.total);
         }
-        // Drain the remainder.
-        let remaining = total - expected_settled;
-        if remaining > 0 {
-            client.settle(&id, &remaining);
-        }
-        let escrow = client.get_escrow(&id);
-        assert_eq!(escrow.settled, escrow.total);
-        assert_eq!(escrow.status, EscrowStatus::Settled);
     }
 
     #[test]
-    fn test_fuzz_random_operation_sequences() {
-        // Deterministic pseudo-fuzz over random operation sequences.
-        let (_env, client, depositor, beneficiary, id) = setup();
-        let total: i128 = 500_000;
-        client.create_escrow(&id, &depositor, &beneficiary, &total);
+    fn fuzz_unauthorized_callers() {
+        let (env, client, admin, token, depositor, beneficiary, _) = setup();
+        client.initialize(&admin, &token, &depositor, &beneficiary, &1000);
+        client.deposit();
 
-        let mut seed: u64 = 0x1234_5678_9ABC_DEF0;
-        let mut expected_settled: i128 = 0;
-        let mut settled_status = false;
+        // Spoofed auth: no auths at all.
+        env.set_auths(&[]);
+        assert!(client.try_release().is_err());
+        assert!(client.try_refund().is_err());
 
-        for _ in 0..300 {
-            seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
-            let op = (seed >> 60) & 0x1;
+        // Auth for wrong address.
+        let attacker = Address::generate(&env);
+        env.mock_auths(&[MockAuth {
+            address: &attacker,
+            invoke: &MockAuthInvoke {
+                contract: &client.address,
+                fn_name: "release",
+                args: ().into_val(&env),
+                sub_invokes: &[],
+            },
+        }]);
+        assert!(client.try_release().is_err());
+    }
 
-            if op == 0 {
-                // Attempt a settlement with a random amount.
-                let amount = ((seed >> 20) as i128 % (total + 1)) + 1;
-                let remaining = total - expected_settled;
-                let res = client.try_settle(&id, &amount);
-                if settled_status {
-                    assert_eq!(res, Err(Ok(Error::InvalidState)));
-                } else if amount > remaining {
-                    assert_eq!(res, Err(Ok(Error::InsufficientFunds)));
-                } else {
-                    let new_settled = res.expect("settle should succeed");
-                    expected_settled += amount;
-                    assert_eq!(new_settled, expected_settled);
-                    if expected_settled == total {
-                        settled_status = true;
-                    }
-                }
-            } else {
-                // Read and verify invariants.
-                let escrow = client.get_escrow(&id);
-                assert!(escrow.settled >= 0);
-                assert!(escrow.settled <= escrow.total);
-                assert_eq!(escrow.settled, expected_settled);
-                if settled_status {
-                    assert_eq!(escrow.status, EscrowStatus::Settled);
-                } else {
-                    assert_eq!(escrow.status, EscrowStatus::Active);
-                }
-            }
-        }
+    #[test]
+    fn fuzz_deposit_without_balance() {
+        let (env, client, admin, token, depositor, beneficiary, _) = setup();
+        client.initialize(&admin, &token, &depositor, &beneficiary, &1_000_000_000);
+        // depositor has only 1_000_000 minted
+        let res = client.try_deposit();
+        assert!(res.is_err());
+        let _ = env;
+    }
+
+    #[test]
+    fn fuzz_state_transitions() {
+        let (_env, client, admin, token, depositor, beneficiary, _) = setup();
+        client.initialize(&admin, &token, &depositor, &beneficiary, &1000);
+        client.deposit();
+        client.release();
+        // After release, deposit/refund/release must all fail.
+        assert_eq!(client.try_deposit(), Err(Ok(Error::InvalidState)));
+        assert_eq!(client.try_refund(), Err(Ok(Error::InvalidState)));
+        assert_eq!(client.try_release(), Err(Ok(Error::InvalidState)));
+    }
+
+    #[test]
+    fn fuzz_reentrancy_guard() {
+        let (env, client, admin, token, depositor, beneficiary, contract_id) = setup();
+        client.initialize(&admin, &token, &depositor, &beneficiary, &1000);
+        client.deposit();
+
+        // Simulate a stuck lock: set Locked=true directly via storage.
+        env.as_contract(&contract_id, || {
+            env.storage().instance().set(&DataKey::Locked, &true);
+        });
+        assert_eq!(client.try_release(), Err(Ok(Error::Reentrancy)));
+        assert_eq!(client.try_refund(), Err(Ok(Error::Reentrancy)));
+    }
+
+    #[test]
+    fn fuzz_getters_after_init() {
+        let (_env, client, admin, token, depositor, beneficiary, _) = setup();
+        client.initialize(&admin, &token, &depositor, &beneficiary, &777);
+        assert_eq!(client.get_amount(), 777);
+        assert_eq!(client.get_beneficiary(), beneficiary);
+        assert_eq!(client.get_state(), VaultState::Active);
     }
 }

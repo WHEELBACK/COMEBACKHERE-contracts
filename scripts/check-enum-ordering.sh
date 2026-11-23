@@ -36,7 +36,22 @@ status_file="$(mktemp)"
 trap 'rm -f "$status_file"' EXIT
 
 # Macro invocations that stand in for `#[repr(u32)] pub enum <Name> { ... }`.
-ERROR_ENUM_MACROS='declare_contract_error'
+# #928: `declare_settlement_error!` (oracle-adapter's modularized error enum)
+# expands to the same #[contracterror] + #[repr(u32)] contract, so it must be
+# covered here too — otherwise its variants would silently escape this check.
+ERROR_ENUM_MACROS='declare_contract_error|declare_settlement_error'
+
+# #955/#964/#973: the modularized error crates. Their enums are declared through
+# `declare_contract_error!`, so they are already picked up by the macro handling
+# above; this list additionally asserts that each of these crates is actually
+# scanned and that its enums start at 1 and increase by exactly 1, so a future
+# edit cannot silently renumber the modularized codes.
+MODULAR_ERROR_CRATES=(
+    crates/event-emitter-errors
+    crates/storage-layout-errors
+    crates/access-control-errors
+)
+=======
 
 # Find all #[repr(u32)] enum definitions under contracts/ and crates/
 # We use awk to extract the enum name and its variants with explicit discriminants.
@@ -74,11 +89,11 @@ find contracts crates -name '*.rs' -type f | while read -r file; do
     while IFS= read -r line; do
         trimmed="${line#"${line%%[![:space:]]*}"}"
 
-        # #627: a `declare_contract_error!` invocation carries the same
-        # #[contracterror] + #[repr(u32)] contract as a hand-written attribute
-        # block, so it arms the same block detection. Only the macros named in
-        # $ERROR_ENUM_MACROS are treated this way — an arbitrary macro could
-        # expand to anything.
+        # #627/#928: a `declare_contract_error!` or `declare_settlement_error!`
+        # invocation carries the same #[contracterror] + #[repr(u32)] contract as
+        # a hand-written attribute block, so it arms the same block detection.
+        # Only the macros named in $ERROR_ENUM_MACROS are treated this way — an
+        # arbitrary macro could expand to anything.
         if [[ "$trimmed" =~ ^([A-Za-z0-9_]+)! ]]; then
             macro_name="${BASH_REMATCH[1]}"
             case "|$ERROR_ENUM_MACROS|" in
@@ -164,6 +179,80 @@ done
 if [[ -s "$status_file" ]]; then
     errors=1
 fi
+
+# #955/#964/#973: explicit assertion for the modularized error crates.
+# Each must exist, contain at least one `declare_contract_error!` enum, and every
+# such enum must have discriminants 1, 2, 3, ... with no gaps or reordering.
+for crate_dir in "${MODULAR_ERROR_CRATES[@]}"; do
+    if [[ ! -d "$crate_dir" ]]; then
+        echo "ERROR: expected modular error crate $crate_dir not found"
+        errors=1
+        continue
+    fi
+
+    crate_enum_count=0
+    while IFS= read -r file; do
+        [[ -z "$file" ]] && continue
+        if echo "$file" | grep -q '/tests/'; then
+            continue
+        fi
+
+        # Collect the discriminants of every enum in this file, in source order.
+        # awk mirrors the main pass: arm on `declare_contract_error!`, then read
+        # the `pub enum` line and each variant's explicit discriminant.
+        discriminants="$(awk '
+            BEGIN { armed = 0; in_enum = 0; depth = 0 }
+            {
+                line = $0
+                trimmed = line
+                sub(/^[[:space:]]+/, "", trimmed)
+
+                if (trimmed ~ /^declare_contract_error!/) { armed = 1; next }
+                if (line ~ /#\[repr\(u32\)\]/) { armed = 1; next }
+
+                if (armed == 1 && trimmed ~ /^pub[[:space:]]+enum[[:space:]]+[A-Za-z0-9_]+/) {
+                    in_enum = 1; depth = 0; armed = 0
+                } else if (armed == 1) {
+                    if (trimmed ~ /^\/\/\//) next
+                    armed = 0
+                }
+
+                if (in_enum == 1) {
+                    n = length(line)
+                    for (i = 1; i <= n; i++) {
+                        c = substr(line, i, 1)
+                        if (c == "{") depth++
+                        else if (c == "}") depth--
+                    }
+                    if (match(line, /[A-Za-z0-9_]+[[:space:]]*=[[:space:]]*[0-9]+/)) {
+                        m = substr(line, RSTART, RLENGTH)
+                        sub(/^[A-Za-z0-9_]+[[:space:]]*=[[:space:]]*/, "", m)
+                        print m
+                    }
+                    if (depth <= 0) in_enum = 0
+                }
+            }
+        ' "$file")"
+
+        [[ -z "$discriminants" ]] && continue
+
+        crate_enum_count=$((crate_enum_count + 1))
+        expected=1
+        while IFS= read -r disc; do
+            [[ -z "$disc" ]] && continue
+            if [[ "$disc" -ne "$expected" ]]; then
+                echo "ERROR: $file: modular error enum discriminant $disc but expected $expected (must start at 1 and increase by 1)"
+                errors=1
+            fi
+            expected=$((disc + 1))
+        done <<< "$discriminants"
+    done < <(find "$crate_dir" -name '*.rs' -type f)
+
+    if [[ $crate_enum_count -eq 0 ]]; then
+        echo "ERROR: $crate_dir contains no declare_contract_error! enums to verify"
+        errors=1
+    fi
+done
 
 if [[ $errors -eq 0 ]]; then
     echo "✓ All enums pass append-only ordering check"

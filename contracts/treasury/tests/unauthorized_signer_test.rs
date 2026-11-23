@@ -301,3 +301,159 @@ fn guard_table_approve_signer_rotation_rejects_unauthorized() {
     let rotation_id = client.propose_signer_rotation(&admin, &old_signer, &new_signer);
     client.approve_signer_rotation(&unauthorized, &rotation_id);
 }
+
+// #969 — granular role-based authorization for parameter modification.  Each parameter-mutating
+// entrypoint is exercised from the Admin role, the Operator role and an unauthorized signer so
+// that a regression in the role matrix surfaces as a failing test rather than a silent bypass.
+
+#[test]
+fn admin_can_modify_threshold() {
+    let env = Env::default();
+    let (client, admin, _contract_id) = setup_treasury(&env, 2);
+
+    client.set_threshold(&admin, &3);
+    assert_eq!(client.get_threshold(), 3);
+}
+
+#[test]
+#[should_panic(expected = "Error(Contract, #10)")]
+fn operator_cannot_modify_threshold() {
+    let env = Env::default();
+    let (client, admin, _contract_id) = setup_treasury(&env, 2);
+
+    // Register an operator-role signer (weight 1, not the admin).
+    let operator = Address::generate(&env);
+    client.set_signer(&admin, &operator, &1);
+
+    // Operators must not be able to raise the approval threshold.
+    client.set_threshold(&operator, &3);
+}
+
+#[test]
+#[should_panic(expected = "Error(Contract, #10)")]
+fn unauthorized_signer_cannot_modify_threshold() {
+    let env = Env::default();
+    let (client, _admin, _contract_id) = setup_treasury(&env, 2);
+
+    let unauthorized = Address::generate(&env);
+    client.set_threshold(&unauthorized, &3);
+}
+
+#[test]
+fn admin_can_set_payout_override() {
+    let env = Env::default();
+    let (client, admin, _contract_id) = setup_treasury(&env, 2);
+
+    let merchant = Address::generate(&env);
+    client.set_payout_override(&admin, &merchant, &Some(5_000_000));
+    assert_eq!(client.get_payout_override(&merchant), Some(5_000_000));
+}
+
+#[test]
+#[should_panic(expected = "Error(Contract, #10)")]
+fn operator_cannot_set_payout_override() {
+    let env = Env::default();
+    let (client, admin, _contract_id) = setup_treasury(&env, 2);
+
+    let operator = Address::generate(&env);
+    client.set_signer(&admin, &operator, &1);
+
+    let merchant = Address::generate(&env);
+    client.set_payout_override(&operator, &merchant, &Some(5_000_000));
+}
+
+#[test]
+#[should_panic(expected = "Error(Contract, #10)")]
+fn unauthorized_signer_cannot_set_payout_override() {
+    let env = Env::default();
+    let (client, _admin, _contract_id) = setup_treasury(&env, 2);
+
+    let unauthorized = Address::generate(&env);
+    let merchant = Address::generate(&env);
+    client.set_payout_override(&unauthorized, &merchant, &Some(5_000_000));
+}
+
+#[test]
+fn admin_can_toggle_signer_activity() {
+    let env = Env::default();
+    let (client, admin, _contract_id) = setup_treasury(&env, 2);
+
+    let signer = Address::generate(&env);
+    client.set_signer(&admin, &signer, &1);
+
+    client.set_signer_active(&admin, &signer, &false);
+    assert!(!client.is_signer_active(&signer));
+
+    client.set_signer_active(&admin, &signer, &true);
+    assert!(client.is_signer_active(&signer));
+}
+
+#[test]
+#[should_panic(expected = "Error(Contract, #10)")]
+fn operator_cannot_toggle_signer_activity() {
+    let env = Env::default();
+    let (client, admin, _contract_id) = setup_treasury(&env, 2);
+
+    let operator = Address::generate(&env);
+    client.set_signer(&admin, &operator, &1);
+
+    let target = Address::generate(&env);
+    client.set_signer(&admin, &target, &1);
+
+    // Operators must not be able to deactivate other signers.
+    client.set_signer_active(&operator, &target, &false);
+}
+
+#[test]
+#[should_panic(expected = "Error(Contract, #10)")]
+fn unauthorized_signer_cannot_toggle_signer_activity() {
+    let env = Env::default();
+    let (client, admin, _contract_id) = setup_treasury(&env, 2);
+
+    let target = Address::generate(&env);
+    client.set_signer(&admin, &target, &1);
+
+    let unauthorized = Address::generate(&env);
+    client.set_signer_active(&unauthorized, &target, &false);
+}
+
+#[test]
+fn admin_can_force_cancel_settlement() {
+    let env = Env::default();
+    let (client, admin, _contract_id) = setup_treasury(&env, 2);
+
+    let merchant = Address::generate(&env);
+    let settlement_id = client.propose_settlement(&admin, &merchant, &10_000_000, &0_u64);
+
+    client.force_cancel_settlement(&admin, &settlement_id);
+    assert!(client.get_settlement(&settlement_id).is_none());
+}
+
+#[test]
+#[should_panic(expected = "Error(Contract, #10)")]
+fn operator_cannot_force_cancel_settlement() {
+    let env = Env::default();
+    let (client, admin, _contract_id) = setup_treasury(&env, 2);
+
+    let operator = Address::generate(&env);
+    client.set_signer(&admin, &operator, &1);
+
+    let merchant = Address::generate(&env);
+    let settlement_id = client.propose_settlement(&admin, &merchant, &10_000_000, &0_u64);
+
+    // Force-cancel is an admin-only escape hatch.
+    client.force_cancel_settlement(&operator, &settlement_id);
+}
+
+#[test]
+#[should_panic(expected = "Error(Contract, #10)")]
+fn unauthorized_signer_cannot_force_cancel_settlement() {
+    let env = Env::default();
+    let (client, admin, _contract_id) = setup_treasury(&env, 2);
+
+    let merchant = Address::generate(&env);
+    let settlement_id = client.propose_settlement(&admin, &merchant, &10_000_000, &0_u64);
+
+    let unauthorized = Address::generate(&env);
+    client.force_cancel_settlement(&unauthorized, &settlement_id);
+}

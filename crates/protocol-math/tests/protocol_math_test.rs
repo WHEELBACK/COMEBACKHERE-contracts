@@ -6,7 +6,8 @@
 //! only inside a contract's build.
 
 use protocol_math::{
-    apply_bps_i128, bps_denominator_i128, is_valid_bps, split_bps_i128, BPS_DENOMINATOR,
+    apply_bps_i128, bps_denominator_i128, checked_sub_i128, is_valid_bps, split_bps_i128,
+    BPS_DENOMINATOR,
 };
 
 #[test]
@@ -50,4 +51,39 @@ fn out_of_range_ratios_are_rejected_before_use() {
     // The helper itself stays total so a caller-chosen error can be raised
     // instead; only the predicate gates the value.
     assert_eq!(apply_bps_i128(10_000, BPS_DENOMINATOR + 1), Some(10_001));
+}
+
+#[test]
+fn checked_sub_returns_none_instead_of_underflowing() {
+    // #959: partial settlement must never wrap; an underflowing subtraction is
+    // reported as `None` so the caller can raise its own typed error.
+    assert_eq!(checked_sub_i128(5, 3), Some(2));
+    assert_eq!(checked_sub_i128(0, 0), Some(0));
+    assert_eq!(checked_sub_i128(3, 5), None);
+    assert_eq!(checked_sub_i128(i128::MIN, 1), None);
+    assert_eq!(checked_sub_i128(i128::MIN, i128::MAX), None);
+}
+
+#[test]
+fn checked_sub_handles_the_i128_boundaries() {
+    assert_eq!(checked_sub_i128(i128::MAX, i128::MAX), Some(0));
+    assert_eq!(checked_sub_i128(i128::MAX, 0), Some(i128::MAX));
+    assert_eq!(checked_sub_i128(i128::MIN, 0), Some(i128::MIN));
+    assert_eq!(checked_sub_i128(i128::MAX, i128::MIN), None);
+    // The only representable difference at the lower bound.
+    assert_eq!(checked_sub_i128(i128::MIN, i128::MIN), Some(0));
+}
+
+#[test]
+fn partial_settlement_remainder_is_checked_against_the_amount() {
+    // Mirrors the storage-layout partial settlement path: split the amount,
+    // then subtract the settled half from the total. The remainder must be
+    // non-negative and reconstruct the original amount.
+    for bps in [0, 1, 2_500, 5_000, 9_999, BPS_DENOMINATOR] {
+        let amount = 9_999_999_999i128;
+        let (settled, _) = split_bps_i128(amount, bps).expect("in range");
+        let remainder = checked_sub_i128(amount, settled).expect("settled <= amount");
+        assert!(remainder >= 0);
+        assert_eq!(settled + remainder, amount);
+    }
 }

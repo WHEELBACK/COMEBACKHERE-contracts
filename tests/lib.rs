@@ -1,12 +1,13 @@
 //! Workspace-level cross-contract integration tests for COMEBACKHERE.
 //!
-//! The suite is organised into three scenario modules, each exercising a
+//! The suite is organised into four scenario modules, each exercising a
 //! distinct cross-contract interaction boundary:
 //!
 //! | Module                | Contracts under test                      |
 //! |-----------------------|-------------------------------------------|
 //! | [`invoice_treasury`]  | Invoice status gates settlement proposals |
 //! | [`treasury_compliance`]| Compliance allowlist gates settlement     |
+//! | [`escrow_vault`]      | Escrow-vault cross-contract invocation mocks |
 //! | [`full_lifecycle`]    | End-to-end: invoice → payment → settle    |
 //!
 //! Every module defines a minimal workflow contract that mirrors the
@@ -19,6 +20,8 @@
 //! ```
 
 pub mod fixtures;
+#[cfg(test)]
+mod escrow_vault;
 #[cfg(test)]
 mod full_lifecycle;
 #[cfg(test)]
