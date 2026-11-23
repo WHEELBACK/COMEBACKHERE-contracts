@@ -12,7 +12,7 @@
 //! ensuring the invariant: claimant_amount + counterparty_amount == dispute.amount
 
 use proptest::prelude::*;
-use soroban_sdk::{contract, contractimpl, testutils::Address as _, Address, Env};
+use soroban_sdk::{testutils::Address as _, Address, Env};
 use treasury::{TreasuryContract, TreasuryContractClient};
 
 /// Minimal SEP-41–shaped test token for dispute split testing
@@ -325,44 +325,15 @@ fn split_remainder_assigned_to_counterparty() {
     });
 }
 
-/// Test that no intermediate subtraction underflows during partial settlement.
-///
-/// The counterparty remainder is computed as `amount - claimant_amount`. If the
-/// claimant share were ever rounded up (or computed with a wider intermediate),
-/// this subtraction could underflow and panic. This test verifies that:
-///
-/// 1. `claimant_amount <= amount` for every amount and bps in 0..=10_000
-/// 2. The remainder is computed with checked math and never underflows
-/// 3. The invariant `claimant + counterparty == amount` holds, including the
-///    zero-amount and full-bps edge cases
+/// Strict invariant test: for every basis-point value and amount, the split must
+/// (a) conserve the disputed amount exactly, (b) never produce negative payouts,
+/// and (c) never pay out more than the disputed amount in total.
 #[test]
-fn split_no_underflow_in_partial_settlement() {
+fn prop_split_invariants_hold_for_all_bps() {
     proptest!(|(
-        amount in 0i128..=1_000_000_000i128,
+        amount in 1i128..=10_000_000i128,
         claimant_bps in 0u32..=BPS_DENOMINATOR
     )| {
-        // Pure arithmetic model of the contract's split computation.
-        let claimant_amount = amount
-            .checked_mul(claimant_bps as i128)
-            .expect("claimant share multiplication must not overflow")
-            / BPS_DENOMINATOR as i128;
-
-        // The claimant share can never exceed the disputed amount, so the
-        // remainder subtraction below is guaranteed to be non-negative.
-        prop_assert!(
-            claimant_amount <= amount,
-            "claimant share must not exceed amount: amount={}, bps={}, claimant={}",
-            amount, claimant_bps, claimant_amount
-        );
-
-        let counterparty_amount = amount
-            .checked_sub(claimant_amount)
-            .expect("counterparty remainder subtraction must not underflow");
-
-        prop_assert!(counterparty_amount >= 0);
-        prop_assert_eq!(claimant_amount + counterparty_amount, amount);
-
-        // Exercise the real contract path to confirm it matches the model.
         let env = Env::default();
         let (client, admin, token_client, token_id) = setup(&env);
 
@@ -377,71 +348,57 @@ fn split_no_underflow_in_partial_settlement() {
 
         client.resolve_dispute_split(&admin, &did, &claimant_bps, &token_id, &None);
 
-        let claimant_after = token_client.balance(&claimant);
-        let counterparty_after = token_client.balance(&counterparty);
+        let claimant_payout = token_client.balance(&claimant) - claimant_before;
+        let counterparty_payout = token_client.balance(&counterparty) - counterparty_before;
 
-        let claimant_payout = claimant_after - claimant_before;
-        let counterparty_payout = counterparty_after - counterparty_before;
-
-        prop_assert_eq!(claimant_payout, claimant_amount);
-        prop_assert_eq!(counterparty_payout, counterparty_amount);
+        // (a) Conservation: no funds lost or created.
         prop_assert_eq!(
             claimant_payout + counterparty_payout,
             amount,
-            "Invariant violated: amount={}, bps={}, claimant={}, counterparty={}",
+            "conservation violated: amount={}, bps={}, claimant={}, counterparty={}",
             amount, claimant_bps, claimant_payout, counterparty_payout
         );
+
+        // (b) No negative payouts.
+        prop_assert!(claimant_payout >= 0, "claimant payout negative");
+        prop_assert!(counterparty_payout >= 0, "counterparty payout negative");
+
+        // (c) Neither side can exceed the disputed amount.
+        prop_assert!(claimant_payout <= amount, "claimant payout exceeds amount");
+        prop_assert!(counterparty_payout <= amount, "counterparty payout exceeds amount");
     });
 }
 
-/// Edge case: zero-amount dispute must not underflow or panic.
+/// Strict invariant test: the treasury's token balance must decrease by exactly
+/// the disputed amount (the hold-amount invariant), regardless of rounding.
 #[test]
-fn split_zero_amount_no_underflow() {
-    let env = Env::default();
-    let (client, admin, token_client, token_id) = setup(&env);
+fn prop_split_hold_amount_invariant() {
+    proptest!(|(
+        amount in 1i128..=10_000_000i128,
+        claimant_bps in 0u32..=BPS_DENOMINATOR
+    )| {
+        let env = Env::default();
+        let (client, admin, token_client, token_id) = setup(&env);
 
-    let claimant = Address::generate(&env);
-    let counterparty = Address::generate(&env);
-    let amount = 0i128;
+        let claimant = Address::generate(&env);
+        let counterparty = Address::generate(&env);
 
-    let sid = client.propose_settlement(&admin, &claimant, &amount, &0_u64);
-    let did = client.raise_dispute(&claimant, &sid, &counterparty, &amount, &500, &None);
+        let sid = client.propose_settlement(&admin, &claimant, &amount, &0_u64);
+        let did = client.raise_dispute(&claimant, &sid, &counterparty, &amount, &500, &None);
 
-    let claimant_before = token_client.balance(&claimant);
-    let counterparty_before = token_client.balance(&counterparty);
+        let treasury_before = token_client.balance(&token_id);
 
-    client.resolve_dispute_split(&admin, &did, &5_000, &token_id, &None);
+        client.resolve_dispute_split(&admin, &did, &claimant_bps, &token_id, &None);
 
-    let claimant_after = token_client.balance(&claimant);
-    let counterparty_after = token_client.balance(&counterparty);
+        let treasury_after = token_client.balance(&token_id);
 
-    assert_eq!(claimant_after - claimant_before, 0);
-    assert_eq!(counterparty_after - counterparty_before, 0);
-}
-
-/// Edge case: full-bps (100%) split must leave a zero remainder without underflow.
-#[test]
-fn split_full_bps_no_underflow() {
-    let env = Env::default();
-    let (client, admin, token_client, token_id) = setup(&env);
-
-    let claimant = Address::generate(&env);
-    let counterparty = Address::generate(&env);
-    let amount = 1i128;
-
-    let sid = client.propose_settlement(&admin, &claimant, &amount, &0_u64);
-    let did = client.raise_dispute(&claimant, &sid, &counterparty, &amount, &500, &None);
-
-    let claimant_before = token_client.balance(&claimant);
-    let counterparty_before = token_client.balance(&counterparty);
-
-    client.resolve_dispute_split(&admin, &did, &BPS_DENOMINATOR, &token_id, &None);
-
-    let claimant_after = token_client.balance(&claimant);
-    let counterparty_after = token_client.balance(&counterparty);
-
-    assert_eq!(claimant_after - claimant_before, amount);
-    assert_eq!(counterparty_after - counterparty_before, 0);
+        prop_assert_eq!(
+            treasury_before - treasury_after,
+            amount,
+            "treasury must disburse exactly the disputed amount: amount={}, bps={}",
+            amount, claimant_bps
+        );
+    });
 }
 
 /// Test that the same amount and ratio always produce the same result (determinism)

@@ -85,6 +85,104 @@ fn approve_partial_settlement_accepts_exact_remaining_amount() {
 }
 
 #[test]
+fn approve_partial_settlement_rejects_amount_exceeding_remaining() {
+    let env = Env::default();
+    let (client, admin, merchant, _) = setup_treasury(&env);
+    let signer_two = Address::generate(&env);
+    client.set_signer(&admin, &signer_two, &1);
+
+    let settlement_id = client.propose_settlement(&admin, &merchant, &10_000_000, &0_u64);
+    client.approve_partial_settlement(&signer_two, &settlement_id, &5_000_000);
+
+    let result = client.try_approve_partial_settlement(&signer_two, &settlement_id, &5_000_001);
+    assert!(result.is_err());
+
+    let settlement = client.get_settlement(&settlement_id);
+    assert_eq!(settlement.status, SettlementStatus::Pending);
+    assert_eq!(settlement.approval_weight, 2);
+}
+
+#[test]
+fn approve_partial_settlement_rejects_negative_amount() {
+    let env = Env::default();
+    let (client, admin, merchant, _) = setup_treasury(&env);
+    let signer_two = Address::generate(&env);
+    client.set_signer(&admin, &signer_two, &1);
+
+    let settlement_id = client.propose_settlement(&admin, &merchant, &10_000_000, &0_u64);
+
+    let result = client.try_approve_partial_settlement(&signer_two, &settlement_id, &-1);
+    assert!(result.is_err());
+
+    let settlement = client.get_settlement(&settlement_id);
+    assert_eq!(settlement.status, SettlementStatus::Pending);
+    assert_eq!(settlement.approval_weight, 1);
+}
+
+#[test]
+fn approve_partial_settlement_rejects_zero_amount() {
+    let env = Env::default();
+    let (client, admin, merchant, _) = setup_treasury(&env);
+    let signer_two = Address::generate(&env);
+    client.set_signer(&admin, &signer_two, &1);
+
+    let settlement_id = client.propose_settlement(&admin, &merchant, &10_000_000, &0_u64);
+
+    let result = client.try_approve_partial_settlement(&signer_two, &settlement_id, &0);
+    assert!(result.is_err());
+}
+
+#[test]
+fn approve_partial_settlement_fuzz_amounts_never_traps() {
+    let env = Env::default();
+    let (client, admin, merchant, _) = setup_treasury(&env);
+
+    let total: i128 = 10_000_000;
+    let settlement_id = client.propose_settlement(&admin, &merchant, &total, &0_u64);
+
+    // Deterministic pseudo-random sequence (xorshift) to exercise adversarial amounts.
+    let mut state: u64 = 0x9E37_79B9_7F4A_7C15;
+    let mut next = || {
+        state ^= state << 13;
+        state ^= state >> 7;
+        state ^= state << 17;
+        state
+    };
+
+    let mut approved: i128 = 0;
+    for i in 0..64u32 {
+        let signer = Address::generate(&env);
+        client.set_signer(&admin, &signer, &1);
+
+        let raw = next();
+        // Mix in extreme values to probe underflow/overflow boundaries.
+        let amount: i128 = match i % 8 {
+            0 => i128::MAX,
+            1 => i128::MIN,
+            2 => -1,
+            3 => 0,
+            4 => total + 1,
+            5 => total - approved + 1,
+            _ => (raw as i128).abs() % (total + 1),
+        };
+
+        let remaining = total - approved;
+        let result = client.try_approve_partial_settlement(&signer, &settlement_id, &amount);
+
+        if amount > 0 && amount <= remaining {
+            assert!(result.is_ok(), "valid amount {amount} should succeed");
+            approved += amount;
+        } else {
+            assert!(result.is_err(), "invalid amount {amount} should be rejected");
+        }
+
+        let settlement = client.get_settlement(&settlement_id);
+        assert_eq!(settlement.amount, total);
+        assert!(settlement.approval_weight >= 1);
+    }
+}
+
+#[test]
 fn execute_settlement_pays_exact_amount_and_marks_executed() {
     let env = Env::default();
     let (client, admin, merchant, treasury_id) = setup_treasury(&env);

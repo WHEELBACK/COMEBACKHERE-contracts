@@ -20,9 +20,11 @@ pub use multisig::TreasuryError;
 
 use soroban_sdk::{contract, contractimpl, Address, Bytes, Env, IntoVal, Symbol, Vec};
 
+mod access_control;
 mod admin;
 mod deposits;
 mod disputes;
+pub mod errors;
 mod holds;
 mod settlements;
 mod signers;
@@ -79,8 +81,17 @@ impl TreasuryContract {
         env.storage()
             .instance()
             .set(&DataKey::SignerList, &signer_list);
+        // Bootstrap the admin as the initial role holder so granular role checks
+        // (#969) are usable immediately after initialization.
+        access_control::grant_role(&env, &admin, &access_control::role_admin(&env));
+        verify_invariants(&env);
         env.events()
             .publish((Symbol::new(&env, "treasury_initialized"),), admin);
+        // Extend instance storage TTL on initialization (#866) so the contract's
+        // core configuration is not evicted before the first real activity bumps it.
+        env.storage()
+            .instance()
+            .extend_ttl(MIN_TTL_LEDGERS, TARGET_TTL_LEDGERS);
         Ok(())
     }
 }
@@ -91,88 +102,99 @@ pub(crate) const MAX_ALLOWED_TOKENS: u32 = 20;
 /// Default TTL (in ledgers) for a deposit reference id before it can be reused (#747).
 pub(crate) const DEPOSIT_REF_TTL_LEDGERS: u32 = 30 * 24 * 60 * 60 / 5;
 
-/// Ledger threshold below which a persistent entry is considered "close to
-/// eviction" and gets bumped on access (#929). ~7 days at 5s/ledger.
-pub(crate) const PERSISTENT_TTL_THRESHOLD: u32 = 7 * 24 * 60 * 60 / 5;
+// ── Persistent-storage TTL constants (#866) ──────────────────────────────────
+//
+// Soroban persistent entries are evicted from the ledger once their TTL reaches
+// zero.  We pro-actively extend them on every live write so a settlement that
+// sits in `Pending` or `OnHold` for weeks never disappears mid-approval.
+//
+// At ~5 s per ledger:
+//   MIN_TTL_LEDGERS  = 100_000 ≈  5.78 days  (don't bump if already this fresh)
+//   TARGET_TTL_LEDGERS = 535_000 ≈ 30.9 days  (extend to this target when bumped)
+//
+// Callers: `bump_settlement_ttl` (called from `write_settlement` for live
+// settlements) and the `initialize` instance-TTL bump.
+/// Default TTL (in ledgers) applied to persistent dispute keys (#920).
+pub(crate) const DISPUTE_TTL_LEDGERS: u32 = 30 * 24 * 60 * 60 / 5;
 
-/// Target TTL (in ledgers) a persistent entry is extended to when bumped (#929).
-/// ~30 days at 5s/ledger, comfortably above `PERSISTENT_TTL_THRESHOLD`.
-pub(crate) const PERSISTENT_TTL_EXTEND_TO: u32 = 30 * 24 * 60 * 60 / 5;
-
-/// Bumps the TTL of a persistent storage entry so it cannot be evicted while
-/// still live (#929). Called on every persistent key access (settlements,
-/// disputes, holds, signer-change proposals, ...). Idempotent and cheap when the
-/// entry is already far from the threshold: `extend_ttl` is a no-op in that case.
-pub(crate) fn extend_persistent_ttl<K>(env: &Env, key: &K)
-where
-    K: soroban_sdk::IntoVal<Env, soroban_sdk::Val> + soroban_sdk::TryFromVal<Env, soroban_sdk::Val>,
-{
-    env.storage().persistent().extend_ttl(
-        key,
-        PERSISTENT_TTL_THRESHOLD,
-        PERSISTENT_TTL_EXTEND_TO,
-    );
-}
-
-/// Reads a persistent entry and bumps its TTL in the same access (#929), so a
-/// live key is never evicted between reads. Returns `None` when the key is
-/// absent, letting callers default missing state safely instead of panicking.
-pub(crate) fn get_persistent<K, V>(env: &Env, key: &K) -> Option<V>
-where
-    K: soroban_sdk::IntoVal<Env, soroban_sdk::Val> + soroban_sdk::TryFromVal<Env, soroban_sdk::Val>,
-    V: soroban_sdk::IntoVal<Env, soroban_sdk::Val> + soroban_sdk::TryFromVal<Env, soroban_sdk::Val>,
-{
-    let storage = env.storage().persistent();
-    let value: Option<V> = storage.get(key);
-    if value.is_some() {
-        extend_persistent_ttl(env, key);
+/// Bumps the TTL of a persistent dispute-related key (#920).
+pub(crate) fn bump_persistent_ttl(env: &Env, key: &DataKey) {
+    if env.storage().persistent().has(key) {
+        env.storage()
+            .persistent()
+            .extend_ttl(key, DISPUTE_TTL_LEDGERS, DISPUTE_TTL_LEDGERS);
     }
-    value
 }
 
-/// Writes a persistent entry and bumps its TTL in the same access (#929).
-pub(crate) fn set_persistent<K, V>(env: &Env, key: &K, value: &V)
-where
-    K: soroban_sdk::IntoVal<Env, soroban_sdk::Val> + soroban_sdk::TryFromVal<Env, soroban_sdk::Val>,
-    V: soroban_sdk::IntoVal<Env, soroban_sdk::Val> + soroban_sdk::TryFromVal<Env, soroban_sdk::Val>,
-{
-    env.storage().persistent().set(key, value);
-    extend_persistent_ttl(env, key);
+pub(crate) const MIN_TTL_LEDGERS: u32 = 100_000;
+pub(crate) const TARGET_TTL_LEDGERS: u32 = 535_000;
+
+/// Extends the TTL of all persistent storage entries associated with
+/// `settlement_id` (#866). Only bumps each key when it currently exists in
+/// storage so this never accidentally creates a stale entry for a key that was
+/// never written (e.g. `HoldExpiry` before the first hold, or
+/// `PartialApprovedTotal`/`PartialExecutedTotal` before the first partial step).
+///
+/// Called by [`write_settlement`] for every write where the settlement status is
+/// still live (`Pending` or `OnHold`). Terminal writes (Executed, Cancelled,
+/// Expired) intentionally skip this call — eviction is fine for finished
+/// settlements.
+pub(crate) fn bump_settlement_ttl(env: &Env, id: u64) {
+    // The main settlement record always exists when this is called.
+    let key = DataKey::Settlement(id);
+    env.storage()
+        .persistent()
+        .extend_ttl(&key, MIN_TTL_LEDGERS, TARGET_TTL_LEDGERS);
+
+    // Optional companion keys: only extend if the key was previously written.
+    let hold_key = DataKey::HoldExpiry(id);
+    if env.storage().persistent().has(&hold_key) {
+        env.storage()
+            .persistent()
+            .extend_ttl(&hold_key, MIN_TTL_LEDGERS, TARGET_TTL_LEDGERS);
+    }
+
+    let partial_approved_key = DataKey::PartialApprovedTotal(id);
+    if env.storage().persistent().has(&partial_approved_key) {
+        env.storage()
+            .persistent()
+            .extend_ttl(&partial_approved_key, MIN_TTL_LEDGERS, TARGET_TTL_LEDGERS);
+    }
+
+    let partial_executed_key = DataKey::PartialExecutedTotal(id);
+    if env.storage().persistent().has(&partial_executed_key) {
+        env.storage()
+            .persistent()
+            .extend_ttl(&partial_executed_key, MIN_TTL_LEDGERS, TARGET_TTL_LEDGERS);
+    }
 }
 
-/// Reads a balance-like persistent value, defaulting a missing entry to zero
-/// instead of panicking (#930). Returns the value and whether it was present so
-/// callers can distinguish "no balance recorded" from "zero balance" when they
-/// need to.
-pub(crate) fn read_balance_or_zero<K>(env: &Env, key: &K) -> i128
-where
-    K: soroban_sdk::IntoVal<Env, soroban_sdk::Val> + soroban_sdk::TryFromVal<Env, soroban_sdk::Val>,
-{
-    get_persistent::<K, i128>(env, key).unwrap_or(0)
-}
-
-/// Validates that `amount` is strictly positive before any balance-moving
-/// operation, returning `TreasuryError::InvalidAmount` instead of letting a
-/// zero/negative amount reach arithmetic that could panic or silently no-op
-/// (#930).
-pub(crate) fn require_positive_amount(amount: i128) -> Result<(), TreasuryError> {
-    if amount <= 0 {
+/// Verifies runtime invariants for a live settlement before it is written to
+/// storage (#864). Returns `Err` for any impossible/corrupt state so the caller
+/// surfaces a typed error rather than silently persisting bad data.
+///
+/// Only called on `Pending` and `OnHold` writes — terminal writes (Executed,
+/// Cancelled, Expired) are allowed to bypass the guards so cleanup paths are
+/// never blocked by a corrupt field.
+///
+/// Invariants checked:
+/// 1. `settlement.amount > 0` — a zero-amount settlement can never execute.
+/// 2. `settlement.approval_weight == 0 || !settlement.approvals.is_empty()` —
+///    positive weight implies at least one approver was recorded; a mismatch
+///    means the approval accounting drifted.
+pub(crate) fn verify_settlement_invariants(
+    env: &Env,
+    settlement: &Settlement,
+) -> Result<(), TreasuryError> {
+    if settlement.amount <= 0 {
         return Err(TreasuryError::InvalidAmount);
     }
-    Ok(())
-}
-
-/// Validates that `balance` covers `amount` without panicking on zero or
-/// negative balances (#930). Returns `TreasuryError::InsufficientBalance` when
-/// the balance is zero or too small, so a zero-balance state fails closed with a
-/// typed error rather than aborting execution.
-pub(crate) fn require_sufficient_balance(balance: i128, amount: i128) -> Result<(), TreasuryError> {
-    if balance <= 0 || balance < amount {
-        return Err(TreasuryError::InsufficientBalance);
+    // weight > 0 must imply at least one recorded approver.
+    if settlement.approval_weight > 0 && settlement.approvals.is_empty() {
+        soroban_sdk::panic_with_error!(env, TreasuryError::Unauthorized);
     }
     Ok(())
 }
-=======
 
 pub(crate) fn require_admin(env: &Env, admin: &Address) {
     admin.require_auth();
@@ -180,6 +202,25 @@ pub(crate) fn require_admin(env: &Env, admin: &Address) {
     let stored: Option<Address> = env.storage().instance().get(&DataKey::Admin);
     if stored.as_ref() != Some(admin) {
         soroban_sdk::panic_with_error!(env, TreasuryError::Unauthorized);
+    }
+}
+
+/// Granular role guard for parameter-modifying entrypoints (#969). Requires the
+/// caller's authorization and verifies it holds `role` in the access-control
+/// role table. Fails closed with `Unauthorized` when the role is not granted.
+pub(crate) fn require_role(env: &Env, caller: &Address, role: &Symbol) {
+    caller.require_auth();
+    if !access_control::has_role(env, caller, role) {
+        soroban_sdk::panic_with_error!(env, TreasuryError::Unauthorized);
+    }
+}
+
+/// Verifies the treasury's core storage invariants after a mutation (#972).
+/// Panics with `TreasuryError::InvalidAmount` when the persisted state
+/// is inconsistent so a bad write can never be committed silently.
+pub(crate) fn verify_invariants(env: &Env) {
+    if !access_control::invariants_hold(env) {
+        soroban_sdk::panic_with_error!(env, TreasuryError::InvalidAmount);
     }
 }
 
@@ -224,16 +265,55 @@ pub(crate) fn require_compliance_allowed(
     Ok(())
 }
 
+/// Checked subtraction used by partial settlement computations (#968). Returns
+/// `TreasuryError::ArithmeticOverflow` instead of wrapping/panicking when
+/// `amount` exceeds `available`, keeping partial settlement math defensive.
+pub(crate) fn checked_sub_amount(
+    available: i128,
+    amount: i128,
+) -> Result<i128, TreasuryError> {
+    available
+        .checked_sub(amount)
+        .ok_or(TreasuryError::ArithmeticOverflow)
+}
+
 /// Writes `settlement` to storage and keeps `DataKey::PendingSettlementIndex` in sync
 /// with its `status` (#572). This is the *only* place a `Settlement` should be persisted
 /// in this crate — every write site (propose, approve, execute, cancel, expire, hold,
 /// dispute-driven hold/release, force-cancel) goes through here so the index can never
 /// drift from what `settlement.status == Pending` actually says, without having to
 /// duplicate that add/remove bookkeeping at each call site individually.
+///
+/// For live settlements (`Pending` or `OnHold`):
+/// * Calls [`verify_settlement_invariants`] to catch impossible/corrupt states
+///   early (#864).
+/// * Calls [`bump_settlement_ttl`] to extend persistent-entry TTLs so ledger
+///   eviction cannot remove an in-flight settlement (#866).
 pub(crate) fn write_settlement(env: &Env, id: u64, settlement: &Settlement) {
-    // Route through `set_persistent` so the settlement key's TTL is bumped on
-    // every write and can never be evicted while the settlement is live (#929).
-    set_persistent(env, &DataKey::Settlement(id), settlement);
+    // Run invariant guards and TTL bump only for live (non-terminal) settlements
+    // (#864, #866). Terminal writes are allowed through unconditionally so that
+    // cleanup paths (cancel, execute, expire, force-cancel) are never blocked by
+    // a pre-existing corrupt field.
+    let is_live = matches!(
+        settlement.status,
+        SettlementStatus::Pending | SettlementStatus::OnHold
+    );
+    if is_live {
+        // Invariant guard (#864): panics or returns Err for corrupt states.
+        // Use unwrap_or_else with panic_with_error! so the error is typed.
+        if let Err(e) = verify_settlement_invariants(env, settlement) {
+            soroban_sdk::panic_with_error!(env, e);
+        }
+    }
+
+    env.storage()
+        .persistent()
+        .set(&DataKey::Settlement(id), settlement);
+
+    // TTL bump (#866): extend after the write so the entry definitely exists.
+    if is_live {
+        bump_settlement_ttl(env, id);
+    }
 
     let mut index: Vec<u64> = env
         .storage()
@@ -274,13 +354,6 @@ pub(crate) fn write_settlement(env: &Env, id: u64, settlement: &Settlement) {
 /// longer live. Idempotent: safe to call when no hold was ever set.
 pub(crate) fn clear_hold_state(env: &Env, id: u64) {
     env.storage().persistent().remove(&DataKey::HoldExpiry(id));
-}
-
-/// Reads the hold expiry for `id`, bumping its TTL on access (#929). Returns
-/// `None` when no hold is set, so callers default to "not held" rather than
-/// panicking on a missing key.
-pub(crate) fn read_hold_expiry(env: &Env, id: u64) -> Option<u64> {
-    get_persistent(env, &DataKey::HoldExpiry(id))
 }
 
 /// Rejects a deposit whose reference id was already seen within the TTL window
