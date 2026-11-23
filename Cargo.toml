@@ -3,6 +3,7 @@ members = [
     "contracts/invoice",
     "contracts/treasury",
     "contracts/compliance",
+    "contracts/time-lock",
     "contracts/settlement-workflow",
     "contracts/storage-layout",
     "contracts/fee-manager",
