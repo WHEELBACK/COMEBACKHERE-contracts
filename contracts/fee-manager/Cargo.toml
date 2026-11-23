@@ -1,12 +1,9 @@
 [package]
 name = "comebackhere-fee-manager"
-version = "1.0.0"
+version = "0.1.0"
 edition = "2021"
 license.workspace = true
 publish = false
-description = "COMEBACKHERE fee manager contract"
-keywords = ["soroban", "stellar", "fees"]
-categories = ["cryptography::cryptocurrencies"]
 
 [lib]
 crate-type = ["cdylib", "rlib"]
@@ -17,7 +14,6 @@ testutils = ["soroban-sdk/testutils"]
 
 [dependencies]
 soroban-sdk.workspace = true
-protocol-math = { package = "comebackhere-protocol-math", path = "../../crates/protocol-math" }
 
 [dev-dependencies]
 soroban-sdk = { workspace = true, features = ["testutils"] }

@@ -58,9 +58,7 @@ impl InvoiceContract {
         }
 
         invoice.payer = MaybeAddress::Some(to.clone());
-        env.storage()
-            .persistent()
-            .set(&DataKey::Invoice(id), &invoice);
+        crate::store_invoice(&env, &invoice)?;
 
         events::invoice_transferred(&env, id, &from, &to);
         Ok(())

@@ -1,89 +1,55 @@
-//! Fee manager contract for the COMEBACKHERE protocol.
-//!
-//! # Responsibilities
-//!
-//! - Maintain a configurable fee in basis points (`FeeBps`, 0–10 000).
-//! - Maintain a `FeeRecipient` address that receives collected fees.
-//! - Expose `compute_fee` and `compute_partial_fee` for settlement contracts to
-//!   calculate their fee obligations without reading unrelated state.
-//! - Guard all arithmetic against overflow and underflow (#896).
-//! - Enforce granular role-based authorization: Admin or Operator may update
-//!   `FeeBps`; only Admin may change all other settings (#897).
-//! - Each entrypoint reads only the storage keys it actually needs, keeping
-//!   deserialization cost proportional to the data consumed (#898).
-//! - A two-step admin transfer (`transfer_admin` / `accept_admin`) prevents
-//!   locking out of the contract from a typo or mis-paste.
-
 #![no_std]
 
-use protocol_math::{apply_bps_i128, is_valid_bps, BPS_DENOMINATOR};
-use soroban_sdk::{contract, contractimpl, contracterror, contracttype, Address, Env};
+mod errors;
+mod storage;
 
-// ── Storage keys ─────────────────────────────────────────────────────────────
+pub use errors::FeeManagerError;
+pub use storage::{bump_instance_ttl, bump_persistent_ttl, MIN_TTL_THRESHOLD, TTL_BUMP_AMOUNT};
 
-/// Storage keys for the fee-manager contract.
+use soroban_sdk::{contract, contractimpl, contracttype, token, Address, Env, Symbol};
+
+// ── Storage key enum ─────────────────────────────────────────────────────────
+
+/// Storage keys used by the fee-manager contract.
 ///
-/// Variants are append-only. Reordering them would break any stored data
-/// keyed by ordinal position on a live deployment.
+/// Instance-storage keys: `Admin`, `FeeRateBps`, `Paused`.
+/// Persistent-storage keys: `Balance`, `AccumulatedFees`.
+///
+/// Add new variants at the end only — reordering breaks on-chain state.
 #[contracttype]
 #[derive(Clone)]
 pub enum DataKey {
-    /// Current administrator address (instance storage).
+    /// The administrator `Address` (instance storage).
     Admin,
-    /// Destination address for collected fees (instance storage).
-    FeeRecipient,
-    /// Fee rate in basis points, 0–10 000 (instance storage).
-    FeeBps,
-    /// Circuit-breaker flag; when `true`, all mutating entrypoints are rejected.
+    /// Fee rate in basis points, 0–10_000 (instance storage).
+    FeeRateBps,
+    /// Circuit-breaker flag (instance storage).
     Paused,
-    /// Staged address for the two-step admin handover (`transfer_admin` /
-    /// `accept_admin`). Absent when no transfer is in flight.
-    PendingAdmin,
-    /// Presence of this key marks `addr` as an Operator — a limited role that
-    /// may update `FeeBps` but cannot perform any other administrative action.
-    /// Stored as `bool`; `true` = active operator. (#897)
-    Operator(Address),
+    /// Net balance for `(depositor, token)` after fee deduction (persistent).
+    Balance(Address, Address),
+    /// Total uncollected protocol fees for `token` (persistent).
+    AccumulatedFees(Address),
 }
 
-// ── Error codes ───────────────────────────────────────────────────────────────
-
-/// Error codes returned by the fee-manager contract.
-///
-/// Values are stable: do not renumber existing variants.
-#[contracterror]
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum FeeManagerError {
-    /// `initialize` was called on an already-initialized contract.
-    AlreadyInitialized = 1,
-    /// The caller does not hold a role that permits this operation.
-    Unauthorized = 2,
-    /// `fee_bps` is out of range (must be `<= BPS_DENOMINATOR = 10_000`).
-    InvalidFeeBps = 3,
-    /// An intermediate multiplication exceeded `i128::MAX`. (#896)
-    ArithmeticOverflow = 4,
-    /// A subtraction would have produced a negative result or `settled_amount`
-    /// exceeds `total_amount` in a partial-fee call. (#896)
-    ArithmeticUnderflow = 5,
-    /// The contract is paused; the requested mutation is not permitted.
-    ContractPaused = 6,
-    /// The entrypoint requires the contract to be initialized first.
-    NotInitialized = 7,
-    /// `amount` is `<= 0`; fee computation is undefined on non-positive values.
-    InvalidAmount = 8,
-    /// `accept_admin` was called but no transfer is pending.
-    NoPendingAdmin = 9,
-}
-
-// ── Contract ──────────────────────────────────────────────────────────────────
+// ── Contract struct ───────────────────────────────────────────────────────────
 
 #[contract]
 pub struct FeeManagerContract;
 
-// ── Private helpers ───────────────────────────────────────────────────────────
+// ── Internal helpers ──────────────────────────────────────────────────────────
 
-/// Panics with `ContractPaused` if `DataKey::Paused` is `true`.
-///
-/// Reads *only* `DataKey::Paused` — no other state is deserialized. (#898)
+/// Authenticate `admin` and confirm it matches the stored administrator.
+/// Panics with [`FeeManagerError::Unauthorized`] if the check fails.
+fn require_admin(env: &Env, admin: &Address) {
+    admin.require_auth();
+    let stored: Address = env.storage().instance().get(&DataKey::Admin).unwrap();
+    if stored != *admin {
+        soroban_sdk::panic_with_error!(env, FeeManagerError::Unauthorized);
+    }
+}
+
+/// Reject the call if the contract is paused.
+/// Panics with [`FeeManagerError::ContractPaused`] when paused.
 fn require_not_paused(env: &Env) {
     let paused: bool = env
         .storage()
@@ -95,327 +61,309 @@ fn require_not_paused(env: &Env) {
     }
 }
 
-/// Returns `true` when `caller` is either the stored Admin or a registered
-/// Operator. Each role check is a single-key read. (#897, #898)
-fn is_caller_admin_or_operator(env: &Env, caller: &Address) -> bool {
-    let admin: Option<Address> = env.storage().instance().get(&DataKey::Admin);
-    if let Some(ref a) = admin {
-        if a == caller {
-            return true;
-        }
+/// Issue #900 — Strict invariant verification.
+///
+/// Called after every state-mutating operation.  Panics if any fundamental
+/// invariant is violated:
+/// - The `Admin` key must be present in instance storage.
+/// - The fee rate must be within [0, 10_000] basis points.
+fn verify_invariants(env: &Env) {
+    // Admin must always be set after initialization.
+    if !env.storage().instance().has(&DataKey::Admin) {
+        soroban_sdk::panic_with_error!(env, FeeManagerError::Unauthorized);
     }
-    env.storage()
+
+    // Fee rate must remain within the valid basis-point range.
+    let rate: u32 = env
+        .storage()
         .instance()
-        .get(&DataKey::Operator(caller.clone()))
-        .unwrap_or(false)
+        .get(&DataKey::FeeRateBps)
+        .unwrap_or(0);
+    if rate > 10_000 {
+        soroban_sdk::panic_with_error!(env, FeeManagerError::InvalidFeeRate);
+    }
 }
 
-/// Returns `true` when `caller` matches the stored Admin exactly. (#897)
-fn is_caller_admin(env: &Env, caller: &Address) -> bool {
-    env.storage()
-        .instance()
-        .get::<_, Address>(&DataKey::Admin)
-        .map(|a| a == *caller)
-        .unwrap_or(false)
-}
-
-// ── Entrypoints ───────────────────────────────────────────────────────────────
+// ── Contract entrypoints ──────────────────────────────────────────────────────
 
 #[contractimpl]
 impl FeeManagerContract {
-    // ── Lifecycle ─────────────────────────────────────────────────────────
+    // ── Lifecycle ─────────────────────────────────────────────────────────────
 
-    /// Initialize the contract.
-    ///
-    /// Sets `Admin`, `FeeRecipient`, `FeeBps`, and `Paused = false`.
+    /// Initialize the contract with `admin` and a fee rate in basis points.
     ///
     /// # Errors
-    /// - `AlreadyInitialized` if the contract has already been set up.
-    /// - `InvalidFeeBps` if `fee_bps > BPS_DENOMINATOR`.
-    pub fn initialize(
-        env: Env,
-        admin: Address,
-        fee_recipient: Address,
-        fee_bps: u32,
-    ) -> Result<(), FeeManagerError> {
+    /// - [`FeeManagerError::AlreadyInitialized`] if already set up.
+    /// - [`FeeManagerError::InvalidFeeRate`] if `fee_rate_bps > 10_000`.
+    ///
+    /// # Events
+    /// None.
+    pub fn initialize(env: Env, admin: Address, fee_rate_bps: u32) -> Result<(), FeeManagerError> {
         if env.storage().instance().has(&DataKey::Admin) {
             return Err(FeeManagerError::AlreadyInitialized);
         }
-        if !is_valid_bps(fee_bps) {
-            return Err(FeeManagerError::InvalidFeeBps);
+        if fee_rate_bps > 10_000 {
+            return Err(FeeManagerError::InvalidFeeRate);
         }
         admin.require_auth();
         env.storage().instance().set(&DataKey::Admin, &admin);
         env.storage()
             .instance()
-            .set(&DataKey::FeeRecipient, &fee_recipient);
-        env.storage().instance().set(&DataKey::FeeBps, &fee_bps);
+            .set(&DataKey::FeeRateBps, &fee_rate_bps);
         env.storage().instance().set(&DataKey::Paused, &false);
+
+        // Issue #902 — bump instance TTL after initialization.
+        bump_instance_ttl(&env);
+
+        // Issue #900 — verify invariants hold immediately after setup.
+        verify_invariants(&env);
+
         Ok(())
     }
 
-    // ── Fee configuration ─────────────────────────────────────────────────
+    // ── Deposit ───────────────────────────────────────────────────────────────
 
-    /// Update the fee rate.
+    /// Deposit `amount` tokens from `from`, record the net balance (after fee),
+    /// and accumulate the protocol fee for `token`.
     ///
-    /// `caller` must be Admin **or** an Operator. (#897)
+    /// Issue #903 — zero amounts are rejected explicitly rather than silently
+    /// succeeding.
     ///
     /// # Errors
-    /// - `ContractPaused` if the contract is paused.
-    /// - `InvalidFeeBps` if `fee_bps > BPS_DENOMINATOR`.
-    /// - `Unauthorized` if `caller` holds neither the Admin nor Operator role.
-    pub fn set_fee_bps(
+    /// - [`FeeManagerError::ContractPaused`] when paused.
+    /// - [`FeeManagerError::ZeroAmount`] if `amount == 0`.
+    /// - [`FeeManagerError::ArithmeticOverflow`] on overflow.
+    ///
+    /// # Events
+    /// Publishes `("deposited",) → (from, token, amount)`.
+    pub fn deposit(
         env: Env,
-        caller: Address,
-        fee_bps: u32,
+        from: Address,
+        token: Address,
+        amount: i128,
     ) -> Result<(), FeeManagerError> {
         require_not_paused(&env);
-        if !is_valid_bps(fee_bps) {
-            return Err(FeeManagerError::InvalidFeeBps);
+        from.require_auth();
+
+        // Issue #903 — reject zero-amount deposits explicitly.
+        if amount == 0 {
+            return Err(FeeManagerError::ZeroAmount);
         }
-        caller.require_auth();
-        if !is_caller_admin_or_operator(&env, &caller) {
-            return Err(FeeManagerError::Unauthorized);
-        }
-        env.storage().instance().set(&DataKey::FeeBps, &fee_bps);
+
+        // Pull the tokens into the contract first.
+        let contract_addr = env.current_contract_address();
+        let token_client = token::Client::new(&env, &token);
+        token_client.transfer(&from, &contract_addr, &amount);
+
+        // Calculate the fee.
+        let fee_rate: u32 = env
+            .storage()
+            .instance()
+            .get(&DataKey::FeeRateBps)
+            .unwrap_or(0);
+        // fee = amount * fee_rate / 10_000, using i128 arithmetic.
+        let fee: i128 = amount
+            .checked_mul(fee_rate as i128)
+            .ok_or(FeeManagerError::ArithmeticOverflow)?
+            / 10_000;
+        let net: i128 = amount
+            .checked_sub(fee)
+            .ok_or(FeeManagerError::ArithmeticOverflow)?;
+
+        // Update net balance for depositor × token.  Issue #902: bump TTL.
+        let balance_key = DataKey::Balance(from.clone(), token.clone());
+        // Issue #903 — unwrap_or(0) so absent storage never panics.
+        let prev_balance: i128 = env
+            .storage()
+            .persistent()
+            .get(&balance_key)
+            .unwrap_or(0i128);
+        let new_balance = prev_balance
+            .checked_add(net)
+            .ok_or(FeeManagerError::ArithmeticOverflow)?;
+        env.storage().persistent().set(&balance_key, &new_balance);
+        bump_persistent_ttl(&env, &balance_key);
+
+        // Update accumulated fees for this token.  Issue #902: bump TTL.
+        let fees_key = DataKey::AccumulatedFees(token.clone());
+        // Issue #903 — unwrap_or(0) so absent storage never panics.
+        let prev_fees: i128 = env.storage().persistent().get(&fees_key).unwrap_or(0i128);
+        let new_fees = prev_fees
+            .checked_add(fee)
+            .ok_or(FeeManagerError::ArithmeticOverflow)?;
+        env.storage().persistent().set(&fees_key, &new_fees);
+        bump_persistent_ttl(&env, &fees_key);
+
+        // Issue #902 — bump instance TTL after mutating state.
+        bump_instance_ttl(&env);
+
+        // Issue #900 — verify invariants after every state mutation.
+        verify_invariants(&env);
+
+        env.events()
+            .publish((Symbol::new(&env, "deposited"),), (from, token, amount));
         Ok(())
     }
 
-    /// Update the fee recipient address.
+    // ── Fee collection ────────────────────────────────────────────────────────
+
+    /// Transfer all accumulated fees for `token` to `recipient` (admin-only).
     ///
-    /// `caller` must be Admin. (#897)
+    /// Issue #903 — returns [`FeeManagerError::ZeroBalance`] when there are no
+    /// fees to collect rather than transferring 0.
     ///
     /// # Errors
-    /// - `ContractPaused` if the contract is paused.
-    /// - `Unauthorized` if `caller` is not Admin.
-    pub fn set_fee_recipient(
+    /// - [`FeeManagerError::Unauthorized`] if `admin` is not the stored admin.
+    /// - [`FeeManagerError::ZeroBalance`] if accumulated fees are 0.
+    ///
+    /// # Events
+    /// Publishes `("fees_collected",) → (token, recipient, amount)`.
+    pub fn collect_fees(
         env: Env,
-        caller: Address,
+        admin: Address,
+        token: Address,
         recipient: Address,
     ) -> Result<(), FeeManagerError> {
-        require_not_paused(&env);
-        caller.require_auth();
-        if !is_caller_admin(&env, &caller) {
-            return Err(FeeManagerError::Unauthorized);
+        require_admin(&env, &admin);
+
+        let fees_key = DataKey::AccumulatedFees(token.clone());
+        // Issue #903 — unwrap_or(0) so absent storage never panics.
+        let fees: i128 = env.storage().persistent().get(&fees_key).unwrap_or(0i128);
+
+        // Issue #903 — explicit rejection of zero-balance collect.
+        if fees == 0 {
+            return Err(FeeManagerError::ZeroBalance);
         }
-        env.storage()
-            .instance()
-            .set(&DataKey::FeeRecipient, &recipient);
+
+        // Reset before transferring (checks-effects-interactions).
+        env.storage().persistent().set(&fees_key, &0i128);
+        bump_persistent_ttl(&env, &fees_key);
+
+        let contract_addr = env.current_contract_address();
+        let token_client = token::Client::new(&env, &token);
+        token_client.transfer(&contract_addr, &recipient, &fees);
+
+        // Issue #902 — bump instance TTL after state mutation.
+        bump_instance_ttl(&env);
+
+        // Issue #900 — verify invariants after every state mutation.
+        verify_invariants(&env);
+
+        env.events().publish(
+            (Symbol::new(&env, "fees_collected"),),
+            (token, recipient, fees),
+        );
         Ok(())
     }
 
-    // ── Operator management ───────────────────────────────────────────────
+    // ── Read-only queries ─────────────────────────────────────────────────────
 
-    /// Grant the Operator role to `operator`. Admin only. (#897)
+    /// Return the depositor's net balance (deposit minus fee) for `token`.
     ///
-    /// # Errors
-    /// - `Unauthorized` if `admin` is not the stored Admin.
-    pub fn add_operator(
-        env: Env,
-        admin: Address,
-        operator: Address,
-    ) -> Result<(), FeeManagerError> {
-        admin.require_auth();
-        if !is_caller_admin(&env, &admin) {
-            return Err(FeeManagerError::Unauthorized);
+    /// Issue #903 — returns 0 when no entry exists; never panics on absent
+    /// storage.
+    pub fn get_balance(env: Env, depositor: Address, token: Address) -> i128 {
+        let key = DataKey::Balance(depositor, token);
+        // Issue #902 — bump TTL on every persistent read.
+        let val: i128 = env.storage().persistent().get(&key).unwrap_or(0i128);
+        if val != 0 {
+            bump_persistent_ttl(&env, &key);
         }
-        env.storage()
-            .instance()
-            .set(&DataKey::Operator(operator), &true);
-        Ok(())
+        val
     }
 
-    /// Revoke the Operator role from `operator`. Admin only. (#897)
+    /// Return total uncollected fees for `token`.
     ///
-    /// # Errors
-    /// - `Unauthorized` if `admin` is not the stored Admin.
-    pub fn remove_operator(
-        env: Env,
-        admin: Address,
-        operator: Address,
-    ) -> Result<(), FeeManagerError> {
-        admin.require_auth();
-        if !is_caller_admin(&env, &admin) {
-            return Err(FeeManagerError::Unauthorized);
+    /// Issue #903 — returns 0 when no entry exists; never panics on absent
+    /// storage.
+    pub fn get_accumulated_fees(env: Env, token: Address) -> i128 {
+        let key = DataKey::AccumulatedFees(token);
+        // Issue #902 — bump TTL on every persistent read.
+        let val: i128 = env.storage().persistent().get(&key).unwrap_or(0i128);
+        if val != 0 {
+            bump_persistent_ttl(&env, &key);
         }
-        env.storage()
-            .instance()
-            .remove(&DataKey::Operator(operator));
-        Ok(())
+        val
     }
-
-    /// Returns `true` if `addr` currently holds the Operator role. (#897)
-    ///
-    /// Single-key read; no auth required. (#898)
-    pub fn is_operator(env: Env, addr: Address) -> bool {
-        env.storage()
-            .instance()
-            .get(&DataKey::Operator(addr))
-            .unwrap_or(false)
-    }
-
-    // ── Fee computation ───────────────────────────────────────────────────
-
-    /// Compute `(fee, net)` for a full settlement `amount`.
-    ///
-    /// Uses the stored `FeeBps` via `apply_bps_i128`. Reads *only*
-    /// `DataKey::FeeBps` — no other state is touched. (#898)
-    ///
-    /// # Errors
-    /// - `InvalidAmount` if `amount <= 0`.
-    /// - `ArithmeticOverflow` if `amount * fee_bps` overflows `i128`. (#896)
-    /// - `ArithmeticUnderflow` if `amount - fee < 0`. (#896)
-    pub fn compute_fee(env: Env, amount: i128) -> Result<(i128, i128), FeeManagerError> {
-        if amount <= 0 {
-            return Err(FeeManagerError::InvalidAmount);
-        }
-        // Single-key read — no deserialization of Admin, FeeRecipient, or Paused. (#898)
-        let fee_bps: u32 = env
-            .storage()
-            .instance()
-            .get(&DataKey::FeeBps)
-            .unwrap_or(0u32);
-        let fee = apply_bps_i128(amount, fee_bps)
-            .ok_or(FeeManagerError::ArithmeticOverflow)?; // #896
-        let net = amount
-            .checked_sub(fee)
-            .ok_or(FeeManagerError::ArithmeticUnderflow)?; // #896
-        Ok((fee, net))
-    }
-
-    /// Compute the fee owed on `settled_amount` out of a `total_amount` invoice.
-    ///
-    /// This covers partial-settlement scenarios where only part of an invoice
-    /// has been paid so far. The fee is computed on the settled portion only.
-    ///
-    /// # Errors
-    /// - `ArithmeticUnderflow` if `settled_amount > total_amount`. (#896)
-    /// - `InvalidAmount` if `total_amount <= 0` or `settled_amount <= 0`.
-    /// - `ArithmeticOverflow` if `settled_amount * fee_bps` overflows `i128`.
-    /// - `ArithmeticUnderflow` if `settled_amount - fee < 0`.
-    pub fn compute_partial_fee(
-        env: Env,
-        total_amount: i128,
-        settled_amount: i128,
-    ) -> Result<(i128, i128), FeeManagerError> {
-        if total_amount <= 0 || settled_amount <= 0 {
-            return Err(FeeManagerError::InvalidAmount);
-        }
-        // Guard: settled portion must not exceed the invoice total. (#896)
-        if settled_amount > total_amount {
-            return Err(FeeManagerError::ArithmeticUnderflow);
-        }
-        // Single-key read. (#898)
-        let fee_bps: u32 = env
-            .storage()
-            .instance()
-            .get(&DataKey::FeeBps)
-            .unwrap_or(0u32);
-        let fee = apply_bps_i128(settled_amount, fee_bps)
-            .ok_or(FeeManagerError::ArithmeticOverflow)?; // #896
-        let net = settled_amount
-            .checked_sub(fee)
-            .ok_or(FeeManagerError::ArithmeticUnderflow)?; // #896
-        Ok((fee, net))
-    }
-
-    // ── State reads ───────────────────────────────────────────────────────
 
     /// Return the current fee rate in basis points.
-    ///
-    /// Single-key read — no other state is deserialized. (#898)
-    pub fn get_fee_bps(env: Env) -> u32 {
+    pub fn get_fee_rate(env: Env) -> u32 {
         env.storage()
             .instance()
-            .get(&DataKey::FeeBps)
-            .unwrap_or(0u32)
+            .get(&DataKey::FeeRateBps)
+            .unwrap_or(0)
     }
 
-    /// Return the current fee recipient address.
-    ///
-    /// # Panics
-    /// Panics via `unwrap` if the contract is not yet initialized.
-    ///
-    /// Single-key read — no other state is deserialized. (#898)
-    pub fn get_fee_recipient(env: Env) -> Address {
-        env.storage()
-            .instance()
-            .get(&DataKey::FeeRecipient)
-            .unwrap()
-    }
+    // ── Admin operations ──────────────────────────────────────────────────────
 
-    // ── Admin transfer ────────────────────────────────────────────────────
-
-    /// Begin a two-step admin transfer by staging `new_admin` as `PendingAdmin`.
-    ///
-    /// The transfer only completes when `new_admin` calls `accept_admin`.
+    /// Update the fee rate (admin-only).
     ///
     /// # Errors
-    /// - `Unauthorized` if `admin` is not the stored Admin.
-    pub fn transfer_admin(
-        env: Env,
-        admin: Address,
-        new_admin: Address,
-    ) -> Result<(), FeeManagerError> {
-        admin.require_auth();
-        if !is_caller_admin(&env, &admin) {
-            return Err(FeeManagerError::Unauthorized);
+    /// - [`FeeManagerError::Unauthorized`] if `admin` is not the stored admin.
+    /// - [`FeeManagerError::InvalidFeeRate`] if `new_rate > 10_000`.
+    ///
+    /// # Events
+    /// Publishes `("fee_rate_updated",) → new_rate`.
+    pub fn update_fee_rate(env: Env, admin: Address, new_rate: u32) -> Result<(), FeeManagerError> {
+        require_admin(&env, &admin);
+        if new_rate > 10_000 {
+            return Err(FeeManagerError::InvalidFeeRate);
         }
         env.storage()
             .instance()
-            .set(&DataKey::PendingAdmin, &new_admin);
+            .set(&DataKey::FeeRateBps, &new_rate);
+
+        // Issue #902 — bump instance TTL after state mutation.
+        bump_instance_ttl(&env);
+
+        // Issue #900 — verify invariants after every state mutation.
+        verify_invariants(&env);
+
+        env.events()
+            .publish((Symbol::new(&env, "fee_rate_updated"),), new_rate);
         Ok(())
     }
 
-    /// Complete an admin transfer initiated by `transfer_admin`.
+    /// Pause all state-mutating operations.
     ///
-    /// `new_admin` must call this and their address must match `PendingAdmin`.
-    ///
-    /// # Errors
-    /// - `NoPendingAdmin` if no transfer is currently staged.
-    /// - `Unauthorized` if `new_admin` does not match the staged `PendingAdmin`.
-    pub fn accept_admin(env: Env, new_admin: Address) -> Result<(), FeeManagerError> {
-        new_admin.require_auth();
-        let pending: Address = env
-            .storage()
-            .instance()
-            .get(&DataKey::PendingAdmin)
-            .ok_or(FeeManagerError::NoPendingAdmin)?;
-        if pending != new_admin {
-            return Err(FeeManagerError::Unauthorized);
-        }
-        env.storage().instance().set(&DataKey::Admin, &new_admin);
-        env.storage().instance().remove(&DataKey::PendingAdmin);
-        Ok(())
-    }
-
-    // ── Circuit breaker ───────────────────────────────────────────────────
-
-    /// Pause the contract. Admin only.
-    ///
-    /// While paused, all mutating entrypoints return `ContractPaused`.
-    ///
-    /// # Errors
-    /// - `Unauthorized` if `admin` is not the stored Admin.
+    /// # Events
+    /// Publishes `("fee_manager_paused",) → admin`.
     pub fn pause(env: Env, admin: Address) -> Result<(), FeeManagerError> {
-        admin.require_auth();
-        if !is_caller_admin(&env, &admin) {
-            return Err(FeeManagerError::Unauthorized);
-        }
+        require_admin(&env, &admin);
         env.storage().instance().set(&DataKey::Paused, &true);
+
+        bump_instance_ttl(&env);
+        verify_invariants(&env);
+
+        env.events()
+            .publish((Symbol::new(&env, "fee_manager_paused"),), admin);
         Ok(())
     }
 
-    /// Unpause the contract. Admin only.
+    /// Resume operations after a pause.
     ///
-    /// # Errors
-    /// - `Unauthorized` if `admin` is not the stored Admin.
+    /// # Events
+    /// Publishes `("fee_manager_unpaused",) → admin`.
     pub fn unpause(env: Env, admin: Address) -> Result<(), FeeManagerError> {
-        admin.require_auth();
-        if !is_caller_admin(&env, &admin) {
-            return Err(FeeManagerError::Unauthorized);
-        }
+        require_admin(&env, &admin);
         env.storage().instance().set(&DataKey::Paused, &false);
+
+        bump_instance_ttl(&env);
+        verify_invariants(&env);
+
+        env.events()
+            .publish((Symbol::new(&env, "fee_manager_unpaused"),), admin);
         Ok(())
+    }
+
+    // ── TTL maintenance ───────────────────────────────────────────────────────
+
+    /// Issue #902 — Public entrypoint that lets keeper bots (or any caller) bump
+    /// the instance-storage TTL without requiring any state change.
+    pub fn bump_state_ttl(env: Env) {
+        bump_instance_ttl(&env);
     }
 }
+
+#[cfg(test)]
+extern crate std;
