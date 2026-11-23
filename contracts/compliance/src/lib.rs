@@ -551,6 +551,7 @@ impl ComplianceContract {
     ///
     /// # Errors
     /// - [`ComplianceError::Unauthorized`] if `admin` is not the stored administrator.
+    /// - [`ComplianceError::InvalidTierLimit`] if `limit` is negative (#887).
     ///
     /// # Events
     /// Publishes `("tier_limit_set",) → (tier, limit)`.
@@ -561,6 +562,11 @@ impl ComplianceContract {
         limit: i128,
     ) -> Result<(), ComplianceError> {
         Self::require_admin(&env, &admin)?;
+        // #887: a negative limit has no meaning as a settlement cap and would
+        // make any remaining-headroom computation (`limit - amount`) underflow.
+        if limit < 0 {
+            return Err(ComplianceError::InvalidTierLimit);
+        }
         env.storage()
             .instance()
             .set(&DataKey::TierLimit(tier), &limit);
@@ -577,13 +583,28 @@ impl ComplianceContract {
     /// Returns `true` when `address` is allowed (see [`Self::is_allowed`]) **and**
     /// `amount` is within the transaction limit of its tier (#756). A tier with no
     /// configured limit is unlimited.
+    ///
+    /// #887: partial settlements pass the remaining or partial amount here. A
+    /// non-positive amount is the signature of an underflowed partial-settlement
+    /// computation (e.g. `remaining - executed` going below zero) and would
+    /// otherwise satisfy `amount <= limit` trivially, so it fails closed. The
+    /// limit comparison is done as a checked subtraction so that no
+    /// combination of stored limit and amount can underflow `i128`.
     pub fn is_allowed_for_amount(env: Env, address: Address, amount: i128) -> bool {
+        if amount <= 0 {
+            return false;
+        }
         if !Self::is_allowed_at(&env, &address, env.ledger().timestamp()) {
             return false;
         }
         let tier = Self::get_address_tier(env.clone(), address);
         match Self::get_tier_limit(env, tier) {
-            Some(limit) => amount <= limit,
+            // A negative stored limit (only possible from data written before
+            // #887) allows nothing rather than underflowing the headroom.
+            Some(limit) => match limit.checked_sub(amount) {
+                Some(headroom) => headroom >= 0,
+                None => false,
+            },
             None => true,
         }
     }

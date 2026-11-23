@@ -75,6 +75,7 @@ impl InvoiceContract {
         env.storage()
             .persistent()
             .set(&DataKey::Template(id), &template);
+        crate::bump_persistent(&env, &DataKey::Template(id));
         env.storage().instance().set(&DataKey::TemplateCount, &id);
         index_template(&env, &merchant, id);
         events::template_created(&env, id, &template);
@@ -145,6 +146,7 @@ impl InvoiceContract {
         env.storage()
             .persistent()
             .set(&DataKey::Template(id), &template);
+        crate::bump_persistent(&env, &DataKey::Template(id));
         events::template_activated(&env, id, active);
         Ok(())
     }
@@ -251,6 +253,7 @@ impl InvoiceContract {
             env.storage()
                 .persistent()
                 .set(&DataKey::Template(id), &template);
+            crate::bump_persistent(&env, &DataKey::Template(id));
             events::template_generated(&env, id, invoice_id);
             generated += 1;
         }
@@ -268,4 +271,5 @@ fn index_template(env: &Env, merchant: &Address, id: u64) {
         .unwrap_or_else(|| Vec::new(env));
     ids.push_back(id);
     env.storage().persistent().set(&key, &ids);
+    crate::bump_persistent(env, &key);
 }
