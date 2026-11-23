@@ -13,7 +13,7 @@
 // - Structs (Invoice) serialize to JSON objects with field keys
 // - Optional types (Option<u64>) serialize to null or value
 
-use crate::invoice::{Invoice, MaybeAddress};
+use crate::invoice::{Invoice, InvoiceRole, MaybeAddress};
 use crate::template::InvoiceTemplate;
 use crate::refund::NetRefund;
 use soroban_sdk::{contracttype, Address, Env, Symbol};
@@ -257,6 +257,18 @@ mod tests {
 pub fn late_fee_updated(env: &Env, old_bps: u32, new_bps: u32) {
     env.events()
         .publish((Symbol::new(env, "late_fee_updated"),), (old_bps, new_bps));
+}
+
+/// The admin granted `role` to `account` (#879): data is `(role, account)`.
+pub fn role_granted(env: &Env, role: InvoiceRole, account: &Address) {
+    env.events()
+        .publish((Symbol::new(env, "role_granted"),), (role, account.clone()));
+}
+
+/// The admin revoked `role` from `account` (#879): data is `(role, account)`.
+pub fn role_revoked(env: &Env, role: InvoiceRole, account: &Address) {
+    env.events()
+        .publish((Symbol::new(env, "role_revoked"),), (role, account.clone()));
 }
 
 /// A recurring invoice template was registered (#698).
