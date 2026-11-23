@@ -417,10 +417,10 @@ pub(crate) fn create_invoice_record(
         .checked_add(expires_in_seconds)
         .ok_or(InvoiceError::ExpiryOverflow)?;
     if merchant_nonce != 0 {
-        env.storage().persistent().set(
-            &DataKey::MerchantNonce(merchant.clone(), merchant_nonce),
-            &true,
-        );
+        let nonce_key = DataKey::MerchantNonce(merchant.clone(), merchant_nonce);
+        env.storage().persistent().set(&nonce_key, &true);
+        // #884: a nonce that ages out would let the same nonce be reused.
+        crate::bump_persistent(env, &nonce_key);
     }
     let invoice = Invoice {
         id,
@@ -446,13 +446,13 @@ pub(crate) fn create_invoice_record(
         .persistent()
         .get(&merchant_count_key)
         .unwrap_or(0);
-    env.storage().persistent().set(
-        &DataKey::MerchantInvoiceIndex(merchant.clone(), merchant_count),
-        &id,
-    );
+    let merchant_index_key = DataKey::MerchantInvoiceIndex(merchant.clone(), merchant_count);
+    env.storage().persistent().set(&merchant_index_key, &id);
     env.storage()
         .persistent()
         .set(&merchant_count_key, &(merchant_count + 1));
+    crate::bump_persistent(env, &merchant_index_key);
+    crate::bump_persistent(env, &merchant_count_key);
 
     pending_index_add(env, id);
     events::invoice_created(env, id, &invoice);

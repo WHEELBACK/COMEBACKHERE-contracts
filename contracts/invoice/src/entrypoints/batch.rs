@@ -99,16 +99,15 @@ impl InvoiceContract {
             );
 
             if p.merchant_nonce != 0 {
-                env.storage().persistent().set(
-                    &DataKey::MerchantNonce(merchant.clone(), p.merchant_nonce),
-                    &true,
-                );
+                let nonce_key = DataKey::MerchantNonce(merchant.clone(), p.merchant_nonce);
+                env.storage().persistent().set(&nonce_key, &true);
+                crate::bump_persistent(&env, &nonce_key);
             }
 
-            env.storage().persistent().set(
-                &DataKey::MerchantInvoiceIndex(merchant.clone(), merchant_count),
-                &id,
-            );
+            let merchant_index_key =
+                DataKey::MerchantInvoiceIndex(merchant.clone(), merchant_count);
+            env.storage().persistent().set(&merchant_index_key, &id);
+            crate::bump_persistent(&env, &merchant_index_key);
             merchant_count += 1;
 
             events::invoice_created(&env, id, &invoice);
@@ -120,6 +119,7 @@ impl InvoiceContract {
             env.storage()
                 .persistent()
                 .set(&merchant_count_key, &merchant_count);
+            crate::bump_persistent(&env, &merchant_count_key);
             pending_index_add_many(&env, &ids);
         }
         Ok(ids)

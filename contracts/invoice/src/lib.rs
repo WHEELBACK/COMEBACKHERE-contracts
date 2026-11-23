@@ -20,7 +20,8 @@ pub use events::{
 };
 pub use invoice::StatusTransition;
 pub use invoice::{
-    BatchInvoiceParams, DataKey, Invoice, InvoiceError, InvoiceErrorCategory, InvoiceStatus, InvoiceSummary,
+    BatchInvoiceParams, DataKey, Invoice, InvoiceError, InvoiceErrorCategory, InvoiceRole,
+    InvoiceStatus, InvoiceSummary,
     MaybeAddress, MaybeBytes, MaybeU64, RefundStatus, INVOICE_TTL_EXTEND_TO, INVOICE_TTL_THRESHOLD,
     MAX_BATCH_EXPIRE, MAX_BATCH_SIZE, MAX_LATE_FEE_BPS, MAX_PAGE_LIMIT, MAX_PAYER_INDEX_ENTRIES,
 };
@@ -35,7 +36,35 @@ pub use invariants::verify_invoice_invariants;
 pub use validation::require_valid_discount;
 pub use validation::{require_memo_not_too_long, MAX_MEMO_BYTES};
 
-use soroban_sdk::{contract, Address, Env, Vec};
+use soroban_sdk::{contract, Address, Env, IntoVal, Val, Vec};
+
+/// Extends the TTL of the persistent entry stored under `key` (#884).
+///
+/// Every persistent write in this contract goes through this helper so that no
+/// invoice record, index or audit-log entry can silently age out of the ledger
+/// and be evicted: once an entry's remaining TTL falls below
+/// [`INVOICE_TTL_THRESHOLD`] ledgers it is bumped back to
+/// [`INVOICE_TTL_EXTEND_TO`]. A key with no stored entry is skipped rather
+/// than trapping, since `extend_ttl` on a missing key aborts the invocation.
+pub(crate) fn bump_persistent<K>(env: &Env, key: &K)
+where
+    K: IntoVal<Env, Val>,
+{
+    let storage = env.storage().persistent();
+    if storage.has(key) {
+        storage.extend_ttl(key, INVOICE_TTL_THRESHOLD, INVOICE_TTL_EXTEND_TO);
+    }
+}
+
+/// Bumps the TTL of an invoice record and its per-invoice satellite entries
+/// (#884), so an invoice is never evicted while its history, refund timestamp
+/// or refund breakdown survive, or vice versa.
+pub(crate) fn bump_invoice_ttl(env: &Env, id: u64) {
+    bump_persistent(env, &DataKey::Invoice(id));
+    bump_persistent(env, &DataKey::InvoiceHistory(id));
+    bump_persistent(env, &DataKey::RefundRequestedAt(id));
+    bump_persistent(env, &DataKey::RefundBreakdown(id));
+}
 
 /// Persists `invoice` under `DataKey::Invoice(invoice.id)` after checking the
 /// state invariants every stored invoice must satisfy (#882).
@@ -49,6 +78,7 @@ pub(crate) fn store_invoice(env: &Env, invoice: &Invoice) -> Result<(), InvoiceE
     env.storage()
         .persistent()
         .set(&DataKey::Invoice(invoice.id), invoice);
+    bump_invoice_ttl(env, invoice.id);
     Ok(())
 }
 
@@ -60,6 +90,7 @@ pub(crate) fn pending_index_add(env: &Env, id: u64) {
         .unwrap_or_else(|| Vec::new(env));
     ids.push_back(id);
     env.storage().persistent().set(&DataKey::PendingIndex, &ids);
+    bump_persistent(env, &DataKey::PendingIndex);
 }
 
 /// Appends several ids to the pending index with a single read and a single
@@ -75,6 +106,7 @@ pub(crate) fn pending_index_add_many(env: &Env, new_ids: &Vec<u64>) {
         .unwrap_or_else(|| Vec::new(env));
     ids.append(new_ids);
     env.storage().persistent().set(&DataKey::PendingIndex, &ids);
+    bump_persistent(env, &DataKey::PendingIndex);
 }
 
 pub(crate) fn pending_index_remove(env: &Env, id: u64) {
@@ -87,6 +119,7 @@ pub(crate) fn pending_index_remove(env: &Env, id: u64) {
     if let Some(index) = ids.first_index_of(id) {
         ids.remove(index);
         env.storage().persistent().set(&DataKey::PendingIndex, &ids);
+        bump_persistent(env, &DataKey::PendingIndex);
     }
 }
 
@@ -109,6 +142,7 @@ pub(crate) fn pending_index_remove_many(env: &Env, removed: &Vec<u64>) {
     }
     if changed {
         env.storage().persistent().set(&DataKey::PendingIndex, &ids);
+        bump_persistent(env, &DataKey::PendingIndex);
     }
 }
 
@@ -128,10 +162,11 @@ pub(crate) fn payer_index_add(env: &Env, payer: &Address, id: u64) {
     if count >= MAX_PAYER_INDEX_ENTRIES {
         return;
     }
-    env.storage()
-        .persistent()
-        .set(&DataKey::PayerIndexEntry(payer.clone(), count), &id);
+    let entry_key = DataKey::PayerIndexEntry(payer.clone(), count);
+    env.storage().persistent().set(&entry_key, &id);
     env.storage().persistent().set(&count_key, &(count + 1));
+    bump_persistent(env, &entry_key);
+    bump_persistent(env, &count_key);
 }
 
 pub(crate) fn append_history(env: &Env, id: u64, from: InvoiceStatus, to: InvoiceStatus) {
@@ -147,6 +182,7 @@ pub(crate) fn append_history(env: &Env, id: u64, from: InvoiceStatus, to: Invoic
         timestamp: env.ledger().timestamp(),
     });
     env.storage().persistent().set(&key, &history);
+    bump_persistent(env, &key);
 }
 
 #[contract]

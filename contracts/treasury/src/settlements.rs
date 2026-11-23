@@ -529,7 +529,7 @@ impl TreasuryContract {
             .persistent()
             .get(&DataKey::PartialExecutedTotal(settlement_id))
             .unwrap_or(0);
-        let remaining = if approved > executed { approved - executed } else { 0 };
+        let remaining = approved.saturating_sub(executed);
         Ok((approved, executed, remaining))
     }
 

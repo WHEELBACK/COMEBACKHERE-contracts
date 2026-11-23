@@ -1,6 +1,7 @@
 #![no_std]
 
 pub use compliance_errors::ComplianceError;
+pub use dispute_resolver_errors::DisputeResolverError;
 pub use invoice_errors::InvoiceError;
 pub use treasury::TreasuryError;
 pub use workflow_errors::WorkflowError;
@@ -22,6 +23,7 @@ pub enum ProtocolError {
     Treasury(TreasuryError),
     Compliance(ComplianceError),
     Workflow(WorkflowError),
+    DisputeResolver(DisputeResolverError),
 }
 
 impl From<InvoiceError> for ProtocolError {
@@ -48,6 +50,12 @@ impl From<WorkflowError> for ProtocolError {
     }
 }
 
+impl From<DisputeResolverError> for ProtocolError {
+    fn from(e: DisputeResolverError) -> Self {
+        ProtocolError::DisputeResolver(e)
+    }
+}
+
 impl ProtocolError {
     /// Returns the originating contract name as a static string slice.
     pub fn contract_name(&self) -> &'static str {
@@ -56,6 +64,7 @@ impl ProtocolError {
             ProtocolError::Treasury(_) => "treasury",
             ProtocolError::Compliance(_) => "compliance",
             ProtocolError::Workflow(_) => "settlement-workflow",
+            ProtocolError::DisputeResolver(_) => "dispute-resolver",
         }
     }
 
@@ -66,6 +75,7 @@ impl ProtocolError {
             ProtocolError::Treasury(e) => treasury_description(*e),
             ProtocolError::Compliance(e) => compliance_description(*e),
             ProtocolError::Workflow(e) => workflow_description(*e),
+            ProtocolError::DisputeResolver(e) => dispute_resolver_description(*e),
         }
     }
 }
@@ -155,6 +165,56 @@ fn workflow_description(e: WorkflowError) -> &'static str {
     }
 }
 
+fn dispute_resolver_description(e: DisputeResolverError) -> &'static str {
+    use DisputeResolverError::*;
+    match e {
+        AlreadyInitialized => "The dispute-resolver contract is already initialized.",
+        NotInitialized => "The dispute-resolver contract has not been initialized.",
+        Unauthorized => "Caller is not authorized for this action.",
+        ContractPaused => "The dispute-resolver contract is paused.",
+        NotPaused => "The dispute-resolver contract is not paused.",
+        DisputeNotFound => "Dispute not found.",
+        DisputeAlreadyExists => "A dispute with this id already exists.",
+        DisputeAlreadyResolved => "The dispute has already been resolved.",
+        DisputeNotOpen => "The dispute is not open for voting.",
+        VotingPeriodEnded => "The dispute voting period has ended.",
+        VotingPeriodActive => "The dispute voting period is still active.",
+        InvalidOutcome => "The dispute outcome is invalid.",
+        InvalidRuling => "The dispute ruling is invalid.",
+        JurorAlreadyVoted => "The juror has already voted on this dispute.",
+        JurorNotEligible => "The juror is not eligible to vote on this dispute.",
+        InsufficientJurors => "Not enough jurors have been selected for this dispute.",
+        QuorumNotMet => "The dispute did not reach the required quorum.",
+        InvalidStake => "The juror stake amount is invalid.",
+        StakeLocked => "The juror stake is still locked.",
+        InsufficientStake => "The juror stake is below the required minimum.",
+        EvidenceTooLong => "The dispute evidence exceeds the maximum length.",
+        EvidenceNotFound => "Evidence not found for this dispute.",
+        InvalidEvidenceHash => "The evidence hash is invalid.",
+        AppealWindowClosed => "The appeal window for this dispute has closed.",
+        AppealAlreadyFiled => "An appeal has already been filed for this dispute.",
+        AppealNotAllowed => "An appeal is not allowed for this dispute.",
+        InvalidAppealFee => "The appeal fee is invalid.",
+        FeeTransferFailed => "The fee transfer failed.",
+        RewardTransferFailed => "The reward transfer failed.",
+        TokenMismatch => "The payment token does not match the dispute.",
+        InvalidTokenContract => "The token contract is invalid.",
+        ArithmeticOverflow => "The calculation overflowed.",
+        BatchTooLarge => "Too many items in one batch.",
+        HashTooLong => "The provided hash is too long.",
+        MemoTooLong => "The memo field is too long.",
+        NoPendingAdmin => "There is no pending admin transfer.",
+        InvalidDeadline => "The dispute deadline is invalid.",
+        DeadlineInPast => "The dispute deadline is in the past.",
+        CooldownActive => "Please wait before trying this action again.",
+        DuplicateJuror => "The juror list contains a duplicate address.",
+        JurorSelectionFailed => "Juror selection failed.",
+        ResolutionInProgress => "The dispute resolution is already in progress.",
+        InvalidConfig => "The dispute-resolver configuration is invalid.",
+        ConfigNotSet => "The dispute-resolver configuration has not been set.",
+    }
+}
+
 #[cfg(test)]
 extern crate std;
 
@@ -202,12 +262,44 @@ mod tests {
     }
 
     #[test]
+    fn from_dispute_resolver_error() {
+        let e = ProtocolError::from(DisputeResolverError::DisputeNotFound);
+        assert_eq!(
+            e,
+            ProtocolError::DisputeResolver(DisputeResolverError::DisputeNotFound)
+        );
+        assert_eq!(e.contract_name(), "dispute-resolver");
+    }
+
+    #[test]
+    fn into_coercion_from_dispute_resolver() {
+        let e: ProtocolError = DisputeResolverError::Unauthorized.into();
+        assert_eq!(
+            e,
+            ProtocolError::DisputeResolver(DisputeResolverError::Unauthorized)
+        );
+    }
+
+    #[test]
+    fn dispute_resolver_descriptions_are_non_empty() {
+        assert!(!ProtocolError::DisputeResolver(DisputeResolverError::DisputeNotFound)
+            .description()
+            .is_empty());
+        assert!(!ProtocolError::DisputeResolver(DisputeResolverError::QuorumNotMet)
+            .description()
+            .is_empty());
+    }
+
+    #[test]
     fn question_mark_operator() {
         fn fallible_invoice() -> Result<(), ProtocolError> {
             Err(InvoiceError::Expired)?
         }
         fn fallible_treasury() -> Result<(), ProtocolError> {
             Err(TreasuryError::UnauthorizedSigner)?
+        }
+        fn fallible_dispute_resolver() -> Result<(), ProtocolError> {
+            Err(DisputeResolverError::DisputeAlreadyResolved)?
         }
         assert_eq!(
             fallible_invoice().unwrap_err(),
@@ -216,6 +308,10 @@ mod tests {
         assert_eq!(
             fallible_treasury().unwrap_err(),
             ProtocolError::Treasury(TreasuryError::UnauthorizedSigner)
+        );
+        assert_eq!(
+            fallible_dispute_resolver().unwrap_err(),
+            ProtocolError::DisputeResolver(DisputeResolverError::DisputeAlreadyResolved)
         );
     }
 }

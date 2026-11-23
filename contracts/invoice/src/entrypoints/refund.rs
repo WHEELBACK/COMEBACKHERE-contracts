@@ -61,6 +61,7 @@ impl InvoiceContract {
         env.storage()
             .persistent()
             .set(&DataKey::RefundRequestedAt(id), &now);
+        crate::bump_persistent(&env, &DataKey::RefundRequestedAt(id));
         append_history(
             &env,
             id,
@@ -181,6 +182,7 @@ impl InvoiceContract {
         env.storage()
             .persistent()
             .set(&DataKey::RefundBreakdown(id), &refund);
+        crate::bump_persistent(&env, &DataKey::RefundBreakdown(id));
         append_history(
             &env,
             id,
