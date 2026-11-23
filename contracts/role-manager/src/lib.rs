@@ -52,6 +52,11 @@ pub enum DataKey {
     Admin,
     /// `true` when `member` holds `role`; absent means "does not hold".
     RoleMember(Role, Address),
+    /// Non-negative action budget for `member` in `role`; absent means zero.
+    ///
+    /// Budgets are persistent because they represent an issued allowance that
+    /// must survive an instance upgrade, just like role membership.
+    Budget(Role, Address),
 }
 
 /// Errors returned by the role manager.
@@ -68,6 +73,12 @@ pub enum RoleManagerError {
     Unauthorized = 2,
     /// The caller does not hold the role a consumer required.
     RoleNotAssigned = 3,
+    /// A budget amount was negative or otherwise unusable.
+    InvalidAmount = 4,
+    /// Crediting a budget would overflow `i128`.
+    BudgetOverflow = 5,
+    /// The caller's budget is zero or smaller than the requested debit.
+    InsufficientBudget = 6,
 }
 
 /// Minimal call surface external contracts need from the role manager.
@@ -158,9 +169,104 @@ impl RoleManagerContract {
         }
         Ok(())
     }
+
+    /// Returns `member`'s current budget for `role`, or `0` when it was never
+    /// credited (and after it is fully spent).
+    ///
+    /// Reads are deliberately tolerant of a missing key: an unwritten budget
+    /// is a legitimate zero-balance state, not a corrupted storage entry.
+    pub fn get_budget(env: Env, role: Role, member: Address) -> i128 {
+        env.storage()
+            .persistent()
+            .get(&DataKey::Budget(role, member))
+            .unwrap_or(0)
+    }
+
+    /// Adds `amount` to `member`'s budget for `role`. Administrator-only.
+    ///
+    /// A zero `amount` is an intentional no-op that does not create a storage
+    /// entry — "nobody has funded this budget" and "a zero-byte budget entry"
+    /// must remain indistinguishable. Negative amounts are rejected with a
+    /// typed error rather than silently inverting a credit into a debit.
+    /// Returns the resulting balance.
+    pub fn credit_budget(
+        env: Env,
+        admin: Address,
+        role: Role,
+        member: Address,
+        amount: i128,
+    ) -> Result<i128, RoleManagerError> {
+        Self::require_admin(&env, &admin)?;
+        if amount < 0 {
+            return Err(RoleManagerError::InvalidAmount);
+        }
+        let key = DataKey::Budget(role, member);
+        if amount == 0 {
+            return Ok(Self::read_budget(&env, &key));
+        }
+        let current = Self::read_budget(&env, &key);
+        let updated = current
+            .checked_add(amount)
+            .ok_or(RoleManagerError::BudgetOverflow)?;
+        env.storage().persistent().set(&key, &updated);
+        Ok(updated)
+    }
+
+    /// Consumes `amount` from `caller`'s own budget for `role`.
+    ///
+    /// Zero-balance handling is the whole point of this entrypoint:
+    ///
+    /// - a budget that was never credited reads as `0`, so the first debit is a
+    ///   typed [`RoleManagerError::InsufficientBudget`], never a host panic;
+    /// - `amount == 0` succeeds and leaves storage untouched, even on a missing
+    ///   budget;
+    /// - a debit that exactly exhausts the budget **removes** the key, so no
+    ///   zero-value entry is left to pay rent or confuse indexers;
+    /// - negative amounts and arithmetic failures are typed errors.
+    ///
+    /// The caller must both authenticate and hold `role`, so an arbitrary
+    /// address cannot drain somebody else's budget.
+    /// Returns the remaining balance.
+    pub fn debit_budget(
+        env: Env,
+        caller: Address,
+        role: Role,
+        amount: i128,
+    ) -> Result<i128, RoleManagerError> {
+        caller.require_auth();
+        if !Self::has_role(env.clone(), role, caller.clone()) {
+            return Err(RoleManagerError::RoleNotAssigned);
+        }
+        let key = DataKey::Budget(role, caller);
+        let current = Self::read_budget(&env, &key);
+        if amount < 0 {
+            return Err(RoleManagerError::InvalidAmount);
+        }
+        if amount == 0 {
+            return Ok(current);
+        }
+        if current < amount {
+            return Err(RoleManagerError::InsufficientBudget);
+        }
+        let remaining = current
+            .checked_sub(amount)
+            .ok_or(RoleManagerError::InsufficientBudget)?;
+        if remaining == 0 {
+            env.storage().persistent().remove(&key);
+        } else {
+            env.storage().persistent().set(&key, &remaining);
+        }
+        Ok(remaining)
+    }
 }
 
 impl RoleManagerContract {
+    /// Reads a budget key, treating an absent entry as the zero balance it
+    /// represents. Centralised so no caller needs an `unwrap` on storage.
+    fn read_budget(env: &Env, key: &DataKey) -> i128 {
+        env.storage().persistent().get(key).unwrap_or(0)
+    }
+
     /// Authenticates `admin` and checks it is the stored administrator.
     fn require_admin(env: &Env, admin: &Address) -> Result<(), RoleManagerError> {
         admin.require_auth();

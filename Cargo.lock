@@ -338,6 +338,7 @@ dependencies = [
 name = "comebackhere-role-manager"
 version = "1.0.0"
 dependencies = [
+ "proptest",
  "soroban-sdk",
 ]
 
