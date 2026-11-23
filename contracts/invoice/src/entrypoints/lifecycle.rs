@@ -118,10 +118,7 @@ impl InvoiceContract {
         invoice.status = InvoiceStatus::Paid;
         invoice.paid_at = Some(env.ledger().timestamp());
         invoice.payer = MaybeAddress::Some(payer.clone());
-        env.storage()
-            .persistent()
-            .set(&DataKey::Invoice(id), &invoice);
-        crate::bump_invoice_ttl(&env, id);
+        crate::store_invoice(&env, &invoice)?;
         // #711: the payer is recorded once, here, and never reassigned - there
         // is no entrypoint that moves an invoice to a different payer - so the
         // payer index never needs migrating. `reject_refund` returns the
@@ -151,10 +148,7 @@ impl InvoiceContract {
         }
 
         invoice.status = InvoiceStatus::Released;
-        env.storage()
-            .persistent()
-            .set(&DataKey::Invoice(id), &invoice);
-        crate::bump_invoice_ttl(&env, id);
+        crate::store_invoice(&env, &invoice)?;
         append_history(&env, id, InvoiceStatus::Paid, InvoiceStatus::Released);
         events::escrow_released(&env, id, &invoice);
         Ok(())
@@ -264,10 +258,7 @@ impl InvoiceContract {
         }
 
         invoice.status = InvoiceStatus::Cancelled;
-        env.storage()
-            .persistent()
-            .set(&DataKey::Invoice(id), &invoice);
-        crate::bump_invoice_ttl(&env, id);
+        crate::store_invoice(&env, &invoice)?;
         pending_index_remove(&env, id);
         append_history(&env, id, InvoiceStatus::Pending, InvoiceStatus::Cancelled);
         events::invoice_cancelled(&env, id, &invoice);
@@ -322,11 +313,7 @@ impl InvoiceContract {
             .checked_add(new_expires_in_seconds)
             .ok_or(InvoiceError::ExpiryOverflow)?;
 
-        env.storage()
-            .persistent()
-            .set(&DataKey::Invoice(id), &invoice);
-
-        crate::bump_invoice_ttl(&env, id);
+        crate::store_invoice(&env, &invoice)?;
         events::invoice_amended(&env, &event);
         Ok(())
     }
@@ -450,11 +437,7 @@ pub(crate) fn create_invoice_record(
         token_address,
     };
 
-    env.storage()
-        .persistent()
-        .set(&DataKey::Invoice(id), &invoice);
-
-    crate::bump_invoice_ttl(env, id);
+    crate::store_invoice(env, &invoice)?;
     env.storage().instance().set(&DataKey::InvoiceCount, &id);
 
     let merchant_count_key = DataKey::MerchantInvoiceCount(merchant.clone());
