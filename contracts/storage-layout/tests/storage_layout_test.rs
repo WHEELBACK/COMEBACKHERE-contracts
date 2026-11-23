@@ -1,6 +1,3 @@
-I need to understand the contract's API to write accurate tests. Since I only have the test file to create, I'll write tests based on the described contract interface (`get_balance`, `deposit`, `withdraw`, `refund`, `StorageLayoutError` with variants like `ZeroAmount`, `InvalidAmount`, `NegativeBalance`, `NonMonotonicCounter`, `KeyNamespaceMismatch`).
-
-```rust
 //! Integration tests for the `storage-layout` Soroban contract.
 //!
 //! These tests exercise three concerns:
