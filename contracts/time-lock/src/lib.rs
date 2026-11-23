@@ -1,14 +1,14 @@
 #![no_std]
 
+mod errors;
 mod events;
 mod invariants;
 mod types;
 
-pub use types::{
-    DataKey, LockStatus, Role, TimeLock, TimeLockError, TimelockProposal, TimelockStatus,
-};
+pub use errors::{category_for, message_for, TimeLockError};
+pub use types::{DataKey, LockStatus, Role, TimeLock, TimelockProposal, TimelockStatus};
 
-use soroban_sdk::{contract, contractimpl, Address, Env, Symbol};
+use soroban_sdk::{contract, contractimpl, Address, Env, String, Symbol};
 
 #[contract]
 pub struct TimeLockContract;
@@ -342,6 +342,19 @@ impl TimeLockContract {
     /// before attempting a state-changing operation.
     pub fn verify_invariants(env: Env) -> Result<(), TimeLockError> {
         invariants::check(&env)
+    }
+
+    // -------------------------------------------------------------------------
+    // Client error diagnostics (#946)
+    // -------------------------------------------------------------------------
+
+    /// Human-readable explanation of a raw time-lock error code (#946).
+    ///
+    /// A client that only sees `Error(Contract, #n)` can call this read-only
+    /// entrypoint to display a stable message instead of an opaque number.
+    /// Returns `None` for codes this contract never returns.
+    pub fn get_error_message(env: Env, code: u32) -> Option<String> {
+        errors::message_for(code).map(|message| String::from_str(&env, message))
     }
 
     // -------------------------------------------------------------------------
