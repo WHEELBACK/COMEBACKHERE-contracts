@@ -36,7 +36,10 @@ status_file="$(mktemp)"
 trap 'rm -f "$status_file"' EXIT
 
 # Macro invocations that stand in for `#[repr(u32)] pub enum <Name> { ... }`.
-ERROR_ENUM_MACROS='declare_contract_error'
+# #928: `declare_settlement_error!` (oracle-adapter's modularized error enum)
+# expands to the same #[contracterror] + #[repr(u32)] contract, so it must be
+# covered here too — otherwise its variants would silently escape this check.
+ERROR_ENUM_MACROS='declare_contract_error|declare_settlement_error'
 
 # #955/#964/#973: the modularized error crates. Their enums are declared through
 # `declare_contract_error!`, so they are already picked up by the macro handling
@@ -86,11 +89,11 @@ find contracts crates -name '*.rs' -type f | while read -r file; do
     while IFS= read -r line; do
         trimmed="${line#"${line%%[![:space:]]*}"}"
 
-        # #627: a `declare_contract_error!` invocation carries the same
-        # #[contracterror] + #[repr(u32)] contract as a hand-written attribute
-        # block, so it arms the same block detection. Only the macros named in
-        # $ERROR_ENUM_MACROS are treated this way — an arbitrary macro could
-        # expand to anything.
+        # #627/#928: a `declare_contract_error!` or `declare_settlement_error!`
+        # invocation carries the same #[contracterror] + #[repr(u32)] contract as
+        # a hand-written attribute block, so it arms the same block detection.
+        # Only the macros named in $ERROR_ENUM_MACROS are treated this way — an
+        # arbitrary macro could expand to anything.
         if [[ "$trimmed" =~ ^([A-Za-z0-9_]+)! ]]; then
             macro_name="${BASH_REMATCH[1]}"
             case "|$ERROR_ENUM_MACROS|" in

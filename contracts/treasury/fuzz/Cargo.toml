@@ -1,0 +1,24 @@
+[package]
+name = "treasury-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2021"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+soroban-sdk = { workspace = true, features = ["testutils"] }
+treasury = { path = ".." }
+compliance = { path = "../../compliance" }
+
+[[bin]]
+name = "partially_execute_settlement"
+path = "fuzz_targets/partially_execute_settlement.rs"
+test = false
+doc = false
+bench = false
+
+[profile.release]
+debug = 1

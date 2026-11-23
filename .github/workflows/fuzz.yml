@@ -24,6 +24,9 @@ jobs:
           - name: invoice-net-refund
             directory: contracts/invoice/fuzz
             target: net_refund
+          - name: treasury-partial-settlement
+            directory: contracts/treasury/fuzz
+            target: partially_execute_settlement
           - name: storage-layout
             directory: contracts/storage-layout/fuzz
             target: malicious_caller
