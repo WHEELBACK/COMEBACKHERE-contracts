@@ -59,10 +59,12 @@ impl InvoiceContract {
         env.storage()
             .persistent()
             .set(&DataKey::Invoice(id), &invoice);
+        crate::bump_invoice_ttl(&env, id);
         // Store the request timestamp for get_refund_status (#700).
         env.storage()
             .persistent()
             .set(&DataKey::RefundRequestedAt(id), &now);
+        crate::bump_persistent(&env, &DataKey::RefundRequestedAt(id));
         append_history(
             &env,
             id,
@@ -102,6 +104,7 @@ impl InvoiceContract {
         env.storage()
             .persistent()
             .set(&DataKey::Invoice(id), &invoice);
+        crate::bump_invoice_ttl(&env, id);
         append_history(
             &env,
             id,
@@ -184,9 +187,11 @@ impl InvoiceContract {
         env.storage()
             .persistent()
             .set(&DataKey::Invoice(id), &invoice);
+        crate::bump_invoice_ttl(&env, id);
         env.storage()
             .persistent()
             .set(&DataKey::RefundBreakdown(id), &refund);
+        crate::bump_persistent(&env, &DataKey::RefundBreakdown(id));
         append_history(
             &env,
             id,
@@ -303,6 +308,7 @@ impl InvoiceContract {
         env.storage()
             .persistent()
             .set(&DataKey::Invoice(id), &invoice);
+        crate::bump_invoice_ttl(&env, id);
         append_history(
             &env,
             id,
