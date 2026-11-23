@@ -16,5 +16,4 @@ testutils = ["soroban-sdk/testutils"]
 soroban-sdk.workspace = true
 
 [dev-dependencies]
-derive_arbitrary.workspace = true
 soroban-sdk = { workspace = true, features = ["testutils"] }

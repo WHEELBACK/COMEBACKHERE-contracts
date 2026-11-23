@@ -424,7 +424,6 @@ dependencies = [
 name = "comebackhere-time-lock"
 version = "1.0.0"
 dependencies = [
- "derive_arbitrary",
  "soroban-sdk",
 ]
 
