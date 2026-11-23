@@ -341,6 +341,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "comebackhere-fee-manager"
+version = "0.1.0"
+dependencies = [
+ "soroban-sdk",
+]
+
+[[package]]
 name = "comebackhere-invoice"
 version = "1.0.0"
 dependencies = [
@@ -396,6 +403,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "comebackhere-storage-layout"
+version = "1.0.0"
+dependencies = [
+ "soroban-sdk",
+]
+
+[[package]]
 name = "comebackhere-tests"
 version = "1.0.0"
 dependencies = [
@@ -403,6 +417,13 @@ dependencies = [
  "comebackhere-invoice",
  "comebackhere-settlement-workflow",
  "comebackhere-treasury",
+ "soroban-sdk",
+]
+
+[[package]]
+name = "comebackhere-time-lock"
+version = "1.0.0"
+dependencies = [
  "soroban-sdk",
 ]
 
