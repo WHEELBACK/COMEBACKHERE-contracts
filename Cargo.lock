@@ -323,6 +323,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "comebackhere-role-manager"
+version = "1.0.0"
+dependencies = [
+ "soroban-sdk",
+]
+
+[[package]]
 name = "comebackhere-settlement-workflow"
 version = "1.0.0"
 dependencies = [
@@ -340,6 +347,13 @@ dependencies = [
  "comebackhere-compliance",
  "comebackhere-invoice",
  "comebackhere-treasury",
+ "soroban-sdk",
+]
+
+[[package]]
+name = "comebackhere-time-lock"
+version = "1.0.0"
+dependencies = [
  "soroban-sdk",
 ]
 
