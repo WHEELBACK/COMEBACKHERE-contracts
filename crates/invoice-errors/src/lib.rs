@@ -1,5 +1,8 @@
 #![no_std]
 
+#[cfg(test)]
+extern crate std;
+
 use error_macros::declare_contract_error;
 
 declare_contract_error! {
@@ -75,5 +78,16 @@ declare_contract_error! {
         // Appended for #704: set_late_fee_bps called with more than 10_000 bps
         // (100% of the net amount).
         InvalidLateFee = 35,
+        // Appended for #882: an invoice write would persist a record whose
+        // status, payment fields or amounts contradict each other. Raised by
+        // `verify_invoice_invariants` before any such record is stored.
+        InvariantViolation = 36,
     }
 }
+
+// #883: client-facing debugging metadata lives in its own modules, so the
+// ABI-bearing enum above stays a plain, append-only list of codes.
+mod category;
+mod message;
+
+pub use category::InvoiceErrorCategory;

@@ -1,10 +1,12 @@
 [workspace]
 members = [
     "contracts/invoice",
-    "contracts/oracle-adapter",
     "contracts/treasury",
     "contracts/compliance",
+    "contracts/time-lock",
     "contracts/settlement-workflow",
+    "contracts/storage-layout",
+    "contracts/fee-manager",
     "tests",
     "crates/compliance-client",
     "crates/error-macros",
@@ -14,6 +16,10 @@ members = [
     "crates/workflow-errors",
     "crates/protocol-errors",
     "crates/protocol-math",
+]
+exclude = [
+    "contracts/storage-layout/fuzz",
+    "contracts/access-control/fuzz",
 ]
 resolver = "2"
 

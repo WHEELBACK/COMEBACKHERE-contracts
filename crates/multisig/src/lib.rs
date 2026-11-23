@@ -416,6 +416,8 @@ pub enum DataKey {
     /// Admin-configurable signer/threshold-change timelock delay in seconds (#732).
     /// Absent means the hard-coded default (`SIGNER_CHANGE_TIMELOCK_SECS`) applies.
     TimelockDelaySecs,
+    /// Granular role assignment per account (persistent storage, #969).
+    Role(Address),
 }
 
 /// Returns the approval weight assigned to `signer`, or `0` if not registered.

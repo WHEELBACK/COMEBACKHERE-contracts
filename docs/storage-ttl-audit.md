@@ -23,12 +23,14 @@ whether a human would consider the record active.
 grep -rn "extend_ttl\|bump_ttl" contracts/*/src
 ```
 
-This returns **zero matches** anywhere in the four contract crates. No contract in
-this repo currently calls `extend_ttl` on any storage instance (persistent,
-instance, or temporary). The rest of this document catalogs every persistent key
-by contract, notes read/write frequency characteristics that would determine
-natural TTL bumps if any existed, and calls out where that absence is a genuine
-gap versus effectively harmless.
+At the time this audit was first written this returned **zero matches** anywhere
+in the four contract crates. That is no longer true: `access-control` now bumps
+the TTL of every persistent key it writes (and of critical keys it reads) — see
+"Access-control (`contracts/access-control/src`)" below. The remaining contracts
+still call `extend_ttl` nowhere. The rest of this document catalogs every
+persistent key by contract, notes read/write frequency characteristics that would
+determine natural TTL bumps if any existed, and calls out where that absence is a
+genuine gap versus effectively harmless.
 
 Instance storage (`env.storage().instance()`) shares a single TTL for the whole
 contract instance and is out of scope here except where noted — the interesting
@@ -63,6 +65,42 @@ scenario the parent issue names. **Filed as a follow-up:** see
 disputes are expected to resolve or expire on a much shorter human timescale than
 settlements can remain genuinely pending, so this is a smaller window of exposure,
 but the mechanism is identical and worth carrying in the same follow-up.
+
+## Access-control (`contracts/access-control/src`)
+
+**Finding — remediated.** Persistent keys used by access-control:
+
+| Key | Written by | Read by | TTL bump? |
+|---|---|---|---|
+| `DataKey::Admin` | `initialize`, `transfer_admin` | `require_admin` on every admin-gated call | **Yes** |
+| `DataKey::Role(Address, Symbol)` | `grant_role` | `has_role`, `require_role` | **Yes** |
+| `DataKey::RoleMembers(Symbol)` | `grant_role`, `revoke_role` | `get_role_members` | **Yes** |
+| `DataKey::RoleCount(Symbol)` | `grant_role`, `revoke_role` | `get_role_member_count` | **Yes** |
+| `DataKey::PendingAdmin` | `transfer_admin`, `accept_admin`, `cancel_transfer` | `accept_admin`, `cancel_transfer` | **Yes** |
+
+**Policy.** Two constants in `contracts/access-control/src/lib.rs` define the
+window:
+
+- `TTL_THRESHOLD` — the remaining-TTL watermark below which a bump is triggered.
+- `TTL_EXTEND_TO` — the TTL the entry is extended to when bumped
+  (`TTL_EXTEND_TO > TTL_THRESHOLD`).
+
+A single helper, `bump_persistent(env, &key)`, calls
+`env.storage().persistent().extend_ttl(&key, TTL_THRESHOLD, TTL_EXTEND_TO)`.
+It is invoked:
+
+- immediately after every `persistent().set(...)` of an access-control key, so
+  any write refreshes the entry's lease; and
+- on the read paths of the critical keys (`Admin`, `Role`, `RoleMembers`,
+  `RoleCount`) so that a long-lived role or admin record that is only ever read
+  still has its TTL refreshed before it can archive.
+
+This closes the availability risk for access-control: an admin or role grant
+that is never re-written but is still consulted on every gated call no longer
+archives out from under the contract. The unit tests in
+`contracts/access-control/src/test.rs` advance the ledger sequence with
+`env.ledger().set_sequence_number(...)` past the threshold and assert the
+entries remain readable.
 
 ## Compliance (`contracts/compliance/src`)
 
@@ -158,6 +196,7 @@ settlement held by one) can no longer archive purely from elapsed time.
 
 | Contract | Persistent keys audited | TTL bump exists? | Verdict |
 |---|---|---|---|
+| Access-control | `Admin`, `Role`, `RoleMembers`, `RoleCount`, `PendingAdmin` | **Yes** | Remediated — writes and critical reads bump TTL |
 | Treasury | `Settlement`, `Dispute` | No | **Genuine gap** — long-pending settlement/dispute can archive |
 | Dispute-resolver (treasury `disputes.rs`) | `Dispute`, `SettlementDisputes`, `Settlement` | **Yes** (#920) | Resolved — dispute lifecycle bumps TTL on every touched key |
 | Compliance | `Allowed`, `Blocked`, `AllowedUntil`, `BlockedUntil`, `BlockReason` | No | **Genuine gap** — stale `Blocked`/`Allowed` entries can archive |
@@ -188,7 +227,9 @@ follow-ups should be filed and linked from the parent audit issue:
    read path).
 
 Both follow-ups are scoped as their own PRs; this audit's job is documentation
-and detection, not remediation.
+and detection, not remediation. (Access-control's equivalent gap was remediated
+in-tree — see "Access-control (`contracts/access-control/src`)" above — and is
+the reference implementation for the two follow-ups.)
 
 ## Invoice batch entrypoints (#713)
 
@@ -196,3 +237,64 @@ and detection, not remediation.
 `DataKey::Invoice(id)` they write, using `INVOICE_TTL_THRESHOLD = 518_400`
 (~30 days) and `INVOICE_TTL_EXTEND_TO = 1_036_800` (~60 days) ledgers, both
 defined in `contracts/invoice/src/invoice.rs`.
+
+## Storage-layout remediation (#965)
+
+`contracts/storage-layout` previously had the same "no `extend_ttl` anywhere"
+property as the rest of the repo. It now bumps TTL on **every** persistent
+read and write through a single shared helper, so no persistent key can be
+touched without its live-until ledger being pushed forward:
+
+```rust
+env.storage().persistent().extend_ttl(
+    key,
+    STORAGE_LAYOUT_TTL_THRESHOLD,
+    STORAGE_LAYOUT_TTL_EXTEND_TO,
+);
+```
+
+Constants (defined in `contracts/storage-layout/src/lib.rs`):
+
+| Constant | Ledgers | Approx. wall clock |
+|---|---|---|
+| `STORAGE_LAYOUT_TTL_THRESHOLD` | `518_400` | ~30 days |
+| `STORAGE_LAYOUT_TTL_EXTEND_TO` | `1_036_800` | ~60 days |
+
+The threshold is the "bump only if below this" trigger; the extend-to value is
+the new live-until ledger written when the bump fires. Because the helper is
+invoked on the read path as well as the write path (reads alone do not extend
+TTL by default), a storage-layout record that is only ever queried still gets
+refreshed, closing the "set once, never revisited" archival window described
+above for the other contracts.
+
+**Test coverage:** the Soroban test harness in `contracts/storage-layout`
+asserts that (a) a write leaves the entry's live-until ledger at
+`STORAGE_LAYOUT_TTL_EXTEND_TO` past the current sequence, (b) a read of an
+entry whose TTL has fallen below the threshold bumps it back up, and (c) a
+read of an entry still above the threshold leaves its TTL untouched (no
+needless footprint growth / metering regression). These run under the standard
+`Env` test harness with no host metering regressions.
+
+## Storage-layout error modularization (#964)
+
+`contracts/storage-layout` previously returned ad-hoc `panic!`/`unwrap`
+failures. It now exposes a single `StorageLayoutError` enum with **stable
+discriminants** (explicit `#[repr(u32)]`-style values that must not be
+renumbered, since clients decode them from the `ScError` payload):
+
+| Variant | Discriminant | Meaning |
+|---|---|---|
+| `NotInitialized` | `1` | Contract used before `initialize` |
+| `AlreadyInitialized` | `2` | `initialize` called twice |
+| `Unauthorized` | `3` | Caller lacks the required role |
+| `KeyNotFound` | `4` | Requested persistent key is absent |
+| `InvalidKey` | `5` | Key failed validation (e.g. empty/oversized) |
+| `InvalidValue` | `6` | Value failed validation before write |
+
+Every fallible entrypoint validates its inputs up front and returns the
+matching variant via `Result<_, StorageLayoutError>` rather than trapping, so
+clients get a decodable, documented error code instead of an opaque host
+failure. Discriminants are treated as part of the public ABI: new variants are
+appended, never inserted, and existing values are never reused. Unit tests in
+the storage-layout suite cover each variant's trigger path, and the error
+mapping is exercised alongside the TTL tests above.

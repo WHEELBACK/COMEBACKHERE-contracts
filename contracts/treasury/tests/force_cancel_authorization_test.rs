@@ -18,6 +18,16 @@ use soroban_sdk::{
 };
 use treasury::{SettlementHoldReason, SettlementStatus, TreasuryContract, TreasuryContractClient};
 
+/// Role identifiers mirroring the contract's role-based access control.
+/// `Admin` is the only role permitted to force-cancel settlements; `Operator`
+/// and unregistered callers must be rejected.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Role {
+    Admin,
+    Operator,
+    Unauthorized,
+}
+
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
@@ -203,4 +213,119 @@ fn cannot_force_cancel_nonexistent_settlement() {
     let (client, admin) = setup_treasury(&env, 1);
 
     client.force_cancel_settlement(&admin, &9999);
+}
+
+// ---------------------------------------------------------------------------
+// Granular role-based authorization tests (#969)
+// ---------------------------------------------------------------------------
+
+/// Registers `caller` with the given role and returns its address.
+/// `Operator` is modelled as a registered signer with weight > 0; `Admin`
+/// returns the existing admin; `Unauthorized` returns a fresh unregistered
+/// address.
+fn caller_for_role(
+    env: &Env,
+    client: &TreasuryContractClient<'_>,
+    admin: &Address,
+    role: Role,
+) -> Address {
+    match role {
+        Role::Admin => admin.clone(),
+        Role::Operator => {
+            let operator = Address::generate(env);
+            client.set_signer(admin, &operator, &1);
+            operator
+        }
+        Role::Unauthorized => Address::generate(env),
+    }
+}
+
+/// Only the `Admin` role may force-cancel; `Operator` and unauthorized callers
+/// must be rejected with `Unauthorized` (error code 9) and must not be able to
+/// modify the settlement status.
+#[test]
+fn only_admin_role_can_force_cancel() {
+    for role in [Role::Admin, Role::Operator, Role::Unauthorized] {
+        let env = Env::default();
+        env.mock_all_auths();
+        let (client, admin) = setup_treasury(&env, 2);
+        let settlement_id = propose(&client, &env, &admin);
+        let caller = caller_for_role(&env, &client, &admin, role);
+
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            client.force_cancel_settlement(&caller, &settlement_id);
+        }));
+
+        match role {
+            Role::Admin => {
+                assert!(result.is_ok(), "admin force-cancel must succeed");
+                let after = client.get_settlement(&settlement_id);
+                assert_eq!(after.status, SettlementStatus::Cancelled);
+            }
+            Role::Operator | Role::Unauthorized => {
+                assert!(
+                    result.is_err(),
+                    "{role:?} must not be able to force-cancel a settlement"
+                );
+                // The settlement must remain untouched by the rejected caller.
+                let after = client.get_settlement(&settlement_id);
+                assert_eq!(
+                    after.status,
+                    SettlementStatus::Pending,
+                    "{role:?} must not modify settlement status"
+                );
+            }
+        }
+    }
+}
+
+/// An `Operator` (registered signer) cannot force-cancel an `OnHold`
+/// settlement, and the hold state must be preserved after the rejected call.
+#[test]
+fn operator_cannot_force_cancel_onhold_settlement() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, admin) = setup_treasury(&env, 2);
+    let settlement_id = propose(&client, &env, &admin);
+
+    client.hold_settlement(
+        &admin,
+        &settlement_id,
+        &SettlementHoldReason::AdminHold,
+        &None,
+    );
+
+    let operator = caller_for_role(&env, &client, &admin, Role::Operator);
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        client.force_cancel_settlement(&operator, &settlement_id);
+    }));
+    assert!(result.is_err(), "operator must not force-cancel");
+
+    let after = client.get_settlement(&settlement_id);
+    assert_eq!(
+        after.status,
+        SettlementStatus::OnHold,
+        "rejected operator must not modify settlement status"
+    );
+}
+
+/// The admin path still succeeds after an operator attempt is rejected,
+/// confirming authorization checks do not corrupt contract state.
+#[test]
+fn admin_can_force_cancel_after_operator_rejected() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, admin) = setup_treasury(&env, 2);
+    let settlement_id = propose(&client, &env, &admin);
+
+    let operator = caller_for_role(&env, &client, &admin, Role::Operator);
+    let rejected = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        client.force_cancel_settlement(&operator, &settlement_id);
+    }));
+    assert!(rejected.is_err(), "operator must be rejected");
+
+    // Admin path must still work.
+    client.force_cancel_settlement(&admin, &settlement_id);
+    let after = client.get_settlement(&settlement_id);
+    assert_eq!(after.status, SettlementStatus::Cancelled);
 }
