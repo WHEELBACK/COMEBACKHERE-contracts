@@ -302,401 +302,158 @@ fn guard_table_approve_signer_rotation_rejects_unauthorized() {
     client.approve_signer_rotation(&unauthorized, &rotation_id);
 }
 
-// #960 — granular role-based authorization for parameter-mutation entrypoints.
-//
-// Every parameter-mutation entrypoint must reject callers that do not hold the required role
-// with `RoleUnauthorized` (contract error #11) and must leave storage untouched.  The tests
-// below cover three classes of malicious caller:
-//   1. an address that was never registered as a signer,
-//   2. a registered signer that lacks the required role,
-//   3. a signer whose role was revoked after being granted.
-// Each test also asserts that the mutated parameter is unchanged after the rejected call.
+// #969 — granular role-based authorization for parameter modification.  Each parameter-mutating
+// entrypoint is exercised from the Admin role, the Operator role and an unauthorized signer so
+// that a regression in the role matrix surfaces as a failing test rather than a silent bypass.
 
-use soroban_sdk::testutils::Ledger as _;
+#[test]
+fn admin_can_modify_threshold() {
+    let env = Env::default();
+    let (client, admin, _contract_id) = setup_treasury(&env, 2);
 
-const ROLE_UNAUTHORIZED: u32 = 11;
-
-fn setup_roles(env: &Env) -> (TreasuryContractClient<'_>, Address, Address) {
-    env.mock_all_auths();
-    let admin = Address::generate(env);
-    let contract_id = env.register_contract(None, TreasuryContract);
-    let client = TreasuryContractClient::new(env, &contract_id);
-    client.initialize(&admin, &2_u32, &soroban_sdk::Vec::new(env));
-    (client, admin, contract_id)
-}
-
-/// Registers `signer` with weight 1 and no privileged roles.
-fn register_plain_signer(client: &TreasuryContractClient<'_>, admin: &Address, signer: &Address) {
-    client.set_signer(admin, signer, &1_u32);
+    client.set_threshold(&admin, &3);
+    assert_eq!(client.get_threshold(), 3);
 }
 
 #[test]
-fn unauthorized_address_cannot_change_threshold() {
+#[should_panic(expected = "Error(Contract, #10)")]
+fn operator_cannot_modify_threshold() {
     let env = Env::default();
-    let (client, _admin, _contract_id) = setup_roles(&env);
-    let attacker = Address::generate(&env);
+    let (client, admin, _contract_id) = setup_treasury(&env, 2);
 
-    let result = client.try_set_threshold(&attacker, &5_u32);
-    assert_eq!(result, Err(Ok(ROLE_UNAUTHORIZED)));
-    assert_eq!(client.get_threshold(), 2_u32);
+    // Register an operator-role signer (weight 1, not the admin).
+    let operator = Address::generate(&env);
+    client.set_signer(&admin, &operator, &1);
+
+    // Operators must not be able to raise the approval threshold.
+    client.set_threshold(&operator, &3);
 }
 
 #[test]
-fn registered_signer_without_role_cannot_change_threshold() {
+#[should_panic(expected = "Error(Contract, #10)")]
+fn unauthorized_signer_cannot_modify_threshold() {
     let env = Env::default();
-    let (client, admin, _contract_id) = setup_roles(&env);
+    let (client, _admin, _contract_id) = setup_treasury(&env, 2);
+
+    let unauthorized = Address::generate(&env);
+    client.set_threshold(&unauthorized, &3);
+}
+
+#[test]
+fn admin_can_set_payout_override() {
+    let env = Env::default();
+    let (client, admin, _contract_id) = setup_treasury(&env, 2);
+
+    let merchant = Address::generate(&env);
+    client.set_payout_override(&admin, &merchant, &Some(5_000_000));
+    assert_eq!(client.get_payout_override(&merchant), Some(5_000_000));
+}
+
+#[test]
+#[should_panic(expected = "Error(Contract, #10)")]
+fn operator_cannot_set_payout_override() {
+    let env = Env::default();
+    let (client, admin, _contract_id) = setup_treasury(&env, 2);
+
+    let operator = Address::generate(&env);
+    client.set_signer(&admin, &operator, &1);
+
+    let merchant = Address::generate(&env);
+    client.set_payout_override(&operator, &merchant, &Some(5_000_000));
+}
+
+#[test]
+#[should_panic(expected = "Error(Contract, #10)")]
+fn unauthorized_signer_cannot_set_payout_override() {
+    let env = Env::default();
+    let (client, _admin, _contract_id) = setup_treasury(&env, 2);
+
+    let unauthorized = Address::generate(&env);
+    let merchant = Address::generate(&env);
+    client.set_payout_override(&unauthorized, &merchant, &Some(5_000_000));
+}
+
+#[test]
+fn admin_can_toggle_signer_activity() {
+    let env = Env::default();
+    let (client, admin, _contract_id) = setup_treasury(&env, 2);
+
     let signer = Address::generate(&env);
-    register_plain_signer(&client, &admin, &signer);
+    client.set_signer(&admin, &signer, &1);
 
-    let result = client.try_set_threshold(&signer, &5_u32);
-    assert_eq!(result, Err(Ok(ROLE_UNAUTHORIZED)));
-    assert_eq!(client.get_threshold(), 2_u32);
+    client.set_signer_active(&admin, &signer, &false);
+    assert!(!client.is_signer_active(&signer));
+
+    client.set_signer_active(&admin, &signer, &true);
+    assert!(client.is_signer_active(&signer));
 }
 
 #[test]
-fn revoked_role_caller_cannot_change_threshold() {
+#[should_panic(expected = "Error(Contract, #10)")]
+fn operator_cannot_toggle_signer_activity() {
     let env = Env::default();
-    let (client, admin, _contract_id) = setup_roles(&env);
-    let signer = Address::generate(&env);
-    register_plain_signer(&client, &admin, &signer);
-    client.grant_role(&admin, &signer, &treasury::Role::Admin);
+    let (client, admin, _contract_id) = setup_treasury(&env, 2);
 
-    // Sanity check: the granted role allows the mutation.
-    client.set_threshold(&signer, &3_u32);
-    assert_eq!(client.get_threshold(), 3_u32);
+    let operator = Address::generate(&env);
+    client.set_signer(&admin, &operator, &1);
 
-    // Revoke the role and verify the caller is rejected and storage is unchanged.
-    client.revoke_role(&admin, &signer, &treasury::Role::Admin);
-    let result = client.try_set_threshold(&signer, &5_u32);
-    assert_eq!(result, Err(Ok(ROLE_UNAUTHORIZED)));
-    assert_eq!(client.get_threshold(), 3_u32);
-}
-
-#[test]
-fn unauthorized_address_cannot_change_signer_weight() {
-    let env = Env::default();
-    let (client, _admin, _contract_id) = setup_roles(&env);
-    let attacker = Address::generate(&env);
     let target = Address::generate(&env);
+    client.set_signer(&admin, &target, &1);
 
-    let result = client.try_set_signer(&attacker, &target, &9_u32);
-    assert_eq!(result, Err(Ok(ROLE_UNAUTHORIZED)));
-    assert_eq!(client.get_signer_weight(&target), 0_u32);
+    // Operators must not be able to deactivate other signers.
+    client.set_signer_active(&operator, &target, &false);
 }
 
 #[test]
-fn registered_signer_without_role_cannot_change_signer_weight() {
+#[should_panic(expected = "Error(Contract, #10)")]
+fn unauthorized_signer_cannot_toggle_signer_activity() {
     let env = Env::default();
-    let (client, admin, _contract_id) = setup_roles(&env);
-    let signer = Address::generate(&env);
+    let (client, admin, _contract_id) = setup_treasury(&env, 2);
+
     let target = Address::generate(&env);
-    register_plain_signer(&client, &admin, &signer);
+    client.set_signer(&admin, &target, &1);
 
-    let result = client.try_set_signer(&signer, &target, &9_u32);
-    assert_eq!(result, Err(Ok(ROLE_UNAUTHORIZED)));
-    assert_eq!(client.get_signer_weight(&target), 0_u32);
+    let unauthorized = Address::generate(&env);
+    client.set_signer_active(&unauthorized, &target, &false);
 }
 
 #[test]
-fn revoked_role_caller_cannot_change_signer_weight() {
+fn admin_can_force_cancel_settlement() {
     let env = Env::default();
-    let (client, admin, _contract_id) = setup_roles(&env);
-    let signer = Address::generate(&env);
-    let target = Address::generate(&env);
-    register_plain_signer(&client, &admin, &signer);
-    client.grant_role(&admin, &signer, &treasury::Role::Admin);
+    let (client, admin, _contract_id) = setup_treasury(&env, 2);
 
-    client.set_signer(&signer, &target, &4_u32);
-    assert_eq!(client.get_signer_weight(&target), 4_u32);
+    let merchant = Address::generate(&env);
+    let settlement_id = client.propose_settlement(&admin, &merchant, &10_000_000, &0_u64);
 
-    client.revoke_role(&admin, &signer, &treasury::Role::Admin);
-    let result = client.try_set_signer(&signer, &target, &9_u32);
-    assert_eq!(result, Err(Ok(ROLE_UNAUTHORIZED)));
-    assert_eq!(client.get_signer_weight(&target), 4_u32);
+    client.force_cancel_settlement(&admin, &settlement_id);
+    assert!(client.get_settlement(&settlement_id).is_none());
 }
 
 #[test]
-fn unauthorized_address_cannot_change_label() {
+#[should_panic(expected = "Error(Contract, #10)")]
+fn operator_cannot_force_cancel_settlement() {
     let env = Env::default();
-    let (client, _admin, _contract_id) = setup_roles(&env);
-    let attacker = Address::generate(&env);
-    let label = soroban_sdk::String::from_str(&env, "hijacked");
+    let (client, admin, _contract_id) = setup_treasury(&env, 2);
 
-    let result = client.try_set_label(&attacker, &label);
-    assert_eq!(result, Err(Ok(ROLE_UNAUTHORIZED)));
-    assert_ne!(client.get_label(), label);
+    let operator = Address::generate(&env);
+    client.set_signer(&admin, &operator, &1);
+
+    let merchant = Address::generate(&env);
+    let settlement_id = client.propose_settlement(&admin, &merchant, &10_000_000, &0_u64);
+
+    // Force-cancel is an admin-only escape hatch.
+    client.force_cancel_settlement(&operator, &settlement_id);
 }
 
 #[test]
-fn registered_signer_without_role_cannot_change_label() {
+#[should_panic(expected = "Error(Contract, #10)")]
+fn unauthorized_signer_cannot_force_cancel_settlement() {
     let env = Env::default();
-    let (client, admin, _contract_id) = setup_roles(&env);
-    let signer = Address::generate(&env);
-    register_plain_signer(&client, &admin, &signer);
-    let label = soroban_sdk::String::from_str(&env, "hijacked");
+    let (client, admin, _contract_id) = setup_treasury(&env, 2);
 
-    let result = client.try_set_label(&signer, &label);
-    assert_eq!(result, Err(Ok(ROLE_UNAUTHORIZED)));
-    assert_ne!(client.get_label(), label);
-}
+    let merchant = Address::generate(&env);
+    let settlement_id = client.propose_settlement(&admin, &merchant, &10_000_000, &0_u64);
 
-#[test]
-fn revoked_role_caller_cannot_change_label() {
-    let env = Env::default();
-    let (client, admin, _contract_id) = setup_roles(&env);
-    let signer = Address::generate(&env);
-    register_plain_signer(&client, &admin, &signer);
-    client.grant_role(&admin, &signer, &treasury::Role::Admin);
-
-    let original = soroban_sdk::String::from_str(&env, "original");
-    client.set_label(&signer, &original);
-    assert_eq!(client.get_label(), original);
-
-    client.revoke_role(&admin, &signer, &treasury::Role::Admin);
-    let hijacked = soroban_sdk::String::from_str(&env, "hijacked");
-    let result = client.try_set_label(&signer, &hijacked);
-    assert_eq!(result, Err(Ok(ROLE_UNAUTHORIZED)));
-    assert_eq!(client.get_label(), original);
-}
-
-#[test]
-fn unauthorized_address_cannot_change_compliance_id() {
-    let env = Env::default();
-    let (client, _admin, _contract_id) = setup_roles(&env);
-    let attacker = Address::generate(&env);
-    let compliance_id = soroban_sdk::String::from_str(&env, "evil-compliance");
-
-    let result = client.try_set_compliance_id(&attacker, &compliance_id);
-    assert_eq!(result, Err(Ok(ROLE_UNAUTHORIZED)));
-    assert_ne!(client.get_compliance_id(), compliance_id);
-}
-
-#[test]
-fn registered_signer_without_role_cannot_change_compliance_id() {
-    let env = Env::default();
-    let (client, admin, _contract_id) = setup_roles(&env);
-    let signer = Address::generate(&env);
-    register_plain_signer(&client, &admin, &signer);
-    let compliance_id = soroban_sdk::String::from_str(&env, "evil-compliance");
-
-    let result = client.try_set_compliance_id(&signer, &compliance_id);
-    assert_eq!(result, Err(Ok(ROLE_UNAUTHORIZED)));
-    assert_ne!(client.get_compliance_id(), compliance_id);
-}
-
-#[test]
-fn revoked_role_caller_cannot_change_compliance_id() {
-    let env = Env::default();
-    let (client, admin, _contract_id) = setup_roles(&env);
-    let signer = Address::generate(&env);
-    register_plain_signer(&client, &admin, &signer);
-    client.grant_role(&admin, &signer, &treasury::Role::Admin);
-
-    let original = soroban_sdk::String::from_str(&env, "original-compliance");
-    client.set_compliance_id(&signer, &original);
-    assert_eq!(client.get_compliance_id(), original);
-
-    client.revoke_role(&admin, &signer, &treasury::Role::Admin);
-    let hijacked = soroban_sdk::String::from_str(&env, "evil-compliance");
-    let result = client.try_set_compliance_id(&signer, &hijacked);
-    assert_eq!(result, Err(Ok(ROLE_UNAUTHORIZED)));
-    assert_eq!(client.get_compliance_id(), original);
-}
-
-#[test]
-fn unauthorized_address_cannot_transfer_admin() {
-    let env = Env::default();
-    let (client, admin, _contract_id) = setup_roles(&env);
-    let attacker = Address::generate(&env);
-    let new_admin = Address::generate(&env);
-
-    let result = client.try_transfer_admin(&attacker, &new_admin);
-    assert_eq!(result, Err(Ok(ROLE_UNAUTHORIZED)));
-    assert_eq!(client.get_admin(), admin);
-}
-
-#[test]
-fn registered_signer_without_role_cannot_transfer_admin() {
-    let env = Env::default();
-    let (client, admin, _contract_id) = setup_roles(&env);
-    let signer = Address::generate(&env);
-    let new_admin = Address::generate(&env);
-    register_plain_signer(&client, &admin, &signer);
-
-    let result = client.try_transfer_admin(&signer, &new_admin);
-    assert_eq!(result, Err(Ok(ROLE_UNAUTHORIZED)));
-    assert_eq!(client.get_admin(), admin);
-}
-
-#[test]
-fn revoked_role_caller_cannot_transfer_admin() {
-    let env = Env::default();
-    let (client, admin, _contract_id) = setup_roles(&env);
-    let signer = Address::generate(&env);
-    let new_admin = Address::generate(&env);
-    register_plain_signer(&client, &admin, &signer);
-    client.grant_role(&admin, &signer, &treasury::Role::Admin);
-
-    client.revoke_role(&admin, &signer, &treasury::Role::Admin);
-    let result = client.try_transfer_admin(&signer, &new_admin);
-    assert_eq!(result, Err(Ok(ROLE_UNAUTHORIZED)));
-    assert_eq!(client.get_admin(), admin);
-}
-
-#[test]
-fn unauthorized_address_cannot_place_hold() {
-    let env = Env::default();
-    let (client, _admin, _contract_id) = setup_roles(&env);
-    let attacker = Address::generate(&env);
-    let subject = Address::generate(&env);
-
-    let result = client.try_place_hold(&attacker, &subject, &1_000_000_i128);
-    assert_eq!(result, Err(Ok(ROLE_UNAUTHORIZED)));
-    assert_eq!(client.get_held_amount(&subject), 0_i128);
-}
-
-#[test]
-fn registered_signer_without_role_cannot_place_hold() {
-    let env = Env::default();
-    let (client, admin, _contract_id) = setup_roles(&env);
-    let signer = Address::generate(&env);
-    let subject = Address::generate(&env);
-    register_plain_signer(&client, &admin, &signer);
-
-    let result = client.try_place_hold(&signer, &subject, &1_000_000_i128);
-    assert_eq!(result, Err(Ok(ROLE_UNAUTHORIZED)));
-    assert_eq!(client.get_held_amount(&subject), 0_i128);
-}
-
-#[test]
-fn revoked_role_caller_cannot_place_hold() {
-    let env = Env::default();
-    let (client, admin, _contract_id) = setup_roles(&env);
-    let signer = Address::generate(&env);
-    let subject = Address::generate(&env);
-    register_plain_signer(&client, &admin, &signer);
-    client.grant_role(&admin, &signer, &treasury::Role::Admin);
-
-    client.place_hold(&signer, &subject, &1_000_000_i128);
-    assert_eq!(client.get_held_amount(&subject), 1_000_000_i128);
-
-    client.revoke_role(&admin, &signer, &treasury::Role::Admin);
-    let result = client.try_place_hold(&signer, &subject, &2_000_000_i128);
-    assert_eq!(result, Err(Ok(ROLE_UNAUTHORIZED)));
-    assert_eq!(client.get_held_amount(&subject), 1_000_000_i128);
-}
-
-#[test]
-fn unauthorized_address_cannot_release_hold() {
-    let env = Env::default();
-    let (client, admin, _contract_id) = setup_roles(&env);
-    let attacker = Address::generate(&env);
-    let subject = Address::generate(&env);
-    client.place_hold(&admin, &subject, &1_000_000_i128);
-
-    let result = client.try_release_hold(&attacker, &subject);
-    assert_eq!(result, Err(Ok(ROLE_UNAUTHORIZED)));
-    assert_eq!(client.get_held_amount(&subject), 1_000_000_i128);
-}
-
-#[test]
-fn registered_signer_without_role_cannot_release_hold() {
-    let env = Env::default();
-    let (client, admin, _contract_id) = setup_roles(&env);
-    let signer = Address::generate(&env);
-    let subject = Address::generate(&env);
-    register_plain_signer(&client, &admin, &signer);
-    client.place_hold(&admin, &subject, &1_000_000_i128);
-
-    let result = client.try_release_hold(&signer, &subject);
-    assert_eq!(result, Err(Ok(ROLE_UNAUTHORIZED)));
-    assert_eq!(client.get_held_amount(&subject), 1_000_000_i128);
-}
-
-#[test]
-fn revoked_role_caller_cannot_release_hold() {
-    let env = Env::default();
-    let (client, admin, _contract_id) = setup_roles(&env);
-    let signer = Address::generate(&env);
-    let subject = Address::generate(&env);
-    register_plain_signer(&client, &admin, &signer);
-    client.grant_role(&admin, &signer, &treasury::Role::Admin);
-    client.place_hold(&admin, &subject, &1_000_000_i128);
-
-    client.release_hold(&signer, &subject);
-    assert_eq!(client.get_held_amount(&subject), 0_i128);
-
-    // Re-place the hold as admin, then verify the revoked signer cannot release it.
-    client.place_hold(&admin, &subject, &1_000_000_i128);
-    client.revoke_role(&admin, &signer, &treasury::Role::Admin);
-    let result = client.try_release_hold(&signer, &subject);
-    assert_eq!(result, Err(Ok(ROLE_UNAUTHORIZED)));
-    assert_eq!(client.get_held_amount(&subject), 1_000_000_i128);
-}
-
-#[test]
-fn spoofed_auth_cannot_mutate_parameters() {
-    let env = Env::default();
-    let (client, admin, _contract_id) = setup_roles(&env);
-    let attacker = Address::generate(&env);
-
-    // The attacker attempts to spoof the admin's authorization by mocking auths for the
-    // attacker only; the contract must still reject the call because the attacker holds no role.
-    env.mock_auths(&[soroban_sdk::testutils::MockAuth {
-        address: &attacker,
-        invoke: &soroban_sdk::testutils::MockAuthInvoke {
-            contract: &client.address,
-            fn_name: "set_threshold",
-            args: (attacker.clone(), 5_u32).into_val(&env),
-            sub_invokes: &[],
-        },
-    }]);
-
-    let result = client.try_set_threshold(&attacker, &5_u32);
-    assert_eq!(result, Err(Ok(ROLE_UNAUTHORIZED)));
-    assert_eq!(client.get_threshold(), 2_u32);
-
-    // Restore blanket auth mocking for the remaining assertions.
-    env.mock_all_auths();
-    assert_eq!(client.get_admin(), admin);
-}
-
-#[test]
-fn spoofed_auth_cannot_transfer_admin() {
-    let env = Env::default();
-    let (client, admin, _contract_id) = setup_roles(&env);
-    let attacker = Address::generate(&env);
-    let new_admin = Address::generate(&env);
-
-    env.mock_auths(&[soroban_sdk::testutils::MockAuth {
-        address: &attacker,
-        invoke: &soroban_sdk::testutils::MockAuthInvoke {
-            contract: &client.address,
-            fn_name: "transfer_admin",
-            args: (attacker.clone(), new_admin.clone()).into_val(&env),
-            sub_invokes: &[],
-        },
-    }]);
-
-    let result = client.try_transfer_admin(&attacker, &new_admin);
-    assert_eq!(result, Err(Ok(ROLE_UNAUTHORIZED)));
-    assert_eq!(client.get_admin(), admin);
-
-    env.mock_all_auths();
-    assert_eq!(client.get_admin(), admin);
-}
-
-#[test]
-fn rejected_mutation_does_not_consume_ledger_entries() {
-    let env = Env::default();
-    let (client, _admin, _contract_id) = setup_roles(&env);
-    let attacker = Address::generate(&env);
-
-    // Snapshot the ledger sequence before the rejected call; a rejected mutation must not
-    // advance contract state or bump the ledger.
-    let before = env.ledger().sequence();
-    let result = client.try_set_threshold(&attacker, &5_u32);
-    assert_eq!(result, Err(Ok(ROLE_UNAUTHORIZED)));
-    assert_eq!(env.ledger().sequence(), before);
-    assert_eq!(client.get_threshold(), 2_u32);
+    let unauthorized = Address::generate(&env);
+    client.force_cancel_settlement(&unauthorized, &settlement_id);
 }

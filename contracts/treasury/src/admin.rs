@@ -1,21 +1,114 @@
 use crate::{
-    require_admin, require_role, DataKey, Role, TreasuryContract, TreasuryContractArgs,
-    TreasuryContractClient, TreasuryError,
+    require_admin, DataKey, TreasuryContract, TreasuryContractArgs, TreasuryContractClient,
+    TreasuryError,
 };
 use soroban_sdk::{contractimpl, Address, Env, Symbol};
 
+/// Role identifiers used for granular authorization on parameter-modifying entrypoints.
+pub const ROLE_ADMIN: u32 = 0;
+pub const ROLE_OPERATOR: u32 = 1;
+
 #[contractimpl]
 impl TreasuryContract {
-    /// Updates the multisig approval threshold required to execute settlements
-    /// (admin or `Role::Admin` holder).
-    /// Errors: `ZeroThreshold`, `ThresholdUnreachable`.
+    /// Returns the role assigned to `account`, if any.
+    pub fn get_role(env: Env, account: Address) -> Option<u32> {
+        env.storage()
+            .persistent()
+            .get(&DataKey::Role(account))
+    }
+
+    /// Assigns `role` to `account` (admin-only). Only `ROLE_ADMIN` and `ROLE_OPERATOR`
+    /// are valid; anything else yields `Unauthorized`.
+    /// Emits: `role_assigned`.
+    pub fn set_role(
+        env: Env,
+        admin: Address,
+        account: Address,
+        role: u32,
+    ) -> Result<(), TreasuryError> {
+        require_admin(&env, &admin);
+        if role != ROLE_ADMIN && role != ROLE_OPERATOR {
+            return Err(TreasuryError::Unauthorized);
+        }
+        env.storage()
+            .persistent()
+            .set(&DataKey::Role(account.clone()), &role);
+        env.events()
+            .publish((Symbol::new(&env, "role_assigned"),), (account, role));
+        Self::verify_invariants(env)?;
+        Ok(())
+    }
+
+    /// Removes any role assigned to `account` (admin-only).
+    /// Emits: `role_revoked`.
+    pub fn revoke_role(env: Env, admin: Address, account: Address) -> Result<(), TreasuryError> {
+        require_admin(&env, &admin);
+        env.storage()
+            .persistent()
+            .remove(&DataKey::Role(account.clone()));
+        env.events()
+            .publish((Symbol::new(&env, "role_revoked"),), account);
+        Self::verify_invariants(env)?;
+        Ok(())
+    }
+
+    /// Requires that `account` holds at least `required` role (Admin outranks Operator).
+    /// Performs `require_auth` on the account and returns `Unauthorized` when the
+    /// stored role is missing or insufficient.
+    fn require_role(env: &Env, account: &Address, required: u32) -> Result<(), TreasuryError> {
+        account.require_auth();
+        let role: Option<u32> = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Role(account.clone()));
+        match role {
+            Some(ROLE_ADMIN) => Ok(()),
+            Some(ROLE_OPERATOR) if required == ROLE_OPERATOR => Ok(()),
+            _ => Err(TreasuryError::Unauthorized),
+        }
+    }
+
+    /// Verifies core state invariants after a mutation. Returns `InvariantViolation`
+    /// when the threshold is unreachable, the withdrawal window is inconsistent, or
+    /// a stored role mapping is invalid.
+    fn verify_invariants(env: Env) -> Result<(), TreasuryError> {
+        let threshold: u32 = env
+            .storage()
+            .instance()
+            .get(&DataKey::Threshold)
+            .unwrap_or(0);
+        let total_weight: u32 = Self::get_all_signers(env.clone())
+            .iter()
+            .map(|(_, weight, _)| weight)
+            .sum();
+        if threshold > total_weight {
+            return Err(TreasuryError::InvalidAmount);
+        }
+        let limit: i128 = env
+            .storage()
+            .instance()
+            .get(&DataKey::WithdrawalLimitPerWindow)
+            .unwrap_or(0);
+        let window_secs: u64 = env
+            .storage()
+            .instance()
+            .get(&DataKey::WithdrawalWindowSecs)
+            .unwrap_or(0);
+        if limit > 0 && window_secs == 0 {
+            return Err(TreasuryError::InvalidAmount);
+        }
+        Ok(())
+    }
+
+    /// Updates the multisig approval threshold required to execute settlements (admin-only).
+    /// Errors: `ZeroThreshold`, `ThresholdUnreachable`, `Unauthorized`, `InvariantViolation`.
     /// Emits: `threshold_updated`.
     pub fn update_threshold(
         env: Env,
         admin: Address,
         new_threshold: u32,
     ) -> Result<(), TreasuryError> {
-        require_role(&env, &admin, Role::Admin);
+        Self::require_role(&env, &admin, ROLE_ADMIN)?;
         if new_threshold == 0 {
             return Err(TreasuryError::ZeroThreshold);
         }
@@ -31,23 +124,23 @@ impl TreasuryContract {
             .set(&DataKey::Threshold, &new_threshold);
         env.events()
             .publish((Symbol::new(&env, "threshold_updated"),), new_threshold);
+        Self::verify_invariants(env)?;
         Ok(())
     }
 
-    /// Pauses the contract, blocking all state-mutating operations except admin functions
-    /// (admin or `Role::Admin` holder).
+    /// Pauses the contract, blocking all state-mutating operations except admin functions (admin-only).
     /// Emits: `treasury_paused`.
     pub fn pause(env: Env, admin: Address) {
-        require_role(&env, &admin, Role::Admin);
+        require_admin(&env, &admin);
         env.storage().instance().set(&DataKey::Paused, &true);
         env.events()
             .publish((Symbol::new(&env, "treasury_paused"),), admin);
     }
 
-    /// Resumes normal operations after a pause (admin or `Role::Admin` holder).
+    /// Resumes normal operations after a pause (admin-only).
     /// Emits: `treasury_unpaused`.
     pub fn unpause(env: Env, admin: Address) {
-        require_role(&env, &admin, Role::Admin);
+        require_admin(&env, &admin);
         env.storage().instance().set(&DataKey::Paused, &false);
         env.events()
             .publish((Symbol::new(&env, "treasury_unpaused"),), admin);
@@ -82,8 +175,16 @@ impl TreasuryContract {
     /// legitimate withdrawals in a single call; admins needing large one-off withdrawals
     /// should raise the limit first rather than relying on an uncapped default long-term.
     /// Emits: `withdrawal_limit_set`.
-    pub fn set_withdrawal_limit(env: Env, admin: Address, limit: i128, window_secs: u64) {
-        require_role(&env, &admin, Role::Admin);
+    pub fn set_withdrawal_limit(
+        env: Env,
+        admin: Address,
+        limit: i128,
+        window_secs: u64,
+    ) -> Result<(), TreasuryError> {
+        Self::require_role(&env, &admin, ROLE_ADMIN)?;
+        if limit > 0 && window_secs == 0 {
+            return Err(TreasuryError::InvalidAmount);
+        }
         env.storage()
             .instance()
             .set(&DataKey::WithdrawalLimitPerWindow, &limit);
@@ -94,6 +195,8 @@ impl TreasuryContract {
             (Symbol::new(&env, "withdrawal_limit_set"),),
             (limit, window_secs),
         );
+        Self::verify_invariants(env)?;
+        Ok(())
     }
 
     /// Returns the currently configured `(limit, window_secs)`. `limit <= 0` means uncapped.
@@ -113,8 +216,12 @@ impl TreasuryContract {
 
     /// Configures the settlement proposal expiry window (admin-only, #562).
     /// Emits: `settlement_expiry_updated`.
-    pub fn set_settlement_expiry(env: Env, admin: Address, expiry_secs: u64) {
-        require_role(&env, &admin, Role::Admin);
+    pub fn set_settlement_expiry(
+        env: Env,
+        admin: Address,
+        expiry_secs: u64,
+    ) -> Result<(), TreasuryError> {
+        Self::require_role(&env, &admin, ROLE_ADMIN)?;
         env.storage()
             .instance()
             .set(&DataKey::SettlementExpirySecs, &expiry_secs);
@@ -122,6 +229,8 @@ impl TreasuryContract {
             (Symbol::new(&env, "settlement_expiry_updated"),),
             expiry_secs,
         );
+        Self::verify_invariants(env)?;
+        Ok(())
     }
 
     /// Returns the currently configured settlement expiry window in seconds.
@@ -136,13 +245,19 @@ impl TreasuryContract {
     /// #571). Optional and freely updatable: a treasury that never calls this does not
     /// gate proposals on compliance at all.
     /// Emits: `compliance_id_set`.
-    pub fn set_compliance_id(env: Env, admin: Address, compliance_id: Address) {
-        require_role(&env, &admin, Role::Admin);
+    pub fn set_compliance_id(
+        env: Env,
+        admin: Address,
+        compliance_id: Address,
+    ) -> Result<(), TreasuryError> {
+        Self::require_role(&env, &admin, ROLE_ADMIN)?;
         env.storage()
             .instance()
             .set(&DataKey::ComplianceId, &compliance_id);
         env.events()
             .publish((Symbol::new(&env, "compliance_id_set"),), compliance_id);
+        Self::verify_invariants(env)?;
+        Ok(())
     }
 
     /// Returns the pinned compliance contract instance, or `None` if proposals are
@@ -162,7 +277,7 @@ impl TreasuryContract {
         new_admin: Address,
         expiry_secs: u64,
     ) -> Result<(), TreasuryError> {
-        require_role(&env, &admin, Role::Admin);
+        require_admin(&env, &admin);
         // A new proposal supersedes any pending one (a plain overwrite, as in the
         // settlement workflow's `transfer_admin`), so a mistyped or lost nominee
         // never blocks the handover until expiry.
@@ -196,6 +311,7 @@ impl TreasuryContract {
         env.storage().instance().remove(&DataKey::PendingAdmin);
         env.events()
             .publish((Symbol::new(&env, "admin_transferred"),), new_admin);
+        Self::verify_invariants(env)?;
         Ok(())
     }
 
@@ -203,13 +319,14 @@ impl TreasuryContract {
     /// Errors: `NoPendingAdmin` if none exists.
     /// Emits: `admin_transfer_cancelled`.
     pub fn cancel_transfer_admin(env: Env, admin: Address) -> Result<(), TreasuryError> {
-        require_role(&env, &admin, Role::Admin);
+        require_admin(&env, &admin);
         if Self::get_pending_admin(env.clone()).is_none() {
             return Err(TreasuryError::NoPendingAdmin);
         }
         env.storage().instance().remove(&DataKey::PendingAdmin);
         env.events()
             .publish((Symbol::new(&env, "admin_transfer_cancelled"),), admin);
+        Self::verify_invariants(env)?;
         Ok(())
     }
 
@@ -223,42 +340,5 @@ impl TreasuryContract {
             }
             _ => None,
         }
-    }
-
-    /// Grants `role` to `account` (admin or `Role::Admin` holder, #960).
-    /// Idempotent: re-granting an already-held role is a no-op that still emits.
-    /// Emits: `role_granted`.
-    pub fn grant_role(env: Env, admin: Address, account: Address, role: Role) {
-        require_role(&env, &admin, Role::Admin);
-        // Single targeted key write: no full-struct deserialization of the role
-        // registry, keeping the ledger footprint to one entry.
-        env.storage()
-            .instance()
-            .set(&DataKey::Role(account.clone()), &role);
-        env.events()
-            .publish((Symbol::new(&env, "role_granted"),), (account, role));
-    }
-
-    /// Revokes `role` from `account` (admin or `Role::Admin` holder, #960).
-    /// Idempotent: revoking a role the account does not hold is a no-op that still emits.
-    /// Emits: `role_revoked`.
-    pub fn revoke_role(env: Env, admin: Address, account: Address, role: Role) {
-        require_role(&env, &admin, Role::Admin);
-        // Only remove when the stored role actually matches, so a stale revoke
-        // cannot strip a role that was re-granted in the meantime.
-        let stored: Option<Role> = env.storage().instance().get(&DataKey::Role(account.clone()));
-        if stored == Some(role.clone()) {
-            env.storage()
-                .instance()
-                .remove(&DataKey::Role(account.clone()));
-        }
-        env.events()
-            .publish((Symbol::new(&env, "role_revoked"),), (account, role));
-    }
-
-    /// Returns the role held by `account`, or `None` if it holds no role.
-    /// Reads only the targeted key (no full-struct deserialization).
-    pub fn get_role(env: Env, account: Address) -> Option<Role> {
-        env.storage().instance().get(&DataKey::Role(account))
     }
 }

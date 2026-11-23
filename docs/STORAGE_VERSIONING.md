@@ -74,6 +74,31 @@ uniqueness tests are per-contract and why no global key registry is needed.
 | Treasury (escrow, settlements, signers, roles) | `multisig::DataKey` (re-exported as `treasury::DataKey`) | `crates/multisig/src/lib.rs` | 26 |
 | Compliance (allowlist/blocklist) | `compliance::DataKey` | `contracts/compliance/src/lib.rs` | 22 |
 | Settlement workflow (orchestrator) | `settlement_workflow::DataKey` | `contracts/settlement-workflow/src/lib.rs` | 3 |
+| Storage layout (slot metadata, layout registry) | `storage_layout::DataKey` | `contracts/storage-layout/src/lib.rs` | 6 |
+
+### Storage-layout invariants (#961, #963, #966)
+
+The `storage-layout` contract follows the same append-only, one-concept-per-
+variant conventions as the contracts above. Three hardening changes landed on
+it and are worth knowing about when touching its key space:
+
+- **Streamlined deserialization (#961).** Stored records are decoded once per
+  entrypoint into a single validated value rather than re-read and re-decoded
+  per field, which cuts host memory and CPU instruction allocation. Any decode
+  failure is surfaced as a typed error, never a panic.
+- **Strict invariant verification (#963).** Every read path re-checks the
+  invariants that the write path established (slot bounds, layout/registry
+  consistency, monotonic version counters) and returns a typed error on
+  violation instead of trusting stored state. A violated invariant is treated
+  as state inconsistency, not as a recoverable miss.
+- **Zero-balance edge cases (#966).** Zero and absent balances are handled
+  explicitly: a zero balance is a valid state that is returned as `0` rather
+  than triggering a division, subtraction or unwrap panic, and an absent
+  balance is distinguished from a stored zero where the entrypoint's contract
+  requires it.
+
+The contract's `storage_key_uniqueness_test.rs` lists its variants
+exhaustively, so a new variant must be appended there in the same change.
 
 ### Issue #86 audit targets and where they live
 

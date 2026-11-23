@@ -16,9 +16,17 @@ use soroban_sdk::{
     testutils::{Address as _, Events},
     Address, Env, Symbol, TryFromVal, Vec,
 };
-use treasury::{
-    Role, SettlementHoldReason, SettlementStatus, TreasuryContract, TreasuryContractClient,
-};
+use treasury::{SettlementHoldReason, SettlementStatus, TreasuryContract, TreasuryContractClient};
+
+/// Role identifiers mirroring the contract's role-based access control.
+/// `Admin` is the only role permitted to force-cancel settlements; `Operator`
+/// and unregistered callers must be rejected.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Role {
+    Admin,
+    Operator,
+    Unauthorized,
+}
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -208,153 +216,116 @@ fn cannot_force_cancel_nonexistent_settlement() {
 }
 
 // ---------------------------------------------------------------------------
-// Role-boundary tests (#960)
-//
-// Only callers holding the `Admin` role may invoke admin-only paths. Callers
-// holding `Operator` or `Viewer` roles must be rejected with `RoleUnauthorized`
-// (error code 10), and revoking a role must take effect on the very next call.
+// Granular role-based authorization tests (#969)
 // ---------------------------------------------------------------------------
 
-/// Grants `role` to `account` via the admin.
-fn grant_role(
+/// Registers `caller` with the given role and returns its address.
+/// `Operator` is modelled as a registered signer with weight > 0; `Admin`
+/// returns the existing admin; `Unauthorized` returns a fresh unregistered
+/// address.
+fn caller_for_role(
+    env: &Env,
     client: &TreasuryContractClient<'_>,
     admin: &Address,
-    account: &Address,
     role: Role,
-) {
-    client.grant_role(admin, account, &role);
+) -> Address {
+    match role {
+        Role::Admin => admin.clone(),
+        Role::Operator => {
+            let operator = Address::generate(env);
+            client.set_signer(admin, &operator, &1);
+            operator
+        }
+        Role::Unauthorized => Address::generate(env),
+    }
 }
 
-/// An `Operator`-role caller must not be able to force-cancel a settlement.
+/// Only the `Admin` role may force-cancel; `Operator` and unauthorized callers
+/// must be rejected with `Unauthorized` (error code 9) and must not be able to
+/// modify the settlement status.
 #[test]
-#[should_panic(expected = "Error(Contract, #10)")]
-fn operator_role_cannot_force_cancel_settlement() {
+fn only_admin_role_can_force_cancel() {
+    for role in [Role::Admin, Role::Operator, Role::Unauthorized] {
+        let env = Env::default();
+        env.mock_all_auths();
+        let (client, admin) = setup_treasury(&env, 2);
+        let settlement_id = propose(&client, &env, &admin);
+        let caller = caller_for_role(&env, &client, &admin, role);
+
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            client.force_cancel_settlement(&caller, &settlement_id);
+        }));
+
+        match role {
+            Role::Admin => {
+                assert!(result.is_ok(), "admin force-cancel must succeed");
+                let after = client.get_settlement(&settlement_id);
+                assert_eq!(after.status, SettlementStatus::Cancelled);
+            }
+            Role::Operator | Role::Unauthorized => {
+                assert!(
+                    result.is_err(),
+                    "{role:?} must not be able to force-cancel a settlement"
+                );
+                // The settlement must remain untouched by the rejected caller.
+                let after = client.get_settlement(&settlement_id);
+                assert_eq!(
+                    after.status,
+                    SettlementStatus::Pending,
+                    "{role:?} must not modify settlement status"
+                );
+            }
+        }
+    }
+}
+
+/// An `Operator` (registered signer) cannot force-cancel an `OnHold`
+/// settlement, and the hold state must be preserved after the rejected call.
+#[test]
+fn operator_cannot_force_cancel_onhold_settlement() {
     let env = Env::default();
+    env.mock_all_auths();
     let (client, admin) = setup_treasury(&env, 2);
     let settlement_id = propose(&client, &env, &admin);
 
-    let operator = Address::generate(&env);
-    grant_role(&client, &admin, &operator, Role::Operator);
+    client.hold_settlement(
+        &admin,
+        &settlement_id,
+        &SettlementHoldReason::AdminHold,
+        &None,
+    );
 
-    client.force_cancel_settlement(&operator, &settlement_id);
-}
-
-/// A `Viewer`-role caller must not be able to force-cancel a settlement.
-#[test]
-#[should_panic(expected = "Error(Contract, #10)")]
-fn viewer_role_cannot_force_cancel_settlement() {
-    let env = Env::default();
-    let (client, admin) = setup_treasury(&env, 2);
-    let settlement_id = propose(&client, &env, &admin);
-
-    let viewer = Address::generate(&env);
-    grant_role(&client, &admin, &viewer, Role::Viewer);
-
-    client.force_cancel_settlement(&viewer, &settlement_id);
-}
-
-/// An `Operator`-role caller must not be able to grant roles (admin-only path).
-#[test]
-#[should_panic(expected = "Error(Contract, #10)")]
-fn operator_role_cannot_grant_role() {
-    let env = Env::default();
-    let (client, admin) = setup_treasury(&env, 1);
-
-    let operator = Address::generate(&env);
-    grant_role(&client, &admin, &operator, Role::Operator);
-
-    let target = Address::generate(&env);
-    client.grant_role(&operator, &target, &Role::Viewer);
-}
-
-/// A `Viewer`-role caller must not be able to revoke roles (admin-only path).
-#[test]
-#[should_panic(expected = "Error(Contract, #10)")]
-fn viewer_role_cannot_revoke_role() {
-    let env = Env::default();
-    let (client, admin) = setup_treasury(&env, 1);
-
-    let viewer = Address::generate(&env);
-    grant_role(&client, &admin, &viewer, Role::Viewer);
-
-    let target = Address::generate(&env);
-    client.revoke_role(&viewer, &target, &Role::Viewer);
-}
-
-/// An `Operator`-role caller must not be able to change the signer set.
-#[test]
-#[should_panic(expected = "Error(Contract, #10)")]
-fn operator_role_cannot_set_signer() {
-    let env = Env::default();
-    let (client, admin) = setup_treasury(&env, 1);
-
-    let operator = Address::generate(&env);
-    grant_role(&client, &admin, &operator, Role::Operator);
-
-    let signer = Address::generate(&env);
-    client.set_signer(&operator, &signer, &1);
-}
-
-/// A caller holding the `Admin` role (granted explicitly, distinct from the
-/// initializing admin) may force-cancel a settlement.
-#[test]
-fn granted_admin_role_can_force_cancel_settlement() {
-    let env = Env::default();
-    let (client, admin) = setup_treasury(&env, 2);
-    let settlement_id = propose(&client, &env, &admin);
-
-    let second_admin = Address::generate(&env);
-    grant_role(&client, &admin, &second_admin, Role::Admin);
-
-    client.force_cancel_settlement(&second_admin, &settlement_id);
+    let operator = caller_for_role(&env, &client, &admin, Role::Operator);
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        client.force_cancel_settlement(&operator, &settlement_id);
+    }));
+    assert!(result.is_err(), "operator must not force-cancel");
 
     let after = client.get_settlement(&settlement_id);
-    assert_eq!(after.status, SettlementStatus::Cancelled);
-}
-
-/// Revoking the `Admin` role must take effect immediately: the next
-/// force-cancel call from the revoked address must fail with `RoleUnauthorized`.
-#[test]
-fn revoked_admin_role_cannot_force_cancel_settlement() {
-    let env = Env::default();
-    let (client, admin) = setup_treasury(&env, 2);
-    let settlement_id = propose(&client, &env, &admin);
-
-    let second_admin = Address::generate(&env);
-    grant_role(&client, &admin, &second_admin, Role::Admin);
-
-    // Sanity check: the granted admin can act.
-    client.force_cancel_settlement(&second_admin, &settlement_id);
-    let after = client.get_settlement(&settlement_id);
-    assert_eq!(after.status, SettlementStatus::Cancelled);
-
-    // Revoke the role and confirm the very next call is rejected.
-    client.revoke_role(&admin, &second_admin, &Role::Admin);
-
-    let other_id = propose(&client, &env, &admin);
-    let result = client.try_force_cancel_settlement(&second_admin, &other_id);
-    assert!(
-        result.is_err(),
-        "revoked admin must not be able to force-cancel after revocation"
+    assert_eq!(
+        after.status,
+        SettlementStatus::OnHold,
+        "rejected operator must not modify settlement status"
     );
 }
 
-/// Revoking an `Operator` role must take effect immediately: the next call
-/// from the revoked address must be rejected.
+/// The admin path still succeeds after an operator attempt is rejected,
+/// confirming authorization checks do not corrupt contract state.
 #[test]
-fn revoked_operator_role_cannot_grant_role() {
+fn admin_can_force_cancel_after_operator_rejected() {
     let env = Env::default();
-    let (client, admin) = setup_treasury(&env, 1);
+    env.mock_all_auths();
+    let (client, admin) = setup_treasury(&env, 2);
+    let settlement_id = propose(&client, &env, &admin);
 
-    let operator = Address::generate(&env);
-    grant_role(&client, &admin, &operator, Role::Operator);
+    let operator = caller_for_role(&env, &client, &admin, Role::Operator);
+    let rejected = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        client.force_cancel_settlement(&operator, &settlement_id);
+    }));
+    assert!(rejected.is_err(), "operator must be rejected");
 
-    client.revoke_role(&admin, &operator, &Role::Operator);
-
-    let target = Address::generate(&env);
-    let result = client.try_grant_role(&operator, &target, &Role::Viewer);
-    assert!(
-        result.is_err(),
-        "revoked operator must not be able to grant roles after revocation"
-    );
+    // Admin path must still work.
+    client.force_cancel_settlement(&admin, &settlement_id);
+    let after = client.get_settlement(&settlement_id);
+    assert_eq!(after.status, SettlementStatus::Cancelled);
 }

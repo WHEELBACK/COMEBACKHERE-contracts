@@ -7,7 +7,7 @@
 //! a second `partial_amount` transfer.
 
 use soroban_sdk::{testutils::Address as _, Address, Env};
-use treasury::SettlementStatus;
+use treasury::{SettlementStatus, TreasuryError};
 
 use super::common::init_treasury;
 use super::malicious_token::{CallbackTarget, ReentrancyToken, ReentrancyTokenClient};
@@ -88,4 +88,65 @@ fn partially_execute_settlement_reentrancy_demonstrates_cei_violation() {
 
     let settlement = client.get_settlement(&sid);
     assert_eq!(settlement.status, SettlementStatus::PartiallyExecuted);
+}
+
+#[test]
+fn partially_execute_settlement_rejects_underflowing_partial_amount() {
+    // A partial amount larger than the settlement total would underflow
+    // the remaining-balance computation. The contract must reject it with
+    // `ArithmeticUnderflow` and leave all state untouched.
+    let env = Env::default();
+    let (client, admin, treasury_id) = init_treasury(&env, 1);
+
+    let total: i128 = 10_000_000;
+    let partial: i128 = total + 1;
+    let (token_id, token) = funded_token(&env, &treasury_id, partial);
+    token.set_callback_target(&CallbackTarget::None, &treasury_id);
+
+    let merchant = Address::generate(&env);
+    let sid = client.propose_settlement(&admin, &merchant, &total, &0_u64);
+
+    let result = client.try_partially_execute_settlement(&admin, &sid, &partial, &token_id);
+    assert_eq!(result, Err(Ok(TreasuryError::ArithmeticUnderflow)));
+
+    // Invariant: no funds moved and the settlement is still Pending.
+    assert_eq!(token.balance(&merchant), 0);
+    assert_eq!(token.balance(&treasury_id), partial);
+
+    let settlement = client.get_settlement(&sid);
+    assert_eq!(settlement.status, SettlementStatus::Pending);
+    assert_eq!(settlement.amount, total);
+}
+
+#[test]
+fn partially_execute_settlement_reentrant_underflow_attempt_is_rejected() {
+    // The malicious token re-enters `partially_execute_settlement` with an
+    // amount that would underflow the remaining balance. The outer call
+    // must abort, roll back the transfer, and leave the settlement
+    // Pending with no funds moved.
+    let env = Env::default();
+    let (client, admin, treasury_id) = init_treasury(&env, 1);
+
+    let total: i128 = 10_000_000;
+    let partial: i128 = 3_000_000;
+    let (token_id, token) = funded_token(&env, &treasury_id, total);
+    token.set_callback_target(&CallbackTarget::PartiallyExecuteSettlement, &treasury_id);
+
+    let merchant = Address::generate(&env);
+    let sid = client.propose_settlement(&admin, &merchant, &total, &0_u64);
+    // Reentrant call attempts to settle more than the total.
+    token.set_partial_execute_params(&admin, &sid, &(total + 1));
+
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        client.partially_execute_settlement(&admin, &sid, &partial, &token_id);
+    }));
+    assert!(result.is_err(), "reentrant underflow attempt should abort");
+
+    // Invariant: the outer transfer was rolled back and no state changed.
+    assert_eq!(token.balance(&merchant), 0);
+    assert_eq!(token.balance(&treasury_id), total);
+
+    let settlement = client.get_settlement(&sid);
+    assert_eq!(settlement.status, SettlementStatus::Pending);
+    assert_eq!(settlement.amount, total);
 }

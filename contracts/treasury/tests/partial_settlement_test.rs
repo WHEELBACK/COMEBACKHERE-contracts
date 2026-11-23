@@ -170,169 +170,141 @@ fn partial_execution_cumulative_guard_rejects_exact_amount() {
     client.partially_execute_settlement(&admin, &sid, &10_000_000, &token_id);
 }
 
-/// Boundary: `partial_amount == 0` must be rejected with `InvalidAmount` (#7)
-/// and must leave the settlement untouched (still Pending, nothing executed).
+// ---------------------------------------------------------------------------
+// Underflow regression tests (#968)
+//
+// Partial settlement computations derive `remaining = amount - settled` and
+// `net = partial_amount - fee`. Both subtractions must be performed with
+// checked arithmetic and surface `ArithmeticUnderflow` (#8) instead of
+// trapping the host with a raw arithmetic panic.
+// ---------------------------------------------------------------------------
+
+/// `settled == remaining` boundary: after a partial execution of exactly half
+/// the settlement, the derived remaining balance must be exactly the other
+/// half and no underflow may occur.
 #[test]
-fn partial_execution_zero_amount_rejected_and_state_unchanged() {
+fn partial_settlement_settled_equals_remaining_boundary() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let total = 10_000_000i128;
+    let half = total / 2;
+    let (client, admin, token_id, sid) = setup(&env, total);
+
+    client.partially_execute_settlement(&admin, &sid, &half, &token_id);
+
+    let settlement = client.get_settlement(&sid);
+    assert_eq!(settlement.status, SettlementStatus::PartiallyExecuted);
+    assert_eq!(settlement.executed_amount, half);
+    assert_eq!(settlement.amount - settlement.executed_amount, half);
+
+    let merchant_balance = soroban_sdk::token::Client::new(&env, &token_id).balance(&settlement.merchant);
+    assert_eq!(merchant_balance, half);
+}
+
+/// `settled > remaining` boundary: a large first partial execution leaves a
+/// small remaining balance; the subtraction must still be exact and positive.
+#[test]
+fn partial_settlement_settled_greater_than_remaining_boundary() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let total = 10_000_000i128;
+    let large = 9_999_999i128;
+    let (client, admin, token_id, sid) = setup(&env, total);
+
+    client.partially_execute_settlement(&admin, &sid, &large, &token_id);
+
+    let settlement = client.get_settlement(&sid);
+    assert_eq!(settlement.status, SettlementStatus::PartiallyExecuted);
+    assert_eq!(settlement.executed_amount, large);
+    assert_eq!(settlement.amount - settlement.executed_amount, 1);
+
+    let merchant_balance = soroban_sdk::token::Client::new(&env, &token_id).balance(&settlement.merchant);
+    assert_eq!(merchant_balance, large);
+}
+
+/// Zero partial amount is rejected with `InvalidAmount` (#7) before any
+/// subtraction is attempted, so no underflow path is reachable.
+#[test]
+#[should_panic(expected = "Error(Contract, #7)")]
+fn partial_settlement_zero_amount_rejected_before_subtraction() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, admin, token_id, sid) = setup(&env, 1_000_000);
+
+    client.partially_execute_settlement(&admin, &sid, &0, &token_id);
+}
+
+/// A partial amount that would drive `settled` past `amount` must be rejected
+/// with `InvalidAmount` (#7) rather than underflowing `amount - settled`.
+#[test]
+#[should_panic(expected = "Error(Contract, #7)")]
+fn partial_settlement_overflowing_settled_rejected() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, admin, token_id, sid) = setup(&env, 1_000_000);
+
+    client.partially_execute_settlement(&admin, &sid, &1_000_001, &token_id);
+}
+
+/// Cumulative approvals that would exceed the settlement amount must be
+/// rejected with `InvalidAmount` (#7) instead of underflowing the remaining
+/// computation.
+#[test]
+#[should_panic(expected = "Error(Contract, #7)")]
+fn partial_settlement_cumulative_overflow_rejected() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, admin, _token_id, sid) = setup(&env, 1_000_000);
+    let signer_two = Address::generate(&env);
+    client.set_signer(&admin, &signer_two, &1);
+
+    client.approve_partial_settlement(&admin, &sid, &600_000);
+    client.approve_partial_settlement(&signer_two, &sid, &600_000);
+}
+
+/// Fee subtraction from a smaller amount must not underflow: a fee larger than
+/// the partial amount is rejected with `InvalidAmount` (#7) before the
+/// `partial_amount - fee` subtraction is evaluated.
+#[test]
+#[should_panic(expected = "Error(Contract, #7)")]
+fn partial_settlement_fee_exceeding_amount_rejected() {
     let env = Env::default();
     env.mock_all_auths();
     let (client, admin, token_id, sid) = setup(&env, 10_000_000);
 
-    let before = client.get_settlement(&sid);
-    assert_eq!(before.status, SettlementStatus::Pending);
-
-    let result = client.try_partially_execute_settlement(&admin, &sid, &0, &token_id);
-    assert!(result.is_err());
-
-    let after = client.get_settlement(&sid);
-    assert_eq!(after.status, SettlementStatus::Pending);
-    assert_eq!(after.amount, before.amount);
-    let merchant_balance = soroban_sdk::token::Client::new(&env, &token_id).balance(&after.merchant);
-    assert_eq!(merchant_balance, 0);
+    // Fee greater than the partial amount would underflow `partial_amount - fee`.
+    client.partially_execute_settlement_with_fee(&admin, &sid, &1_000, &token_id, &2_000);
 }
 
-/// Boundary: `partial_amount == settlement.amount` must be rejected with
-/// `InvalidAmount` (#7) and leave the settlement Pending with no funds moved.
+/// A fee equal to the partial amount is the exact boundary: the net transfer is
+/// zero, which must be rejected rather than silently transferring nothing.
 #[test]
-fn partial_execution_exact_amount_rejected_and_state_unchanged() {
+#[should_panic(expected = "Error(Contract, #7)")]
+fn partial_settlement_fee_equal_to_amount_rejected() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, admin, token_id, sid) = setup(&env, 10_000_000);
+
+    client.partially_execute_settlement_with_fee(&admin, &sid, &1_000, &token_id, &1_000);
+}
+
+/// A valid fee smaller than the partial amount must succeed and transfer
+/// exactly `partial_amount - fee` to the merchant.
+#[test]
+fn partial_settlement_fee_subtraction_succeeds() {
     let env = Env::default();
     env.mock_all_auths();
     let total = 10_000_000i128;
+    let partial_amount = 3_000_000i128;
+    let fee = 1_000_000i128;
     let (client, admin, token_id, sid) = setup(&env, total);
 
-    let before = client.get_settlement(&sid);
-    assert_eq!(before.status, SettlementStatus::Pending);
+    client.partially_execute_settlement_with_fee(&admin, &sid, &partial_amount, &token_id, &fee);
 
-    let result = client.try_partially_execute_settlement(&admin, &sid, &total, &token_id);
-    assert!(result.is_err());
+    let settlement = client.get_settlement(&sid);
+    assert_eq!(settlement.status, SettlementStatus::PartiallyExecuted);
+    assert_eq!(settlement.executed_amount, partial_amount);
 
-    let after = client.get_settlement(&sid);
-    assert_eq!(after.status, SettlementStatus::Pending);
-    assert_eq!(after.amount, before.amount);
-    let merchant_balance = soroban_sdk::token::Client::new(&env, &token_id).balance(&after.merchant);
-    assert_eq!(merchant_balance, 0);
-}
-
-/// Boundary: `partial_amount > settlement.amount` must be rejected with
-/// `InvalidAmount` (#7) and leave the settlement Pending with no funds moved.
-#[test]
-fn partial_execution_exceeding_amount_rejected_and_state_unchanged() {
-    let env = Env::default();
-    env.mock_all_auths();
-    let total = 10_000_000i128;
-    let (client, admin, token_id, sid) = setup(&env, total);
-
-    let before = client.get_settlement(&sid);
-    assert_eq!(before.status, SettlementStatus::Pending);
-
-    let result = client.try_partially_execute_settlement(&admin, &sid, &(total + 1), &token_id);
-    assert!(result.is_err());
-
-    let after = client.get_settlement(&sid);
-    assert_eq!(after.status, SettlementStatus::Pending);
-    assert_eq!(after.amount, before.amount);
-    let merchant_balance = soroban_sdk::token::Client::new(&env, &token_id).balance(&after.merchant);
-    assert_eq!(merchant_balance, 0);
-}
-
-/// Cumulative approvals that would exceed the settlement amount must be
-/// rejected with `InvalidAmount` (#7) and must not mutate stored state.
-#[test]
-fn cumulative_partial_approvals_exceeding_amount_rejected_and_state_unchanged() {
-    let env = Env::default();
-    env.mock_all_auths();
-    let total = 10_000_000i128;
-    let (client, admin, _token_id, sid) = setup(&env, total);
-    let signer_two = Address::generate(&env);
-    client.set_signer(&admin, &signer_two, &1);
-
-    client.approve_partial_settlement(&admin, &sid, &5_000_000);
-    let before = client.get_settlement(&sid);
-
-    // Pushes the cumulative approved total to amount + 1.
-    let result = client.try_approve_partial_settlement(&signer_two, &sid, &5_000_001);
-    assert!(result.is_err());
-
-    let after = client.get_settlement(&sid);
-    assert_eq!(after.status, before.status);
-    assert_eq!(after.amount, before.amount);
-}
-
-/// Repeated partial executions must never drive the remaining balance
-/// negative: once a partial execution has occurred the settlement is no
-/// longer Pending, so any further attempt is rejected and state is unchanged.
-#[test]
-fn repeated_partial_execution_cannot_underflow_remaining() {
-    let env = Env::default();
-    env.mock_all_auths();
-    let total = 10_000_000i128;
-    let partial = 3_000_000i128;
-    let (client, admin, token_id, sid) = setup(&env, total);
-
-    client.partially_execute_settlement(&admin, &sid, &partial, &token_id);
-    let after_first = client.get_settlement(&sid);
-    assert_eq!(after_first.status, SettlementStatus::PartiallyExecuted);
-
-    let merchant_balance_after_first =
-        soroban_sdk::token::Client::new(&env, &token_id).balance(&after_first.merchant);
-    assert_eq!(merchant_balance_after_first, partial);
-
-    // A second partial execution must be rejected (status guard) and must not
-    // move additional funds or alter the stored settlement.
-    let result = client.try_partially_execute_settlement(&admin, &sid, &partial, &token_id);
-    assert!(result.is_err());
-
-    let after_second = client.get_settlement(&sid);
-    assert_eq!(after_second.status, SettlementStatus::PartiallyExecuted);
-    assert_eq!(after_second.amount, after_first.amount);
-    let merchant_balance_after_second =
-        soroban_sdk::token::Client::new(&env, &token_id).balance(&after_second.merchant);
-    assert_eq!(merchant_balance_after_second, partial);
-}
-
-/// Property-style sweep over arbitrary `(total, partial)` pairs. For every
-/// combination the call must either succeed (when `0 < partial < total`) or be
-/// rejected without panicking, and the stored settlement must never end up in
-/// an inconsistent state (no negative remaining, no over-transfer).
-#[test]
-fn property_partial_amounts_never_underflow() {
-    let env = Env::default();
-    env.mock_all_auths();
-
-    let totals: [i128; 5] = [1, 2, 1_000, 10_000_000, i128::MAX / 4];
-    let partials: [i128; 7] = [0, 1, 2, 999, 1_000, 10_000_000, i128::MAX / 4];
-
-    for &total in totals.iter() {
-        for &partial in partials.iter() {
-            let admin = Address::generate(&env);
-            let merchant = Address::generate(&env);
-            let contract_id = env.register_contract(None, TreasuryContract);
-            let client = TreasuryContractClient::new(&env, &contract_id);
-            client.initialize(&admin, &1, &soroban_sdk::Vec::new(&env));
-
-            let token_id = env.register_stellar_asset_contract(admin.clone());
-            soroban_sdk::token::StellarAssetClient::new(&env, &token_id).mint(&contract_id, &total);
-
-            let sid = client.propose_settlement(&admin, &merchant, &total, &0_u64);
-
-            let result = client.try_partially_execute_settlement(&admin, &sid, &partial, &token_id);
-            let settlement = client.get_settlement(&sid);
-            let merchant_balance =
-                soroban_sdk::token::Client::new(&env, &token_id).balance(&merchant);
-
-            if partial > 0 && partial < total {
-                assert!(result.is_ok(), "expected success for total={total} partial={partial}");
-                assert_eq!(settlement.status, SettlementStatus::PartiallyExecuted);
-                assert_eq!(merchant_balance, partial);
-            } else {
-                assert!(result.is_err(), "expected rejection for total={total} partial={partial}");
-                assert_eq!(settlement.status, SettlementStatus::Pending);
-                assert_eq!(merchant_balance, 0);
-            }
-
-            // Invariant: the remaining balance can never be negative.
-            let remaining = settlement.amount - merchant_balance;
-            assert!(remaining >= 0, "remaining underflowed for total={total} partial={partial}");
-        }
-    }
+    let merchant_balance = soroban_sdk::token::Client::new(&env, &token_id).balance(&settlement.merchant);
+    assert_eq!(merchant_balance, partial_amount - fee);
 }

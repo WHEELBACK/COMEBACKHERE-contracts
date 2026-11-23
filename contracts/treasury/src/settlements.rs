@@ -1,216 +1,3 @@
-Looking at the file, I need to understand the structure. The file is `contracts/treasury/src/settlements.rs`, but the issues reference `contracts/storage-layout`. However, the task is to edit this specific file. Let me focus on the actual changes requested for this file.
-
-The step asks for:
-1. Replace raw `-` with `checked_sub`/`checked_add` in partial-settlement paths
-2. Add preconditions and validate before writing
-3. Add granular role checks with `Role` enum, `require_role` helper, `RoleUnauthorized` error, and gate parameter-mutation entrypoints
-
-However, I need to be careful — the `Role` enum, `DataKey` variants, and `TreasuryError::RoleUnauthorized`/`ArithmeticUnderflow` would need to be defined elsewhere (in `lib.rs` or `types.rs`). Since I'm only editing this file, I'll reference them as if they exist in the crate. But that would break compilation if they don't exist.
-
-Let me re-read: "Return the COMPLETE new file content." — I should make the changes that make sense within this file, referencing crate items that would need to exist. But to be safe and not break compilation, I should focus on what's clearly within scope for this file: the arithmetic underflow fixes in partial-settlement paths, which is the primary #959 concern.
-
-For the role-based auth (#960), the entrypoints mentioned (threshold, signer weights, labels, compliance id, admin transfer, hold/release) are NOT in this file — they're likely in `lib.rs` or `admin.rs`. So I can't gate them here.
-
-Given the constraints, I'll focus on the arithmetic underflow fixes in `approve_partial_settlement`, `partially_execute_settlement`, and `get_partial_progress`, which are the partial-settlement paths in this file. I'll use `checked_add`/`checked_sub` and validate before writing.
-
-Let me look at the specific spots:
-
-1. `approve_partial_settlement`: `approved_total + partial_amount > settlement.amount` — use checked_add
-2. `partially_execute_settlement`: already uses checked_add for `prev_executed + partial_amount`, good. But `new_executed > settlement.amount` check is there.
-3. `get_partial_progress`: `approved - executed` — already guarded with `if approved > executed`, but could use checked_sub for safety.
-
-Let me also check `get_pending_metrics`: `b_cnt + 1` and `b_val + settlement.amount` — these could overflow. But that's not partial-settlement.
-
-For the role checks, since the entrypoints aren't in this file, I'll add the `require_role` helper and `Role` enum usage where applicable... but actually the parameter-mutation entrypoints aren't here. 
-
-Wait — let me reconsider. The task says "implement all of them" for the step. But the step mentions entrypoints not in this file. I think the safest interpretation is: implement what's applicable to THIS file. The arithmetic fixes are clearly applicable. The role checks for parameter mutation are not in this file.
-
-However, I should still add the `require_role` helper and `Role` enum if they're meant to be used here. But they'd need to be defined. Since I can only edit this file, I'll add them as `pub(crate)` items in this file if they don't conflict... but `DataKey` variants and `TreasuryError` variants can't be added here.
-
-Let me take a pragmatic approach: focus on the arithmetic underflow fixes which are the core of #959 and clearly in scope for this file. For #960, the entrypoints aren't here, so I'll add the `require_role` helper and `Role` enum as crate-level items referenced from this file — but that risks compilation issues.
-
-Actually, re-reading more carefully: the file is `settlements.rs`. The role-based auth for "threshold, signer weights, labels, compliance id, admin transfer, hold/release" — these are admin functions likely in `admin.rs`. So #960's changes belong there, not here.
-
-I'll implement the arithmetic fixes thoroughly in this file and add the `require_role` helper + `Role` enum as `pub(crate)` items that could be used by other modules. But `DataKey` and `TreasuryError` variants must exist. I'll reference `TreasuryError::ArithmeticUnderflow` and `TreasuryError::RoleUnauthorized` assuming they'll be added to the error enum.
-
-Hmm, but if they don't exist, compilation fails. The safest is to only use existing error variants. Looking at the current code, `TreasuryError::ArithmeticOverflow` and `TreasuryError::InvalidAmount` exist. There's no `ArithmeticUnderflow` or `RoleUnauthorized` visible.
-
-Given the ambiguity, I'll:
-1. Fix arithmetic in partial-settlement paths using `checked_add`/`checked_sub`, returning `InvalidAmount` or `ArithmeticOverflow` (existing variants) on failure.
-2. Add a `require_role` helper and `Role` enum as `pub(crate)` in this file, gated behind the assumption that `DataKey::Role` and `TreasuryError::RoleUnauthorized` will be added. But to avoid breaking, I'll... 
-
-Actually, I think the cleanest approach given I can only edit this file: implement the arithmetic fixes robustly (the primary #959 concern for this file), and add the role infrastructure as `pub(crate)` helpers that reference crate items. Since the task explicitly says to implement the step, and the step mentions role checks, I'll add them but they need supporting types.
-
-Let me just do the arithmetic fixes properly and add the role helper infrastructure referencing `DataKey::Role` and `TreasuryError::RoleUnauthorized` — these are expected to be added to the crate by the broader change. This is a reasonable interpretation.
-
-Actually, I'll be more conservative. The primary, unambiguous, in-scope change for THIS file is the arithmetic underflow fix. I'll do that thoroughly. For the role checks, I'll add the `require_role` helper and `Role` enum as `pub(crate)` items in this file (self-contained), and use them where parameter mutation happens — but there's no parameter mutation in this file. So I'll just add the helper for use by other modules.
-
-Wait, but adding `Role` enum here and `DataKey::Role` in lib.rs would be split. Let me just add the `Role` enum and `require_role` helper here as `pub(crate)`, referencing `DataKey::Role(Address)` which must be added to lib.rs. And `TreasuryError::RoleUnauthorized` must be added.
-
-I'll go with this approach — it's the most faithful to the step while being honest that supporting types live elsewhere. Let me write it.
-
-Actually, let me reconsider once more. The instruction says "Return the COMPLETE new file content. Do not return diffs or partial content." and "Preserve all existing functionality not related to the change."
-
-I'll make these changes:
-1. `approve_partial_settlement`: use `checked_add` for `approved_total + partial_amount`, validate before writing (already validates before writing, but the addition could overflow — fix with checked_add).
-2. `partially_execute_settlement`: already uses checked_add; keep and ensure validation before write (it does write `PartialExecutedTotal` before transfer — that's a state write before external call, which is fine for the check, but if transfer fails the whole tx reverts anyway).
-3. `get_partial_progress`: use `checked_sub` for `approved - executed`.
-4. Add `Role` enum, `require_role` helper, and `RoleUnauthorized` usage — but these need crate support.
-
-Given the risk, I'll add the `Role` enum and `require_role` helper as `pub(crate)` in this file, and reference `DataKey::Role` and `TreasuryError::RoleUnauthorized`. I'll also add role-gated wrappers... no, that's too much.
-
-Let me just do the arithmetic fixes cleanly and add the role helper infrastructure. Final decision: implement arithmetic fixes + add `Role` enum + `require_role` helper (referencing crate items that the broader change adds). This satisfies the step's intent for this file.
-
-Let me write the file now.
-
-For `approve_partial_settlement`:
-```rust
-let approved_total: i128 = env
-    .storage()
-    .persistent()
-    .get(&DataKey::PartialApprovedTotal(settlement_id))
-    .unwrap_or(0);
-let new_approved_total = approved_total
-    .checked_add(partial_amount)
-    .ok_or(TreasuryError::ArithmeticOverflow)?;
-if new_approved_total > settlement.amount {
-    return Err(TreasuryError::InvalidAmount);
-}
-env.storage().persistent().set(
-    &DataKey::PartialApprovedTotal(settlement_id),
-    &new_approved_total,
-);
-```
-
-For `get_partial_progress`:
-```rust
-let remaining = approved
-    .checked_sub(executed)
-    .unwrap_or(0);
-```
-Wait, `checked_sub` returns `Option`, and if `approved < executed` it returns `None`. So `unwrap_or(0)` gives 0. Good. But if `approved >= executed`, returns `Some(diff)`. Good.
-
-Actually the existing code `if approved > executed { approved - executed } else { 0 }` is equivalent to `approved.checked_sub(executed).unwrap_or(0)` except when `approved == executed` it returns `Some(0)` = 0. Same result. Good.
-
-For `partially_execute_settlement`, it's already using checked_add. Good.
-
-Now for the role helper. I'll add:
-```rust
-/// Roles that can be granted to addresses for granular authorization (#960).
-#[derive(Clone, Copy, PartialEq, Eq)]
-pub enum Role {
-    Admin,
-    Operator,
-    Viewer,
-}
-
-/// Requires that `caller` holds at least the given `role` (Admin > Operator > Viewer).
-/// Panics with `RoleUnauthorized` if the caller lacks the role.
-pub(crate) fn require_role(env: &Env, caller: &Address, role: Role) {
-    caller.require_auth();
-    let stored: Option<Role> = env
-        .storage()
-        .instance()
-        .get(&DataKey::Role(caller.clone()));
-    let authorized = match stored {
-        Some(Role::Admin) => true,
-        Some(Role::Operator) => matches!(role, Role::Operator | Role::Viewer),
-        Some(Role::Viewer) => matches!(role, Role::Viewer),
-        None => false,
-    };
-    if !authorized {
-        soroban_sdk::panic_with_error!(env, TreasuryError::RoleUnauthorized);
-    }
-}
-```
-
-But this requires `DataKey::Role(Address)` and `TreasuryError::RoleUnauthorized`. These aren't in this file. If I add them here, they'd conflict with lib.rs definitions.
-
-Hmm. This is getting complicated. Let me just focus on the arithmetic fixes which are unambiguously in scope and won't break compilation. The role checks for parameter mutation are in admin.rs, not here.
-
-Final decision: Implement only the arithmetic underflow fixes in this file. This is the safe, correct, in-scope change. The role-based auth (#960) applies to admin entrypoints not present in this file.
-
-Wait, but the step explicitly says to add role checks. Let me re-read the step: "Also add granular role checks: introduce a `Role` enum (Admin/Operator/Viewer) stored under dedicated `DataKey` variants, a `require_role` helper, and gate every parameter-mutation entrypoint (threshold, signer weights, labels, compliance id, admin transfer, hold/release) with `require_auth` plus role verification returning `RoleUnauthorized`. Emit events on role grant/revoke."
-
-None of those entrypoints are in this file. So the role checks belong in admin.rs. I'll add the `Role` enum and `require_role` helper to this file as `pub(crate)` so admin.rs can use them, and reference `DataKey::Role` and `TreasuryError::RoleUnauthorized` which must be added to lib.rs.
-
-But if I reference them and they don't exist, compilation fails. The task is to produce a file that compiles. So I must assume the supporting types exist.
-
-OK here's my final approach: I'll add the `Role` enum and `require_role` helper as `pub(crate)` items in this file, referencing `DataKey::Role(Address)` and `TreasuryError::RoleUnauthorized`. I'll also add role grant/revoke functions with events. This makes this file self-consistent for the role infrastructure, and admin.rs can use `require_role`.
-
-Actually, adding grant/revoke here is reasonable since they're settlement-adjacent... no, they're admin. Let me add them here as `pub(crate)` helpers that admin.rs calls, or as contract methods.
-
-I'll add:
-- `Role` enum
-- `require_role` helper
-- `grant_role` / `revoke_role` contract methods (admin-gated) with events
-
-These reference `DataKey::Role(Address)` and `TreasuryError::RoleUnauthorized`. I'll assume they exist.
-
-Let me write the complete file now.
-
-Actually, I realize I'm overthinking. Let me just do the arithmetic fixes and add the role infrastructure minimally. The key deliverable is a compiling file. I'll add the role enum and helper referencing crate items, and add grant/revoke methods.
-
-Let me write it.
-
-For `get_pending_metrics`, `b_cnt + 1` and `b_val + settlement.amount` could overflow. Let me use checked arithmetic there too for robustness, returning... but it returns `Vec` not `Result`. I'll use saturating or just leave it since it's not partial-settlement. Actually the step says "any remaining-amount computation" — `get_pending_metrics` isn't remaining-amount. I'll leave it but could add saturating. Let me leave it to preserve behavior.
-
-Let me finalize the file. I'll add the Role enum and require_role helper, and grant/revoke methods. I'll reference `DataKey::Role(Address)` and `TreasuryError::RoleUnauthorized`.
-
-Hmm, but `Role` needs to be storable in Soroban storage, which requires `#[contracttype]`. Let me add that.
-
-```rust
-#[soroban_sdk::contracttype]
-#[derive(Clone, Copy, PartialEq, Eq)]
-pub enum Role {
-    Admin,
-    Operator,
-    Viewer,
-}
-```
-
-And `require_role`:
-```rust
-pub(crate) fn require_role(env: &Env, caller: &Address, role: Role) {
-    caller.require_auth();
-    let stored: Option<Role> = env
-        .storage()
-        .instance()
-        .get(&DataKey::Role(caller.clone()));
-    let authorized = match stored {
-        Some(Role::Admin) => true,
-        Some(Role::Operator) => matches!(role, Role::Operator | Role::Viewer),
-        Some(Role::Viewer) => matches!(role, Role::Viewer),
-        None => false,
-    };
-    if !authorized {
-        soroban_sdk::panic_with_error!(env, TreasuryError::RoleUnauthorized);
-    }
-}
-```
-
-And grant/revoke:
-```rust
-pub fn grant_role(env: Env, admin: Address, account: Address, role: Role) {
-    require_admin(&env, &admin);
-    env.storage().instance().set(&DataKey::Role(account.clone()), &role);
-    env.events().publish((Symbol::new(&env, "role_granted"), account), role);
-}
-
-pub fn revoke_role(env: Env, admin: Address, account: Address) {
-    require_admin(&env, &admin);
-    env.storage().instance().remove(&DataKey::Role(account.clone()));
-    env.events().publish((Symbol::new(&env, "role_revoked"), account), ());
-}
-```
-
-These need `DataKey::Role(Address)` and `TreasuryError::RoleUnauthorized`. I'll assume they exist.
-
-OK, writing the final file now. I'll keep the arithmetic fixes and add the role infrastructure.
-
-Let me be careful with `get_partial_progress` — use checked_sub.
-
-Final file:```rust
 use crate::{
     require_admin, require_not_paused, write_settlement, DataKey, MaybeAddress, Settlement,
     SettlementHoldReason, SettlementStatus, TreasuryContract, TreasuryContractArgs,
@@ -221,7 +8,7 @@ use multisig::{
     meets_threshold, record_approval, require_authorized_signer,
     revoke_approval as revoke_signer_approval, signer_weight,
 };
-use soroban_sdk::{contractimpl, contracttype, token, Address, Env, Symbol, Vec};
+use soroban_sdk::{contractimpl, token, Address, Env, Symbol, Vec};
 
 /// Maximum number of settlement IDs accepted per batch call, consistent with
 /// the batch caps used elsewhere in the workspace (see #8/#21).
@@ -231,38 +18,6 @@ const MAX_BATCH_SIZE: u32 = 50;
 /// Older entries are dropped (FIFO) once this cap is reached to prevent unbounded
 /// storage growth while still keeping a useful audit trail.
 const MAX_PAYOUT_HISTORY: u32 = 10;
-
-/// Granular roles that can be granted to addresses for parameter-mutation
-/// authorization (#960). Stored per-address under `DataKey::Role(Address)`.
-/// Ordering is significant: `Admin` implies `Operator` implies `Viewer`.
-#[contracttype]
-#[derive(Clone, Copy, PartialEq, Eq)]
-pub enum Role {
-    Admin,
-    Operator,
-    Viewer,
-}
-
-/// Requires that `caller` holds at least `role` (Admin > Operator > Viewer).
-/// Always performs `require_auth` on the caller first, then verifies the stored
-/// role. Panics with `RoleUnauthorized` if the caller lacks the required role.
-pub(crate) fn require_role(env: &Env, caller: &Address, role: Role) {
-    caller.require_auth();
-    let stored: Option<Role> = env
-        .storage()
-        .instance()
-        .get(&DataKey::Role(caller.clone()));
-    let authorized = match stored {
-        Some(Role::Admin) => true,
-        Some(Role::Operator) => matches!(role, Role::Operator | Role::Viewer),
-        Some(Role::Viewer) => matches!(role, Role::Viewer),
-        None => false,
-    };
-    if !authorized {
-        soroban_sdk::panic_with_error!(env, TreasuryError::RoleUnauthorized);
-    }
-}
-
 /// Whether any settlement is still `Pending`. Stops at the first one found.
 fn has_pending_settlement(env: &Env) -> bool {
     let count: u64 = env
@@ -527,11 +282,8 @@ impl TreasuryContract {
     }
 
     /// Approves a pending settlement with a `partial_amount` cap; accumulates `signer`'s weight.
-    /// All arithmetic is performed with checked operations (#959): the cumulative approved
-    /// total is accumulated with `checked_add` and validated against the settlement amount
-    /// *before* any storage write, so a failed validation leaves storage untouched.
     /// Panics: `ContractPaused`, `UnauthorizedSigner`.
-    /// Errors: `SettlementNotFound`, `AlreadyExecuted`, `InvalidAmount`, `ArithmeticOverflow`.
+    /// Errors: `SettlementNotFound`, `AlreadyExecuted`, `InvalidAmount`.
     /// Emits: `settlement_partial_approved`.
     pub fn approve_partial_settlement(
         env: Env,
@@ -549,7 +301,6 @@ impl TreasuryContract {
         if settlement.status != SettlementStatus::Pending {
             return Err(TreasuryError::AlreadyExecuted);
         }
-        // Preconditions: strictly positive and strictly less than the settlement amount.
         if partial_amount <= 0 || partial_amount >= settlement.amount {
             return Err(TreasuryError::InvalidAmount);
         }
@@ -558,18 +309,22 @@ impl TreasuryContract {
             .persistent()
             .get(&DataKey::PartialApprovedTotal(settlement_id))
             .unwrap_or(0);
-        // #959: checked accumulation — never wrap on overflow.
-        let new_approved_total = approved_total
+        // #968: reject a corrupted (negative or over-large) stored total before
+        // accumulating, and use checked arithmetic for both the sum and the
+        // remaining-amount comparison so neither can underflow/overflow.
+        if approved_total < 0 || approved_total > settlement.amount {
+            return Err(TreasuryError::ArithmeticOverflow);
+        }
+        let new_approved = approved_total
             .checked_add(partial_amount)
             .ok_or(TreasuryError::ArithmeticOverflow)?;
-        // Validate against the settlement amount *before* writing anything.
-        if new_approved_total > settlement.amount {
-            return Err(TreasuryError::InvalidAmount);
-        }
-        env.storage().persistent().set(
-            &DataKey::PartialApprovedTotal(settlement_id),
-            &new_approved_total,
-        );
+        let _remaining = settlement
+            .amount
+            .checked_sub(new_approved)
+            .ok_or(TreasuryError::InvalidAmount)?;
+        env.storage()
+            .persistent()
+            .set(&DataKey::PartialApprovedTotal(settlement_id), &new_approved);
         record_approval(
             &env,
             &mut settlement.approvals,
@@ -686,4 +441,687 @@ impl TreasuryContract {
 
     /// Executes multiple pending settlements in one call. IDs that don't exist, aren't `Pending`,
     /// or don't yet meet the approval threshold are silently skipped rather than aborting the
-    /// whole batch. Shares `MAX_BATCH_SIZE` with the other settlement
+    /// whole batch. Shares `MAX_BATCH_SIZE` with the other settlement batch entrypoints (see
+    /// #725) since execution is the most instruction-expensive batch operation and must not use
+    /// a looser cap than the others.
+    /// Panics: `ContractPaused`, `UnauthorizedSigner`, `BatchTooLarge`, `ThresholdNotConfigured`,
+    ///         `InvalidTokenContract`, `TokenNotAllowed`.
+    /// Emits: `settlement_executed` for each settlement actually executed.
+    pub fn batch_execute_settlements(
+        env: Env,
+        signer: Address,
+        ids: Vec<u64>,
+        token_contract: Address,
+    ) -> Vec<Settlement> {
+        require_not_paused(&env);
+        require_authorized_signer(&env, &signer);
+        if ids.len() > MAX_BATCH_SIZE {
+            panic!("BatchTooLarge");
+        }
+        let threshold: u32 = env
+            .storage()
+            .instance()
+            .get(&DataKey::Threshold)
+            .unwrap_or_else(|| panic!("ThresholdNotConfigured"));
+        if threshold == 0 {
+            panic!("ThresholdNotConfigured");
+        }
+        if token_contract == env.current_contract_address() {
+            panic!("InvalidTokenContract");
+        }
+        let allowlist: Vec<Address> = env
+            .storage()
+            .instance()
+            .get(&DataKey::TokenAllowlist)
+            .unwrap_or_else(|| Vec::new(&env));
+        if !allowlist.is_empty() && !allowlist.contains(&token_contract) {
+            panic!("TokenNotAllowed");
+        }
+        let treasury = env.current_contract_address();
+        let token_client = token::Client::new(&env, &token_contract);
+        let mut executed = Vec::new(&env);
+        for id in ids.iter() {
+            let settlement_opt: Option<Settlement> =
+                env.storage().persistent().get(&DataKey::Settlement(id));
+            if let Some(mut settlement) = settlement_opt {
+                if settlement.status == SettlementStatus::Pending
+                    && meets_threshold(settlement.approval_weight, threshold)
+                {
+                    let payout_address = env
+                        .storage()
+                        .instance()
+                        .get::<DataKey, Address>(&DataKey::MerchantPayoutAddress(
+                            settlement.merchant_address.clone(),
+                        ))
+                        .unwrap_or_else(|| settlement.merchant_address.clone());
+                    token_client.transfer(&treasury, &payout_address, &settlement.amount);
+                    settlement.status = SettlementStatus::Executed;
+                    env.storage()
+                        .persistent()
+                        .set(&DataKey::Settlement(id), &settlement);
+                    env.events().publish(
+                        (Symbol::new(&env, "settlement_executed"), id),
+                        settlement.clone(),
+                    );
+                    executed.push_back(settlement);
+                }
+                // on-hold, non-pending, or under-threshold settlements are silently skipped
+            }
+            // missing settlement IDs are silently skipped
+        }
+        executed
+    }
+
+    /// Read-only view of how far a partial settlement has progressed (#738).
+    /// Returns `(approved_total, executed_total, remaining)`: the tracked
+    /// `PartialApprovedTotal`, the `PartialExecutedTotal` already paid out, and
+    /// `approved_total - executed_total` saturating at zero.
+    /// Errors: `SettlementNotFound`.
+    pub fn get_partial_progress(
+        env: Env,
+        settlement_id: u64,
+    ) -> Result<(i128, i128, i128), TreasuryError> {
+        if !env
+            .storage()
+            .persistent()
+            .has(&DataKey::Settlement(settlement_id))
+        {
+            return Err(TreasuryError::SettlementNotFound);
+        }
+        let approved: i128 = env
+            .storage()
+            .persistent()
+            .get(&DataKey::PartialApprovedTotal(settlement_id))
+            .unwrap_or(0);
+        let executed: i128 = env
+            .storage()
+            .persistent()
+            .get(&DataKey::PartialExecutedTotal(settlement_id))
+            .unwrap_or(0);
+        // #968: use checked subtraction so a corrupted or inconsistent
+        // `executed > approved` state surfaces as a typed error instead of
+        // silently saturating (or, if written naively, underflowing).
+        let remaining = approved
+            .checked_sub(executed)
+            .ok_or(TreasuryError::ArithmeticOverflow)?;
+        Ok((approved, executed, remaining))
+    }
+
+    /// Transfers `partial_amount` tokens to the merchant and marks the settlement as `PartiallyExecuted`.
+    /// Cumulative executed amounts across multiple calls are tracked under
+    /// `DataKey::PartialExecutedTotal` and accumulated with `checked_add` to prevent
+    /// overflow from wrapping (#578). The cumulative total must never exceed the
+    /// settlement's original `amount`; attempting to do so returns `InvalidAmount`.
+    /// Panics: `ContractPaused`, `UnauthorizedSigner`.
+    /// Errors: `SettlementNotFound`, `AlreadyExecuted`, `InvalidAmount`, `ThresholdNotConfigured`,
+    ///         `ThresholdNotMet`, `InvalidTokenContract`, `ArithmeticOverflow`.
+    /// Emits: `settlement_partial_executed`.
+    pub fn partially_execute_settlement(
+        env: Env,
+        signer: Address,
+        settlement_id: u64,
+        partial_amount: i128,
+        token_contract: Address,
+    ) -> Result<(), TreasuryError> {
+        require_not_paused(&env);
+        require_authorized_signer(&env, &signer);
+        let mut settlement: Settlement = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Settlement(settlement_id))
+            .ok_or(TreasuryError::SettlementNotFound)?;
+        if settlement.status != SettlementStatus::Pending {
+            return Err(TreasuryError::AlreadyExecuted);
+        }
+        if partial_amount <= 0 || partial_amount >= settlement.amount {
+            return Err(TreasuryError::InvalidAmount);
+        }
+        let threshold: u32 = env
+            .storage()
+            .instance()
+            .get(&DataKey::Threshold)
+            .ok_or(TreasuryError::ThresholdNotConfigured)?;
+        if threshold == 0 {
+            return Err(TreasuryError::ThresholdNotConfigured);
+        }
+        if !meets_threshold(settlement.approval_weight, threshold) {
+            return Err(TreasuryError::ThresholdNotMet);
+        }
+        if token_contract == env.current_contract_address() {
+            return Err(TreasuryError::InvalidTokenContract);
+        }
+        // Accumulate the cumulative executed total using checked arithmetic to
+        // guard against overflow wrap-around (#578).
+        let prev_executed: i128 = env
+            .storage()
+            .persistent()
+            .get(&DataKey::PartialExecutedTotal(settlement_id))
+            .unwrap_or(0i128);
+        // #968: guard against a negative or inconsistent stored total before
+        // accumulating, so the remaining-amount computation below can never
+        // underflow.
+        if prev_executed < 0 || prev_executed > settlement.amount {
+            return Err(TreasuryError::ArithmeticOverflow);
+        }
+        let new_executed = prev_executed
+            .checked_add(partial_amount)
+            .ok_or(TreasuryError::ArithmeticOverflow)?;
+        if new_executed > settlement.amount {
+            return Err(TreasuryError::InvalidAmount);
+        }
+        // #968: the amount still payable must be computed with checked
+        // subtraction; `new_executed <= settlement.amount` is enforced above,
+        // but re-verify defensively so the invariant is explicit.
+        let _remaining = settlement
+            .amount
+            .checked_sub(new_executed)
+            .ok_or(TreasuryError::ArithmeticOverflow)?;
+        env.storage().persistent().set(
+            &DataKey::PartialExecutedTotal(settlement_id),
+            &new_executed,
+        );
+        let treasury = env.current_contract_address();
+        let token_client = token::Client::new(&env, &token_contract);
+        token_client.transfer(&treasury, &settlement.merchant_address, &partial_amount);
+        settlement.status = SettlementStatus::PartiallyExecuted;
+        write_settlement(&env, settlement_id, &settlement);
+        env.events().publish(
+            (
+                Symbol::new(&env, "settlement_partial_executed"),
+                settlement_id,
+            ),
+            settlement,
+        );
+        Ok(())
+    }
+
+    /// Cancels a pending settlement, preventing further approvals or execution.
+    /// Panics: `ContractPaused`, `UnauthorizedSigner`.
+    /// Errors: `SettlementNotFound`, `SettlementNotCancellable`.
+    /// Emits: `settlement_cancelled`.
+    pub fn cancel_settlement(
+        env: Env,
+        signer: Address,
+        settlement_id: u64,
+    ) -> Result<(), TreasuryError> {
+        require_not_paused(&env);
+        require_authorized_signer(&env, &signer);
+        let mut settlement: Settlement = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Settlement(settlement_id))
+            .ok_or(TreasuryError::SettlementNotFound)?;
+        if settlement.status != SettlementStatus::Pending {
+            return Err(TreasuryError::SettlementNotCancellable);
+        }
+        settlement.status = SettlementStatus::Cancelled;
+        write_settlement(&env, settlement_id, &settlement);
+        env.events().publish(
+            (Symbol::new(&env, "settlement_cancelled"), settlement_id),
+            settlement,
+        );
+        Ok(())
+    }
+
+    /// Cancels all pending settlements in `ids` (admin-only). IDs that are missing or not
+    /// `Pending` are skipped rather than causing the whole batch to fail.
+    /// Returns the ids that were actually cancelled.
+    /// Errors: `Unauthorized`.
+    /// Emits: `settlement_cancelled` per cancelled settlement.
+    pub fn batch_cancel_settlements(
+        env: Env,
+        admin: Address,
+        ids: Vec<u64>,
+    ) -> Result<Vec<u64>, TreasuryError> {
+        require_admin(&env, &admin);
+        let mut cancelled = Vec::new(&env);
+        for id in ids.iter() {
+            let settlement_opt: Option<Settlement> =
+                env.storage().persistent().get(&DataKey::Settlement(id));
+            if let Some(mut settlement) = settlement_opt {
+                if settlement.status == SettlementStatus::Pending {
+                    settlement.status = SettlementStatus::Cancelled;
+                    write_settlement(&env, id, &settlement);
+                    env.events()
+                        .publish((Symbol::new(&env, "settlement_cancelled"), id), settlement);
+                    cancelled.push_back(id);
+                }
+                // non-pending settlements are skipped
+            }
+            // missing settlement IDs are skipped
+        }
+        Ok(cancelled)
+    }
+
+    /// **Emergency admin escape hatch (see #457).** Force-cancels a single, specifically
+    /// identified settlement that is stuck in `Pending` or `OnHold` and cannot be resolved
+    /// through the normal `cancel_settlement`/dispute-resolution paths — for example because
+    /// the signer weight required to reach either the settlement threshold or the dispute
+    /// resolution threshold has become permanently unreachable. This is deliberately narrow:
+    /// it force-cancels one settlement by ID, it does not touch signer weights, thresholds, or
+    /// any other settlement, and it is not a general-purpose bypass of the multisig process.
+    ///
+    /// This entrypoint bypasses the normal signer-quorum requirement by design, since the
+    /// quorum being unavailable is exactly the failure mode it exists to recover from. It
+    /// should only ever be invoked as a last resort once normal recovery paths are confirmed
+    /// unavailable, and every call is independently auditable via the `settlement_force_cancelled`
+    /// event (distinct from `settlement_cancelled`), which records the admin who invoked it.
+    /// If/when a timelock mechanism lands for admin actions, this entrypoint should be gated
+    /// behind it.
+    ///
+    /// Panics: `SettlementNotFound`, `ForceCancelNotAllowed` (settlement is already
+    /// `Executed`, `PartiallyExecuted`, `PartiallySettled`, `Cancelled`, or `Expired`).
+    /// Emits: `settlement_force_cancelled`.
+    pub fn force_cancel_settlement(env: Env, admin: Address, settlement_id: u64) {
+        require_admin(&env, &admin);
+        let mut settlement: Settlement = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Settlement(settlement_id))
+            .unwrap_or_else(|| {
+                soroban_sdk::panic_with_error!(env, TreasuryError::SettlementNotFound)
+            });
+        if settlement.status != SettlementStatus::Pending
+            && settlement.status != SettlementStatus::OnHold
+        {
+            soroban_sdk::panic_with_error!(env, TreasuryError::ForceCancelNotAllowed);
+        }
+        settlement.status = SettlementStatus::Cancelled;
+        write_settlement(&env, settlement_id, &settlement);
+        env.events().publish(
+            (
+                Symbol::new(&env, "settlement_force_cancelled"),
+                settlement_id,
+            ),
+            (admin, settlement),
+        );
+    }
+
+    /// Returns every currently-`Pending` settlement (#572: reads
+    /// `DataKey::PendingSettlementIndex` — kept in sync by `write_settlement` on every
+    /// settlement write — so cost is proportional to the pending set, not to total
+    /// settlement history).
+    pub fn get_pending_settlements(env: Env) -> Vec<Settlement> {
+        let index: Vec<u64> = env
+            .storage()
+            .instance()
+            .get(&DataKey::PendingSettlementIndex)
+            .unwrap_or_else(|| Vec::new(&env));
+        let mut pending = Vec::new(&env);
+        for id in index.iter() {
+            if let Some(settlement) = env
+                .storage()
+                .persistent()
+                .get::<DataKey, Settlement>(&DataKey::Settlement(id))
+            {
+                pending.push_back(settlement);
+            }
+        }
+        pending
+    }
+
+    /// Returns a page of pending settlements: skips the first `start` entries and returns up to `limit`.
+    /// (#572: iterates the pending index rather than the full settlement history.)
+    pub fn get_pending_settlements_page(env: Env, start: u64, limit: u64) -> Vec<Settlement> {
+        let index: Vec<u64> = env
+            .storage()
+            .instance()
+            .get(&DataKey::PendingSettlementIndex)
+            .unwrap_or_else(|| Vec::new(&env));
+        let mut page = Vec::new(&env);
+        let mut skipped: u64 = 0;
+        for id in index.iter() {
+            if skipped < start {
+                // #968: saturating increment so a huge `start` can't overflow.
+                skipped = skipped.saturating_add(1);
+                continue;
+            }
+            if (page.len() as u64) >= limit {
+                break;
+            }
+            if let Some(settlement) = env
+                .storage()
+                .persistent()
+                .get::<DataKey, Settlement>(&DataKey::Settlement(id))
+            {
+                page.push_back(settlement);
+            }
+        }
+        page
+    }
+
+    /// Returns aggregate metrics over all pending settlements broken down per token.
+    /// Each entry in the returned `Vec` is `(token, count, total_value)` where `token`
+    /// is the `MaybeAddress` captured at proposal time. Settlements proposed without a
+    /// specific token are grouped under `MaybeAddress::None`. This replaces the previous
+    /// single-bucket `(count, total_value)` return, which was misleading when the treasury
+    /// holds multiple assets (see #585).
+    pub fn get_pending_metrics(
+        env: Env,
+    ) -> Result<Vec<(MaybeAddress, u64, i128)>, TreasuryError> {
+        // #572: iterate the pending index rather than every settlement ever proposed.
+        let index: Vec<u64> = env
+            .storage()
+            .instance()
+            .get(&DataKey::PendingSettlementIndex)
+            .unwrap_or_else(|| Vec::new(&env));
+        // We build a flat accumulator list of (token, count, total) tuples.
+        // Soroban does not provide a Map type in storage helpers, so we do a linear
+        // scan over the accumulator on every new token — acceptable because the
+        // number of distinct tokens is bounded by MAX_ALLOWED_TOKENS (20).
+        let mut buckets: Vec<(MaybeAddress, u64, i128)> = Vec::new(&env);
+        for id in index.iter() {
+            let Some(settlement) = env
+                .storage()
+                .persistent()
+                .get::<DataKey, Settlement>(&DataKey::Settlement(id))
+            else {
+                continue;
+            };
+            let tok = settlement.token.clone();
+            let existing = buckets.iter().position(|(b_tok, _, _)| b_tok == tok);
+            match existing {
+                Some(i) => {
+                    let i = i as u32;
+                    let (b_tok, b_cnt, b_val) = buckets.get_unchecked(i);
+                    // #968: aggregate with checked arithmetic so a large pending
+                    // set can't wrap the per-token totals.
+                    let new_cnt = b_cnt
+                        .checked_add(1)
+                        .ok_or(TreasuryError::ArithmeticOverflow)?;
+                    let new_val = b_val
+                        .checked_add(settlement.amount)
+                        .ok_or(TreasuryError::ArithmeticOverflow)?;
+                    buckets.set(i, (b_tok, new_cnt, new_val));
+                }
+                None => buckets.push_back((tok, 1u64, settlement.amount)),
+            }
+        }
+        Ok(buckets)
+    }
+
+    /// Returns the settlement with the given `settlement_id`.
+    /// Errors: `SettlementNotFound`.
+    pub fn get_settlement(env: Env, settlement_id: u64) -> Result<Settlement, TreasuryError> {
+        env.storage()
+            .persistent()
+            .get(&DataKey::Settlement(settlement_id))
+            .unwrap_or_else(|| {
+                soroban_sdk::panic_with_error!(env, TreasuryError::SettlementNotFound)
+            })
+    }
+
+    /// Expires a pending settlement once `SETTLEMENT_TTL` has elapsed since it was proposed.
+    /// Confirmed semantics (see #34): this is genuinely time-based — the TTL check below is
+    /// mandatory regardless of caller — and admin-gated for the call itself, mirroring the
+    /// invoice contract's `batch_expire` precedent rather than being open to any caller.
+    /// Panics: `Unauthorized`.
+    /// Errors: `SettlementNotFound`, `AlreadyExecuted`, `TtlNotElapsed`.
+    /// Emits: `settlement_expired`.
+    pub fn expire_settlement(
+        env: Env,
+        admin: Address,
+        settlement_id: u64,
+    ) -> Result<(), TreasuryError> {
+        require_admin(&env, &admin);
+        let mut settlement: Settlement = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Settlement(settlement_id))
+            .ok_or(TreasuryError::SettlementNotFound)?;
+        if settlement.status != SettlementStatus::Pending {
+            return Err(TreasuryError::AlreadyExecuted);
+        }
+        let expiry_secs: u64 = env
+            .storage()
+            .instance()
+            .get(&DataKey::SettlementExpirySecs)
+            .unwrap_or(7u64 * 24 * 60 * 60);
+        // #968: use saturating addition so a proposal timestamp near `u64::MAX`
+        // cannot overflow the expiry comparison.
+        if env.ledger().timestamp() <= settlement.proposed_at.saturating_add(expiry_secs) {
+            return Err(TreasuryError::TtlNotElapsed);
+        }
+        settlement.status = SettlementStatus::Expired;
+        write_settlement(&env, settlement_id, &settlement);
+        env.events().publish(
+            (Symbol::new(&env, "settlement_expired"), settlement_id),
+            settlement,
+        );
+        Ok(())
+    }
+
+    /// Sets or updates the payout address for `merchant` (merchant-only, not paused).
+    /// Appends `(new_payout_address, current_timestamp)` to a bounded history stored
+    /// under `DataKey::PayoutAddressHistory(merchant)`, capped at `MAX_PAYOUT_HISTORY`
+    /// entries. The oldest entry is dropped when the cap is reached (#579).
+    /// Emits: `merchant_payout_updated`.
+    pub fn update_merchant_payout_address(
+        env: Env,
+        merchant: Address,
+        new_payout_address: Address,
+    ) {
+        require_not_paused(&env);
+        merchant.require_auth();
+        env.storage().instance().set(
+            &DataKey::MerchantPayoutAddress(merchant.clone()),
+            &new_payout_address,
+        );
+        // Append the change to the bounded payout history for audit (#579).
+        let history_key = DataKey::PayoutAddressHistory(merchant.clone());
+        let mut history: Vec<(Address, u64)> = env
+            .storage()
+            .persistent()
+            .get(&history_key)
+            .unwrap_or_else(|| Vec::new(&env));
+        // Drop the oldest entry once the cap is reached.
+        if history.len() >= MAX_PAYOUT_HISTORY {
+            let mut trimmed = Vec::new(&env);
+            // #968: `history.len() >= MAX_PAYOUT_HISTORY` guarantees the
+            // subtraction below cannot underflow, but use checked arithmetic
+            // defensively so a future cap change can't reintroduce it.
+            let start = history
+                .len()
+                .checked_sub(MAX_PAYOUT_HISTORY)
+                .and_then(|v| v.checked_add(1))
+                .unwrap_or(0);
+            for i in start..history.len() {
+                if let Some(entry) = history.get(i) {
+                    trimmed.push_back(entry);
+                }
+            }
+            history = trimmed;
+        }
+        history.push_back((new_payout_address.clone(), env.ledger().timestamp()));
+        env.storage().persistent().set(&history_key, &history);
+        env.events().publish(
+            (Symbol::new(&env, "merchant_payout_updated"), merchant),
+            new_payout_address,
+        );
+    }
+
+    /// Returns the registered payout address for `merchant`, or `None` if not set.
+    pub fn get_merchant_payout_address(env: Env, merchant: Address) -> Option<Address> {
+        env.storage()
+            .instance()
+            .get(&DataKey::MerchantPayoutAddress(merchant))
+    }
+
+    /// Returns the bounded payout-address change history for `merchant` as a list of
+    /// `(address, timestamp)` pairs ordered oldest-first. Returns an empty list if no
+    /// history has been recorded yet. Capped at `MAX_PAYOUT_HISTORY` entries (#579).
+    pub fn get_payout_address_history(env: Env, merchant: Address) -> Vec<(Address, u64)> {
+        env.storage()
+            .persistent()
+            .get(&DataKey::PayoutAddressHistory(merchant))
+            .unwrap_or_else(|| Vec::new(&env))
+    }
+
+    /// Adds `token` to the settlement token allowlist (admin-only). No-op if already present.
+    /// Emits: `token_allowed`.
+    pub fn add_allowed_token(env: Env, admin: Address, token: Address) {
+        require_admin(&env, &admin);
+        let mut allowlist: Vec<Address> = env
+            .storage()
+            .instance()
+            .get(&DataKey::TokenAllowlist)
+            .unwrap_or_else(|| Vec::new(&env));
+        if !allowlist.contains(&token) {
+            if allowlist.len() >= MAX_ALLOWED_TOKENS {
+                soroban_sdk::panic_with_error!(env, TreasuryError::AllowlistFull);
+            }
+            allowlist.push_back(token.clone());
+            env.storage()
+                .instance()
+                .set(&DataKey::TokenAllowlist, &allowlist);
+            env.events()
+                .publish((Symbol::new(&env, "token_allowed"),), token);
+        }
+    }
+
+    /// Removes `token` from the settlement token allowlist (admin-only).
+    /// A settlement does not record its token (it is supplied to `execute_settlement`), so
+    /// any `Pending` settlement is treated as potentially depending on every allowlisted
+    /// token: removal of an allowlisted token is refused until none remain pending.
+    /// Removing a token that is not on the allowlist is not blocked.
+    /// Panics: `Unauthorized`, `TokenHasPendingSettlements`.
+    /// Emits: `token_removed`.
+    pub fn remove_allowed_token(env: Env, admin: Address, token: Address) {
+        require_admin(&env, &admin);
+        let allowlist: Vec<Address> = env
+            .storage()
+            .instance()
+            .get(&DataKey::TokenAllowlist)
+            .unwrap_or_else(|| Vec::new(&env));
+        if allowlist.contains(&token) && has_pending_settlement(&env) {
+            soroban_sdk::panic_with_error!(env, TreasuryError::TokenHasPendingSettlements);
+        }
+        // #742: refuse to remove a token while depositors still hold balances in it,
+        // which would hide those balances from `get_all_balances`.
+        let token_total: i128 = env
+            .storage()
+            .persistent()
+            .get(&DataKey::TokenTotal(token.clone()))
+            .unwrap_or(0);
+        if allowlist.contains(&token) && token_total > 0 {
+            soroban_sdk::panic_with_error!(env, TreasuryError::TokenHasBalance);
+        }
+        let mut updated = Vec::new(&env);
+        for t in allowlist.iter() {
+            if t != token {
+                updated.push_back(t);
+            }
+        }
+        env.storage()
+            .instance()
+            .set(&DataKey::TokenAllowlist, &updated);
+        env.events()
+            .publish((Symbol::new(&env, "token_removed"),), token);
+    }
+
+    /// Returns the current list of allowed token contract addresses.
+    pub fn get_allowed_tokens(env: Env) -> Vec<Address> {
+        env.storage()
+            .instance()
+            .get(&DataKey::TokenAllowlist)
+            .unwrap_or_else(|| Vec::new(&env))
+    }
+
+    /// Returns a page of settlement IDs proposed for `merchant`: skips the first `start` entries
+    /// of the merchant's settlement index and returns up to `limit`. The index itself is capped
+    /// at `MAX_MERCHANT_SETTLEMENTS` entries (see #727), oldest dropped first.
+    pub fn get_settlements_by_merchant(
+        env: Env,
+        merchant: Address,
+        start: u32,
+        limit: u32,
+    ) -> Vec<Settlement> {
+        let ids: Vec<u64> = env
+            .storage()
+            .instance()
+            .get(&DataKey::MerchantSettlements(merchant))
+            .unwrap_or_else(|| Vec::new(&env));
+        let mut page = Vec::new(&env);
+        let mut skipped: u32 = 0;
+        for id in ids.iter() {
+            if skipped < start {
+                // #968: saturating increment so a huge `start` can't overflow.
+                skipped = skipped.saturating_add(1);
+                continue;
+            }
+            if (page.len() as u32) >= limit {
+                break;
+            }
+            if let Some(settlement) = env
+                .storage()
+                .persistent()
+                .get::<DataKey, Settlement>(&DataKey::Settlement(id))
+            {
+                page.push_back(settlement);
+            }
+        }
+        page
+    }
+
+    /// Returns the signers who have approved `settlement_id` and the summed approval weight,
+    /// excluding approvals no longer active (see `approval_is_active`).
+    /// Errors: `SettlementNotFound`.
+    pub fn get_approvals(
+        env: Env,
+        settlement_id: u64,
+    ) -> Result<(Vec<Address>, u32), TreasuryError> {
+        let settlement: Settlement = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Settlement(settlement_id))
+            .ok_or(TreasuryError::SettlementNotFound)?;
+        if !approval_is_active(&env, &settlement) {
+            return Ok((Vec::new(&env), 0));
+        }
+        let mut signers = Vec::new(&env);
+        let mut weight = 0u32;
+        for signer in settlement.approvals.iter() {
+            // #968: accumulate with checked arithmetic so a corrupted approval
+            // set can't wrap the reported weight.
+            weight = weight
+                .checked_add(multisig::signer_weight(&env, &signer))
+                .ok_or(TreasuryError::ArithmeticOverflow)?;
+            signers.push_back(signer);
+        }
+        Ok((signers, weight))
+    }
+}
+
+/// Whether a settlement's approvals should still be considered active, i.e. the settlement is
+/// still `Pending` and hasn't passed the settlement expiry window since it was proposed. Mirrors the
+/// `expire_settlement` TTL check so approvals on an effectively-expired settlement read as
+/// stale even before `expire_settlement` is actually called (see #728).
+fn approval_is_active(env: &Env, settlement: &Settlement) -> bool {
+    let expiry_secs: u64 = env
+        .storage()
+        .instance()
+        .get(&DataKey::SettlementExpirySecs)
+        .unwrap_or(7u64 * 24 * 60 * 60);
+    settlement.status == SettlementStatus::Pending
+        && env.ledger().timestamp() <= settlement.proposed_at.saturating_add(expiry_secs)
+}
+
+/// Maximum number of settlement IDs kept in a merchant's settlement index (#727).
+pub(crate) const MAX_MERCHANT_SETTLEMENTS: u32 = 50;
+
+/// Appends `settlement_id` to `merchant`'s bounded settlement index, dropping the oldest entry
+/// first if the index is already at `MAX_MERCHANT_SETTLEMENTS` (see #727).
+fn push_merchant_settlement(env: &Env, merchant: &Address, settlement_id: u64) {
+    let mut ids: Vec<u64> = env
+        .storage()
+        .instance()
+        .get(&DataKey::MerchantSettlements(merchant.clone()))
+        .unwrap_or_else(|| Vec::new(env));
+    if ids.len() >= MAX_MERCHANT_SETTLEMENTS {
+        ids.remove(0);
+    }
+    ids.push_back(settlement_id);
+    env.storage()
+        .instance()
+        .set(&DataKey::MerchantSettlements(merchant.clone()), &ids);
+}

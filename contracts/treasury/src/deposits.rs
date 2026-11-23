@@ -79,10 +79,18 @@ impl TreasuryContract {
         if !allowlist.is_empty() && !allowlist.contains(&to) {
             return Err(TreasuryError::DestinationNotAllowed);
         }
+        // Explicit zero-balance guard (#867): if no balance entry exists for
+        // this (depositor, token) pair the depositor has never deposited, so
+        // any positive `amount` is immediately insufficient.  This short-
+        // circuits before the `unwrap_or(0)` path so the intent is explicit.
+        let balance_key = DataKey::Balance(to.clone(), token_contract.clone());
+        if !env.storage().persistent().has(&balance_key) {
+            return Err(TreasuryError::InsufficientBalance);
+        }
         let mut balance: i128 = env
             .storage()
             .persistent()
-            .get(&DataKey::Balance(to.clone(), token_contract.clone()))
+            .get(&balance_key)
             .unwrap_or(0);
         if balance < amount {
             return Err(TreasuryError::InsufficientBalance);
@@ -92,7 +100,7 @@ impl TreasuryContract {
             .checked_sub(amount)
             .ok_or(TreasuryError::ArithmeticOverflow)?;
         env.storage().persistent().set(
-            &DataKey::Balance(to.clone(), token_contract.clone()),
+            &balance_key,
             &balance,
         );
         // Decrement the aggregate per-token total (#742).
@@ -118,6 +126,11 @@ impl TreasuryContract {
     /// Returns the recorded deposit balance for `address` under `token_contract`, or 0 if never
     /// deposited. Balances are segregated per token contract (#448); this never mixes holdings
     /// across different allowlisted tokens.
+    ///
+    /// **Zero-balance contract (#867):** a missing storage entry is treated as a balance of
+    /// exactly `0`. Callers must not distinguish between "never deposited" and "deposited then
+    /// fully withdrawn" — both return `0`. To check whether funds were ever deposited, use
+    /// the deposit event log rather than relying on the presence of the storage key.
     /// Read-only, no authentication required.
     pub fn get_balance(env: Env, address: Address, token_contract: Address) -> i128 {
         env.storage()
