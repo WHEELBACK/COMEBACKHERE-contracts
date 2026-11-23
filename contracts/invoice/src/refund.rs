@@ -255,6 +255,20 @@ pub fn transfer_net_refund(
     recipient: &Address,
     amount: i128,
 ) -> Result<(), InvoiceError> {
+    // #885: a negative payout is never legitimate; reject it as a typed error
+    // instead of handing it to the token contract, which would trap.
+    if amount < 0 {
+        return Err(InvoiceError::InvalidAmount);
+    }
+    // #885: a zero net payout (100% fee policy, or fees that consume the whole
+    // amount) has nothing to move. Skipping the cross-contract call keeps the
+    // refund from depending on how the token treats a zero-value transfer or an
+    // empty escrow balance: tokens that reject `amount == 0`, or an escrow that
+    // has already been drained to zero, must not leave the invoice stuck in
+    // `RefundRequested` when the payer is owed nothing.
+    if amount == 0 {
+        return Ok(());
+    }
     let from = env.current_contract_address();
     let transfer = token::Client::new(env, token_contract).try_transfer(&from, recipient, &amount);
     match transfer {
