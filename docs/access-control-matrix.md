@@ -253,6 +253,39 @@ Source: `src/lib.rs`.
 | `get_emergency_pause_admin` | none | Permissionless (read-only) |
 | `get_emergency_paused_at` | none | Permissionless (read-only) |
 
+## `contracts/recovery-manager`
+
+Source: `src/lib.rs`.
+
+The contract stores a role registry (`DataKey::Role(Address) -> Role`) and
+every mutating entrypoint resolves the caller's role through
+`require_role(&env, &caller, &[Role::...])`, which calls
+`caller.require_auth()` and then checks the stored role membership. A caller
+with no stored role is rejected with `Error::Unauthorized`. Role grants and
+revocations are themselves role-gated and emit `role_granted` /
+`role_revoked` events.
+
+| Entrypoint | Auth check in source | Category |
+|---|---|---|
+| `initialize` | `admin.require_auth()`; only succeeds once (`AlreadyInitialized` guard); installs `admin` as `Role::Admin` | Self-auth (bootstrap) |
+| `grant_role` | `require_role(&env, &admin, &[Role::Admin])` — grants `role` to `account`; emits `role_granted` | Admin-only |
+| `revoke_role` | `require_role(&env, &admin, &[Role::Admin])` — refuses to revoke the last `Role::Admin` (`CannotRevokeLastAdmin`); emits `role_revoked` | Admin-only |
+| `get_role` | none | Permissionless (read-only) |
+| `set_recovery_threshold` | `require_role(&env, &caller, &[Role::Admin])` | Admin-only |
+| `get_recovery_threshold` | none | Permissionless (read-only) |
+| `set_guardian_threshold` | `require_role(&env, &caller, &[Role::Admin, Role::Guardian])` | Admin or guardian |
+| `get_guardian_threshold` | none | Permissionless (read-only) |
+| `set_recovery_delay` | `require_role(&env, &caller, &[Role::Admin])` | Admin-only |
+| `get_recovery_delay` | none | Permissionless (read-only) |
+| `set_max_recovery_amount` | `require_role(&env, &caller, &[Role::Admin, Role::Operator])` | Admin or operator |
+| `get_max_recovery_amount` | none | Permissionless (read-only) |
+| `set_guardian` | `require_role(&env, &caller, &[Role::Admin])` — adds/removes a guardian in the bounded guardian set | Admin-only |
+| `is_guardian` | none | Permissionless (read-only) |
+| `pause` | `require_role(&env, &caller, &[Role::Admin, Role::Guardian])` | Admin or guardian |
+| `unpause` | `require_role(&env, &caller, &[Role::Admin])` | Admin-only |
+| `is_paused` | none | Permissionless (read-only) |
+| `get_admin` | none | Permissionless (read-only) |
+
 ## Discrepancies found
 
 Two gaps surfaced while cross-checking source against doc comments / sibling

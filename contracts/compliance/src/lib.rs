@@ -30,6 +30,10 @@
 #![no_std]
 
 pub use compliance_errors::ComplianceError;
+/// Alias kept for entrypoints and tests that historically referenced `ContractError`
+/// (e.g. `bulk_get_address_status`). The workspace has a single compliance
+/// error enum, so this is the same type under a second name.
+pub use compliance_errors::ComplianceError as ContractError;
 use soroban_sdk::{
     contract, contractimpl, contracttype, xdr::ToXdr, Address, Bytes, BytesN, Env, Symbol, Vec,
 };
@@ -156,58 +160,26 @@ pub struct StatusHistoryEntry {
     pub actor: Address,
 }
 
-/// Primary error type for the compliance contract.
+/// Human-readable description of a [`ComplianceError`], useful for client debugging.
 ///
-/// Variants must only be appended at the end (highest numeric value) to preserve
-/// on-chain backwards compatibility. Range: 1..=11 (see `ARCHITECTURE.md`).
-#[contracterror]
-#[derive(Copy, Clone, Debug, PartialEq)]
-#[repr(u32)]
-pub enum ContractError {
-    Unauthorized = 1,
-    ContractPaused = 2,
-    AlreadyInitialized = 3,
-    BatchTooLarge = 4,
-    AddressIndexFull = 5,
-    /// A bulk allow/block call was made before [`BULK_OP_COOLDOWN_SECS`] elapsed since the
-    /// caller's previous bulk call (see #454).
-    BulkOperationCooldown = 6,
-    /// `migrate` was called while storage is at a schema version it has no
-    /// migration path from (see #610).
-    UnexpectedSchemaVersion = 7,
-    // 8 and 9 were each originally merged as `= 7` by parallel PRs; main never
-    // compiled with them in place, so they are appended here in merge order.
-    /// An operator tried to clear or override a block placed by the admin.
-    OperatorCannotClearAdminBlock = 8,
-    /// `add_operator` called when `MAX_OPERATORS` operators are already set.
-    OperatorSetFull = 9,
-    /// `set_jurisdiction` was given a code that is not 2-3 uppercase ASCII letters or digits.
-    InvalidJurisdictionCode = 10,
-    /// `accept_admin` or `cancel_admin_transfer` called with no pending admin transfer.
-    NoPendingAdmin = 11,
-}
-
-impl ContractError {
-    /// Human-readable description of the error, useful for client debugging.
-    ///
-    /// Soroban `#[contracterror]` variants are transmitted as numeric codes, so
-    /// clients rely on this mapping (or the README) to surface a friendly message.
-    pub fn message(&self) -> &'static str {
-        match self {
-            ContractError::Unauthorized => "caller is not authorised for this operation",
-            ContractError::ContractPaused => "contract is paused",
-            ContractError::AlreadyInitialized => "contract has already been initialised",
-            ContractError::BatchTooLarge => "batch exceeds the maximum allowed size",
-            ContractError::AddressIndexFull => "address index is full",
-            ContractError::BulkOperationCooldown => "bulk operation cooldown has not elapsed",
-            ContractError::UnexpectedSchemaVersion => "unexpected schema version",
-            ContractError::OperatorCannotClearAdminBlock => {
-                "operator cannot clear an admin-placed block"
-            }
-            ContractError::OperatorSetFull => "operator set is full",
-            ContractError::InvalidJurisdictionCode => "invalid jurisdiction code",
-            ContractError::NoPendingAdmin => "no pending admin transfer",
+/// Soroban `#[contracterror]` variants are transmitted as numeric codes, so
+/// clients rely on this mapping (or the README) to surface a friendly message.
+pub fn compliance_error_message(err: ComplianceError) -> &'static str {
+    match err {
+        ComplianceError::AlreadyInitialized => "contract has already been initialised",
+        ComplianceError::Unauthorized => "caller is not authorised for this operation",
+        ComplianceError::ContractPaused => "contract is paused",
+        ComplianceError::BatchTooLarge => "batch exceeds the maximum allowed size",
+        ComplianceError::AddressIndexFull => "address index is full",
+        ComplianceError::BulkOperationCooldown => "bulk operation cooldown has not elapsed",
+        ComplianceError::UnexpectedSchemaVersion => "unexpected schema version",
+        ComplianceError::OperatorCannotClearAdminBlock => {
+            "operator cannot clear an admin-placed block"
         }
+        ComplianceError::OperatorSetFull => "operator set is full",
+        ComplianceError::InvalidJurisdictionCode => "invalid jurisdiction code",
+        ComplianceError::NoPendingAdmin => "no pending admin transfer",
+        ComplianceError::InvalidTierLimit => "invalid tier limit",
     }
 }
 
