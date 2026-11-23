@@ -67,10 +67,31 @@ pub fn split_bps_i128(amount: i128, bps: u32) -> Option<(i128, i128)> {
     Some((first, amount.checked_sub(first)?))
 }
 
+/// Checked `a - b` on `i128` token amounts.
+///
+/// Returns `None` when the subtraction would underflow or overflow `i128`
+/// instead of wrapping, so settlement math can map that onto its own error
+/// rather than relying on release-mode behaviour. This is the single audited
+/// subtraction used by partial-settlement computations (see
+/// [`split_bps_i128`], which derives its remainder the same way).
+pub fn checked_sub_i128(a: i128, b: i128) -> Option<i128> {
+    a.checked_sub(b)
+}
+
+/// Checked `a + b` on `i128` token amounts.
+///
+/// Returns `None` when the addition would overflow `i128` instead of wrapping.
+/// Pairs with [`checked_sub_i128`] so settlement code never mixes a checked
+/// subtraction with an unchecked addition (or vice versa).
+pub fn checked_add_i128(a: i128, b: i128) -> Option<i128> {
+    a.checked_add(b)
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
-        apply_bps_i128, bps_denominator_i128, is_valid_bps, split_bps_i128, BPS_DENOMINATOR,
+        apply_bps_i128, bps_denominator_i128, checked_add_i128, checked_sub_i128, is_valid_bps,
+        split_bps_i128, BPS_DENOMINATOR,
     };
 
     #[test]
@@ -131,5 +152,74 @@ mod tests {
     #[test]
     fn split_reports_overflow() {
         assert_eq!(split_bps_i128(i128::MAX, BPS_DENOMINATOR), None);
+    }
+
+    #[test]
+    fn checked_sub_handles_ordinary_values() {
+        assert_eq!(checked_sub_i128(1_000, 400), Some(600));
+        assert_eq!(checked_sub_i128(1_000, 1_000), Some(0));
+        assert_eq!(checked_sub_i128(0, 1_000), Some(-1_000));
+        assert_eq!(checked_sub_i128(-1_000, -400), Some(-600));
+    }
+
+    #[test]
+    fn checked_sub_reports_underflow_and_overflow() {
+        // Underflow: subtracting a positive from i128::MIN.
+        assert_eq!(checked_sub_i128(i128::MIN, 1), None);
+        assert_eq!(checked_sub_i128(i128::MIN, i128::MAX), None);
+        // Overflow: subtracting a negative from i128::MAX.
+        assert_eq!(checked_sub_i128(i128::MAX, -1), None);
+        assert_eq!(checked_sub_i128(i128::MAX, i128::MIN), None);
+    }
+
+    #[test]
+    fn checked_sub_boundaries_are_exact() {
+        assert_eq!(checked_sub_i128(i128::MAX, i128::MAX), Some(0));
+        assert_eq!(checked_sub_i128(i128::MIN, i128::MIN), Some(0));
+        assert_eq!(checked_sub_i128(i128::MAX, 0), Some(i128::MAX));
+        assert_eq!(checked_sub_i128(i128::MIN, 0), Some(i128::MIN));
+        assert_eq!(checked_sub_i128(0, i128::MIN), None);
+        assert_eq!(checked_sub_i128(-1, i128::MAX), None);
+    }
+
+    #[test]
+    fn checked_add_handles_ordinary_values() {
+        assert_eq!(checked_add_i128(1_000, 400), Some(1_400));
+        assert_eq!(checked_add_i128(1_000, -400), Some(600));
+        assert_eq!(checked_add_i128(-1_000, -400), Some(-1_400));
+        assert_eq!(checked_add_i128(0, 0), Some(0));
+    }
+
+    #[test]
+    fn checked_add_reports_overflow_and_underflow() {
+        assert_eq!(checked_add_i128(i128::MAX, 1), None);
+        assert_eq!(checked_add_i128(i128::MAX, i128::MAX), None);
+        assert_eq!(checked_add_i128(i128::MIN, -1), None);
+        assert_eq!(checked_add_i128(i128::MIN, i128::MIN), None);
+    }
+
+    #[test]
+    fn checked_add_boundaries_are_exact() {
+        assert_eq!(checked_add_i128(i128::MAX, 0), Some(i128::MAX));
+        assert_eq!(checked_add_i128(i128::MIN, 0), Some(i128::MIN));
+        assert_eq!(checked_add_i128(i128::MAX, i128::MIN), Some(-1));
+        assert_eq!(checked_add_i128(i128::MIN, i128::MAX), Some(-1));
+        assert_eq!(checked_add_i128(i128::MAX, -i128::MAX), Some(0));
+    }
+
+    #[test]
+    fn checked_helpers_round_trip() {
+        // (a - b) + b == a whenever neither step overflows.
+        let cases = [
+            (0i128, 0i128),
+            (1_234_567, 765_432),
+            (-1_234_567, 765_432),
+            (i128::MAX, i128::MAX),
+            (i128::MIN, i128::MIN),
+        ];
+        for (a, b) in cases {
+            let diff = checked_sub_i128(a, b).expect("difference fits");
+            assert_eq!(checked_add_i128(diff, b), Some(a));
+        }
     }
 }

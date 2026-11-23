@@ -160,3 +160,106 @@ fn each_signer_has_independent_timestamp() {
     assert_eq!(client.get_signer_last_active(&signer_b), Some(2_000));
     assert_eq!(client.get_signer_last_active(&signer_c), Some(3_000));
 }
+
+// ── Role gating: non-signers cannot mutate signer activity state ──────────
+
+#[test]
+fn non_signer_approval_does_not_record_activity() {
+    let env = Env::default();
+    let (client, admin) = setup(&env, 2);
+
+    let merchant = Address::generate(&env);
+    let sid = client.propose_settlement(&admin, &merchant, &1_000_000, &0_u64);
+
+    // A stranger who was never granted the signer role must not be able to
+    // approve, and therefore must not gain an activity timestamp.
+    let stranger = Address::generate(&env);
+    let result = client.try_approve_settlement(&stranger, &sid);
+    assert!(result.is_err(), "non-signer approval must be rejected");
+    assert_eq!(client.get_signer_last_active(&stranger), None);
+}
+
+#[test]
+fn revoked_signer_cannot_update_activity() {
+    let env = Env::default();
+    let (client, admin) = setup(&env, 2);
+
+    let backup = Address::generate(&env);
+    client.set_signer(&admin, &backup, &1);
+
+    let merchant = Address::generate(&env);
+    let sid = client.propose_settlement(&admin, &merchant, &1_000_000, &0_u64);
+
+    // Revoke the backup signer's role.
+    client.set_signer(&admin, &backup, &0);
+
+    env.ledger().with_mut(|l| l.timestamp = 4_000);
+    let result = client.try_approve_settlement(&backup, &sid);
+    assert!(result.is_err(), "revoked signer approval must be rejected");
+    assert_eq!(client.get_signer_last_active(&backup), None);
+}
+
+#[test]
+fn non_signer_cannot_vote_dispute_resolution() {
+    let env = Env::default();
+    let (client, admin) = setup(&env, 1);
+
+    let merchant = Address::generate(&env);
+    let claimant = Address::generate(&env);
+    let sid = client.propose_settlement(&admin, &merchant, &5_000_000, &0_u64);
+    let did = client.raise_dispute(&claimant, &sid, &merchant, &1_000_000, &9_999_999, &None);
+
+    let stranger = Address::generate(&env);
+    let result = client.try_vote_dispute_resolution(&stranger, &did, &true);
+    assert!(result.is_err(), "non-signer vote must be rejected");
+    assert_eq!(client.get_signer_last_active(&stranger), None);
+}
+
+// ── Invariant verification after signer activity mutations ────────────────
+
+#[test]
+fn signer_activity_does_not_disturb_settlement_invariants() {
+    let env = Env::default();
+    let (client, admin) = setup(&env, 2);
+
+    let backup = Address::generate(&env);
+    client.set_signer(&admin, &backup, &1);
+
+    let merchant = Address::generate(&env);
+    let amount: i128 = 1_000_000;
+
+    env.ledger().with_mut(|l| l.timestamp = 100);
+    let sid = client.propose_settlement(&admin, &merchant, &amount, &0_u64);
+
+    // Approval count must never exceed the configured threshold.
+    let threshold = client.get_threshold();
+    assert!(client.get_approval_count(&sid) <= threshold);
+
+    env.ledger().with_mut(|l| l.timestamp = 200);
+    client.approve_settlement(&backup, &sid);
+
+    // Activity tracking must not corrupt approval accounting.
+    assert!(client.get_approval_count(&sid) <= threshold);
+    assert_eq!(client.get_signer_last_active(&admin), Some(100));
+    assert_eq!(client.get_signer_last_active(&backup), Some(200));
+}
+
+#[test]
+fn signer_activity_timestamps_are_monotonic_per_signer() {
+    let env = Env::default();
+    let (client, admin) = setup(&env, 1);
+
+    let merchant_a = Address::generate(&env);
+    let merchant_b = Address::generate(&env);
+
+    env.ledger().with_mut(|l| l.timestamp = 10);
+    client.propose_settlement(&admin, &merchant_a, &1_000_000, &0_u64);
+    let first = client.get_signer_last_active(&admin).unwrap();
+
+    env.ledger().with_mut(|l| l.timestamp = 20);
+    client.propose_settlement(&admin, &merchant_b, &1_000_000, &0_u64);
+    let second = client.get_signer_last_active(&admin).unwrap();
+
+    // A later approval must never move the timestamp backwards.
+    assert!(second >= first, "activity timestamp regressed");
+}

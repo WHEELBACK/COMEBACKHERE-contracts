@@ -1,249 +1,135 @@
-//! Integration tests for the `event-emitter` contract.
-//!
-//! These tests exercise the contract through the Soroban test harness and
-//! verify:
-//!   * persistent storage keys have their TTL bumped on reads and writes
-//!     (issue #956), and
-//!   * zero-balance / boundary-balance paths return typed errors instead of
-//!     panicking the host (issue #957).
+use event_emitter::{EventEmitterContract, EventEmitterContractClient, EventEmitterError};
+use soroban_sdk::{testutils::Address as _, Address, Env};
 
-use event_emitter::{EventEmitterContract, EventEmitterContractClient, Error};
-use soroban_sdk::{
-    symbol_short,
-    testutils::{Address as _, Ledger as _},
-    Address, Env, IntoVal, Symbol,
-};
-
-/// Helper: deploy the contract and return a client bound to it.
-fn setup<'a>(env: &Env) -> (Address, EventEmitterContractClient<'a>) {
-    let contract_id = env.register_contract(None, EventEmitterContract);
-    let client = EventEmitterContractClient::new(env, &contract_id);
-    (contract_id, client)
+fn setup() -> (Env, Address, EventEmitterContractClient<'static>) {
+    let env = Env::default();
+    env.mock_all_auths();
+    let admin = Address::generate(&env);
+    let id = env.register_contract(None, EventEmitterContract);
+    let client = EventEmitterContractClient::new(&env, &id);
+    client.initialize(&admin);
+    (env, admin, client)
 }
 
-/// Helper: read the remaining TTL for a persistent key, if present.
-fn persistent_ttl(env: &Env, contract_id: &Address, key: &impl IntoVal<Env, soroban_sdk::Val>) -> Option<u32> {
-    env.as_contract(contract_id, || {
-        env.storage().persistent().get_ttl(&key.clone().into_val(env))
-    })
+#[test]
+fn initialize_twice_returns_already_initialized() {
+    let (_env, admin, client) = setup();
+    let err = client.try_initialize(&admin).unwrap_err().unwrap();
+    assert_eq!(err, EventEmitterError::AlreadyInitialized);
+}
+
+#[test]
+fn negative_emitted_amount_is_rejected() {
+    let (_env, admin, client) = setup();
+    let err = client
+        .try_set_emitted_amount(&admin, &7, &(-5))
+        .unwrap_err()
+        .unwrap();
+    assert_eq!(err, EventEmitterError::InvalidAmount);
+}
+
+#[test]
+fn underflow_in_partial_settlement_computation_returns_error() {
+    // #950: `settlement_total - emitted_amount` must not panic when it
+    // underflows; the call returns `Err(Underflow)` and leaves state intact.
+    let (_env, admin, client) = setup();
+    client.set_emitted_amount(&admin, &7, &200);
+    let err = client
+        .try_emit_partial_settlement(&admin, &7, &100)
+        .unwrap_err()
+        .unwrap();
+    assert_eq!(err, EventEmitterError::Underflow);
+    // State is unchanged by the rejected emit.
+    assert_eq!(client.get_emitted_amount(&7), 200);
+}
+
+#[test]
+fn partial_settlement_returns_unemitted_remainder() {
+    let (_env, admin, client) = setup();
+    client.set_emitted_amount(&admin, &7, &40);
+    client.emit_partial_settlement(&admin, &7, &100); // remaining = 100 - 40 = 60; stored → 100
+    assert_eq!(client.get_emitted_amount(&7), 100);
+    // Emitting again with a smaller total now underflows (10 - 100).
+    let err = client
+        .try_emit_partial_settlement(&admin, &7, &10)
+        .unwrap_err()
+        .unwrap();
+    assert_eq!(err, EventEmitterError::Underflow);
 }
 
 // ---------------------------------------------------------------------------
-// Issue #956: automatic TTL bump on persistent storage keys
+// #951: granular role-based authorization (settlement agents).
 // ---------------------------------------------------------------------------
 
-#[test]
-fn test_persistent_ttl_extended_after_write() {
+fn setup_with_agent() -> (Env, Address, Address, Address, EventEmitterContractClient<'static>) {
     let env = Env::default();
     env.mock_all_auths();
-
-    let (contract_id, client) = setup(&env);
     let admin = Address::generate(&env);
-
-    // Initialize the contract; this writes persistent state.
+    let agent = Address::generate(&env);
+    let other = Address::generate(&env);
+    let id = env.register_contract(None, EventEmitterContract);
+    let client = EventEmitterContractClient::new(&env, &id);
     client.initialize(&admin);
-
-    // The admin key should now exist in persistent storage with a TTL.
-    let ttl_after_write = persistent_ttl(&env, &contract_id, &symbol_short!("admin"));
-    assert!(
-        ttl_after_write.is_some(),
-        "admin key must be present in persistent storage after initialize"
-    );
-    assert!(
-        ttl_after_write.unwrap() > 0,
-        "persistent key must have a non-zero TTL after write"
-    );
+    (env, admin, agent, other, client)
 }
 
 #[test]
-fn test_persistent_ttl_extended_after_read() {
-    let env = Env::default();
-    env.mock_all_auths();
-
-    let (contract_id, client) = setup(&env);
-    let admin = Address::generate(&env);
-    client.initialize(&admin);
-
-    // Advance the ledger so the TTL decreases, then read the value.
-    env.ledger().with_mut(|li| {
-        li.sequence_number += 100;
-    });
-
-    let ttl_before_read = persistent_ttl(&env, &contract_id, &symbol_short!("admin"))
-        .expect("admin key must exist before read");
-
-    // Reading through the contract should bump the TTL back up.
-    let _ = client.get_admin();
-
-    let ttl_after_read = persistent_ttl(&env, &contract_id, &symbol_short!("admin"))
-        .expect("admin key must exist after read");
-
-    assert!(
-        ttl_after_read >= ttl_before_read,
-        "TTL must not shrink after a read (before={ttl_before_read}, after={ttl_after_read})"
-    );
+fn agents_can_emit_partial_settlements() {
+    let (_env, admin, agent, _other, client) = setup_with_agent();
+    client.grant_settlement_agent(&admin, &agent);
+    assert!(client.has_settlement_agent(&agent));
+    client.set_emitted_amount(&admin, &7, &40);
+    client.emit_partial_settlement(&agent, &7, &100); // remaining = 100 - 40 = 60; stored → 100
+    assert_eq!(client.get_emitted_amount(&7), 100);
 }
 
 #[test]
-fn test_persistent_ttl_bumped_across_multiple_writes() {
-    let env = Env::default();
-    env.mock_all_auths();
-
-    let (contract_id, client) = setup(&env);
-    let admin = Address::generate(&env);
-    client.initialize(&admin);
-
-    let initial_ttl = persistent_ttl(&env, &contract_id, &symbol_short!("admin"))
-        .expect("admin key must exist after initialize");
-
-    // Repeated writes should keep the TTL at or above the initial value.
-    for _ in 0..3 {
-        env.ledger().with_mut(|li| {
-            li.sequence_number += 50;
-        });
-        client.set_admin(&admin);
-        let ttl = persistent_ttl(&env, &contract_id, &symbol_short!("admin"))
-            .expect("admin key must exist after set_admin");
-        assert!(
-            ttl >= initial_ttl,
-            "TTL must be refreshed on each write (initial={initial_ttl}, now={ttl})"
-        );
-    }
-}
-
-// ---------------------------------------------------------------------------
-// Issue #957: zero-balance and boundary-balance paths return typed errors
-// ---------------------------------------------------------------------------
-
-#[test]
-fn test_zero_balance_returns_typed_error() {
-    let env = Env::default();
-    env.mock_all_auths();
-
-    let (_contract_id, client) = setup(&env);
-    let admin = Address::generate(&env);
-    client.initialize(&admin);
-
-    let user = Address::generate(&env);
-
-    // A zero-balance account must not panic; it must return a typed error.
-    let result = client.try_emit_event(&user, &symbol_short!("zero"), &0i128);
-    assert_eq!(
-        result,
-        Err(Ok(Error::ZeroBalance)),
-        "zero balance must surface as a typed ZeroBalance error"
-    );
+fn agents_cannot_modify_emission_parameters() {
+    let (_env, admin, agent, other, client) = setup_with_agent();
+    client.grant_settlement_agent(&admin, &agent);
+    // Agents cannot modify emission parameters — only the admin can.
+    let err = client
+        .try_set_emitted_amount(&agent, &7, &10)
+        .unwrap_err()
+        .unwrap();
+    assert_eq!(err, EventEmitterError::Unauthorized);
+    // Agents cannot grant or revoke other agents' authorizations.
+    let err = client
+        .try_grant_settlement_agent(&agent, &other)
+        .unwrap_err()
+        .unwrap();
+    assert_eq!(err, EventEmitterError::Unauthorized);
+    let err = client
+        .try_revoke_settlement_agent(&agent, &other)
+        .unwrap_err()
+        .unwrap();
+    assert_eq!(err, EventEmitterError::Unauthorized);
 }
 
 #[test]
-fn test_boundary_balance_does_not_panic() {
-    let env = Env::default();
-    env.mock_all_auths();
-
-    let (_contract_id, client) = setup(&env);
-    let admin = Address::generate(&env);
-    client.initialize(&admin);
-
-    let user = Address::generate(&env);
-
-    // Exactly-at-threshold balance should succeed without panicking.
-    let result = client.try_emit_event(&user, &symbol_short!("edge"), &1i128);
-    assert!(
-        result.is_ok(),
-        "boundary balance must not panic; got {result:?}"
-    );
-
-    // Just-below-threshold balance must return a typed error, not panic.
-    let below = client.try_emit_event(&user, &symbol_short!("edge"), &0i128);
-    assert_eq!(
-        below,
-        Err(Ok(Error::ZeroBalance)),
-        "below-threshold balance must surface as a typed error"
-    );
+fn unauthorized_caller_cannot_emit_partial_settlement() {
+    let (_env, _admin, _agent, other, client) = setup_with_agent();
+    let err = client
+        .try_emit_partial_settlement(&other, &7, &100)
+        .unwrap_err()
+        .unwrap();
+    assert_eq!(err, EventEmitterError::Unauthorized);
 }
 
 #[test]
-fn test_negative_balance_returns_typed_error() {
-    let env = Env::default();
-    env.mock_all_auths();
-
-    let (_contract_id, client) = setup(&env);
-    let admin = Address::generate(&env);
-    client.initialize(&admin);
-
-    let user = Address::generate(&env);
-
-    // Negative balances are invalid and must be rejected with a typed error.
-    let result = client.try_emit_event(&user, &symbol_short!("neg"), &-1i128);
-    assert_eq!(
-        result,
-        Err(Ok(Error::InvalidAmount)),
-        "negative balance must surface as a typed InvalidAmount error"
-    );
-}
-
-#[test]
-fn test_uninitialized_contract_returns_typed_error() {
-    let env = Env::default();
-    env.mock_all_auths();
-
-    let (_contract_id, client) = setup(&env);
-    let user = Address::generate(&env);
-
-    // Calling before initialize must not panic; it must return NotInitialized.
-    let result = client.try_emit_event(&user, &symbol_short!("early"), &10i128);
-    assert_eq!(
-        result,
-        Err(Ok(Error::NotInitialized)),
-        "uninitialized contract must surface as a typed NotInitialized error"
-    );
-}
-
-#[test]
-fn test_double_initialize_returns_typed_error() {
-    let env = Env::default();
-    env.mock_all_auths();
-
-    let (_contract_id, client) = setup(&env);
-    let admin = Address::generate(&env);
-    client.initialize(&admin);
-
-    // Re-initializing must be rejected with a typed error, not a panic.
-    let result = client.try_initialize(&admin);
-    assert_eq!(
-        result,
-        Err(Ok(Error::AlreadyInitialized)),
-        "double initialize must surface as a typed AlreadyInitialized error"
-    );
-}
-
-// ---------------------------------------------------------------------------
-// Fuzz-style loop: random-ish balances must never panic the host
-// ---------------------------------------------------------------------------
-
-#[test]
-fn test_fuzz_balances_never_panic() {
-    let env = Env::default();
-    env.mock_all_auths();
-
-    let (_contract_id, client) = setup(&env);
-    let admin = Address::generate(&env);
-    client.initialize(&admin);
-
-    let user = Address::generate(&env);
-
-    // Deterministic pseudo-random sweep across the balance domain.
-    let mut seed: i128 = 0x5DEECE66D;
-    for i in 0..64 {
-        seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
-        let amount = seed % 1_000_000;
-
-        // Every call must return either Ok or a typed Err; never panic.
-        let result = client.try_emit_event(&user, &Symbol::new(&env, "fuzz"), &amount);
-        match result {
-            Ok(_) => {}
-            Err(Ok(_typed)) => {}
-            Err(Err(_)) => panic!("unexpected host error at iteration {i}"),
-        }
-    }
+fn settlement_agent_grant_and_revoke_lifecycle() {
+    let (_env, admin, agent, _other, client) = setup_with_agent();
+    client.grant_settlement_agent(&admin, &agent);
+    let err = client
+        .try_grant_settlement_agent(&admin, &agent)
+        .unwrap_err()
+        .unwrap();
+    assert_eq!(err, EventEmitterError::AgentAlreadyGranted);
+    client.revoke_settlement_agent(&admin, &agent);
+    assert!(!client.has_settlement_agent(&agent));
+    let err = client
+        .try_revoke_settlement_agent(&admin, &agent)
+        .unwrap_err()
+        .unwrap();
+    assert_eq!(err, EventEmitterError::AgentNotGranted);
 }

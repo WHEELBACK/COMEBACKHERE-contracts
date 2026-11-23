@@ -169,3 +169,142 @@ fn partial_execution_cumulative_guard_rejects_exact_amount() {
     // already rejects this, confirming the existing + new guards are layered correctly.
     client.partially_execute_settlement(&admin, &sid, &10_000_000, &token_id);
 }
+
+// ---------------------------------------------------------------------------
+// Underflow regression tests (#968)
+//
+// Partial settlement computations derive `remaining = amount - settled` and
+// `net = partial_amount - fee`. Both subtractions must be performed with
+// checked arithmetic and surface `ArithmeticUnderflow` (#8) instead of
+// trapping the host with a raw arithmetic panic.
+// ---------------------------------------------------------------------------
+
+/// `settled == remaining` boundary: after a partial execution of exactly half
+/// the settlement, the derived remaining balance must be exactly the other
+/// half and no underflow may occur.
+#[test]
+fn partial_settlement_settled_equals_remaining_boundary() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let total = 10_000_000i128;
+    let half = total / 2;
+    let (client, admin, token_id, sid) = setup(&env, total);
+
+    client.partially_execute_settlement(&admin, &sid, &half, &token_id);
+
+    let settlement = client.get_settlement(&sid);
+    assert_eq!(settlement.status, SettlementStatus::PartiallyExecuted);
+    assert_eq!(settlement.executed_amount, half);
+    assert_eq!(settlement.amount - settlement.executed_amount, half);
+
+    let merchant_balance = soroban_sdk::token::Client::new(&env, &token_id).balance(&settlement.merchant);
+    assert_eq!(merchant_balance, half);
+}
+
+/// `settled > remaining` boundary: a large first partial execution leaves a
+/// small remaining balance; the subtraction must still be exact and positive.
+#[test]
+fn partial_settlement_settled_greater_than_remaining_boundary() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let total = 10_000_000i128;
+    let large = 9_999_999i128;
+    let (client, admin, token_id, sid) = setup(&env, total);
+
+    client.partially_execute_settlement(&admin, &sid, &large, &token_id);
+
+    let settlement = client.get_settlement(&sid);
+    assert_eq!(settlement.status, SettlementStatus::PartiallyExecuted);
+    assert_eq!(settlement.executed_amount, large);
+    assert_eq!(settlement.amount - settlement.executed_amount, 1);
+
+    let merchant_balance = soroban_sdk::token::Client::new(&env, &token_id).balance(&settlement.merchant);
+    assert_eq!(merchant_balance, large);
+}
+
+/// Zero partial amount is rejected with `InvalidAmount` (#7) before any
+/// subtraction is attempted, so no underflow path is reachable.
+#[test]
+#[should_panic(expected = "Error(Contract, #7)")]
+fn partial_settlement_zero_amount_rejected_before_subtraction() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, admin, token_id, sid) = setup(&env, 1_000_000);
+
+    client.partially_execute_settlement(&admin, &sid, &0, &token_id);
+}
+
+/// A partial amount that would drive `settled` past `amount` must be rejected
+/// with `InvalidAmount` (#7) rather than underflowing `amount - settled`.
+#[test]
+#[should_panic(expected = "Error(Contract, #7)")]
+fn partial_settlement_overflowing_settled_rejected() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, admin, token_id, sid) = setup(&env, 1_000_000);
+
+    client.partially_execute_settlement(&admin, &sid, &1_000_001, &token_id);
+}
+
+/// Cumulative approvals that would exceed the settlement amount must be
+/// rejected with `InvalidAmount` (#7) instead of underflowing the remaining
+/// computation.
+#[test]
+#[should_panic(expected = "Error(Contract, #7)")]
+fn partial_settlement_cumulative_overflow_rejected() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, admin, _token_id, sid) = setup(&env, 1_000_000);
+    let signer_two = Address::generate(&env);
+    client.set_signer(&admin, &signer_two, &1);
+
+    client.approve_partial_settlement(&admin, &sid, &600_000);
+    client.approve_partial_settlement(&signer_two, &sid, &600_000);
+}
+
+/// Fee subtraction from a smaller amount must not underflow: a fee larger than
+/// the partial amount is rejected with `InvalidAmount` (#7) before the
+/// `partial_amount - fee` subtraction is evaluated.
+#[test]
+#[should_panic(expected = "Error(Contract, #7)")]
+fn partial_settlement_fee_exceeding_amount_rejected() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, admin, token_id, sid) = setup(&env, 10_000_000);
+
+    // Fee greater than the partial amount would underflow `partial_amount - fee`.
+    client.partially_execute_settlement_with_fee(&admin, &sid, &1_000, &token_id, &2_000);
+}
+
+/// A fee equal to the partial amount is the exact boundary: the net transfer is
+/// zero, which must be rejected rather than silently transferring nothing.
+#[test]
+#[should_panic(expected = "Error(Contract, #7)")]
+fn partial_settlement_fee_equal_to_amount_rejected() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, admin, token_id, sid) = setup(&env, 10_000_000);
+
+    client.partially_execute_settlement_with_fee(&admin, &sid, &1_000, &token_id, &1_000);
+}
+
+/// A valid fee smaller than the partial amount must succeed and transfer
+/// exactly `partial_amount - fee` to the merchant.
+#[test]
+fn partial_settlement_fee_subtraction_succeeds() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let total = 10_000_000i128;
+    let partial_amount = 3_000_000i128;
+    let fee = 1_000_000i128;
+    let (client, admin, token_id, sid) = setup(&env, total);
+
+    client.partially_execute_settlement_with_fee(&admin, &sid, &partial_amount, &token_id, &fee);
+
+    let settlement = client.get_settlement(&sid);
+    assert_eq!(settlement.status, SettlementStatus::PartiallyExecuted);
+    assert_eq!(settlement.executed_amount, partial_amount);
+
+    let merchant_balance = soroban_sdk::token::Client::new(&env, &token_id).balance(&settlement.merchant);
+    assert_eq!(merchant_balance, partial_amount - fee);
+}

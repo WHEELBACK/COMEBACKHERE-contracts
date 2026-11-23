@@ -3,8 +3,12 @@ members = [
     "contracts/invoice",
     "contracts/treasury",
     "contracts/compliance",
+    "contracts/time-lock",
     "contracts/settlement-workflow",
+    "contracts/storage-layout",
+    "contracts/fee-manager",
     "contracts/event-emitter",
+    "contracts/role-manager",
     "contracts/access-control",
     "contracts/recovery-manager",
     "tests",
@@ -17,6 +21,10 @@ members = [
     "crates/protocol-errors",
     "crates/protocol-math",
 ]
+exclude = [
+    "contracts/storage-layout/fuzz",
+    "contracts/access-control/fuzz",
+]
 resolver = "2"
 
 [workspace.package]
@@ -27,9 +35,6 @@ repository = "https://github.com/WHEELBACK/COMEBACKHERE-contracts"
 [workspace.dependencies]
 soroban-sdk = { version = "29.0.1" }
 stellar-xdr = "0.0.18"
-
-[workspace.dev-dependencies]
-soroban-sdk = { version = "29.0.1", features = ["testutils"] }
 
 [profile.release]
 opt-level = "z"

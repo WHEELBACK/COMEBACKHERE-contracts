@@ -182,7 +182,7 @@ impl AccessControl {
     /// Asserts that `account` holds `role`, panicking with `Unauthorized` otherwise.
     /// Intended for cross-contract invocation by other contracts.
     pub fn require_role(env: Env, role: Symbol, account: Address) {
-        if !Self::has_role(env, role, account) {
+        if !Self::has_role(env.clone(), role, account) {
             panic_with_error!(&env, AccessControlError::Unauthorized);
         }
     }
@@ -211,7 +211,7 @@ impl AccessControl {
     fn validate_role(env: &Env, role: &Symbol) {
         // Reject empty roles defensively; Symbol::new panics on empty input,
         // so we guard by checking the length of the underlying representation.
-        if role.to_string().len() == 0 {
+        if *role == Symbol::new(env, "") {
             panic_with_error!(env, AccessControlError::InvalidRole);
         }
     }
@@ -243,26 +243,3 @@ impl AccessControl {
         }
     }
 }
-
-#[cfg(test)]
-mod test;
-```
-
-```toml
-[package]
-name = "access-control"
-version = "0.1.0"
-edition = "2021"
-publish = false
-
-[lib]
-crate-type = ["cdylib", "rlib"]
-
-[dependencies]
-soroban-sdk = { workspace = true }
-
-[dev-dependencies]
-soroban-sdk = { workspace = true, features = ["testutils"] }
-
-[features]
-testutils = ["soroban-sdk/testutils"]
