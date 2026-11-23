@@ -41,7 +41,7 @@ pub struct EventEmitterContract;
 
 fn require_admin(env: &Env, admin: &Address) -> Result<(), EventEmitterError> {
     admin.require_auth();
-    match env.storage().instance().get(&DataKey::Admin) {
+    match env.storage().instance().get::<_, Address>(&DataKey::Admin) {
         Some(stored) if stored == *admin => Ok(()),
         _ => Err(EventEmitterError::Unauthorized),
     }
@@ -49,7 +49,10 @@ fn require_admin(env: &Env, admin: &Address) -> Result<(), EventEmitterError> {
 
 /// Returns `true` if `admin` is the stored administrator.
 fn is_admin(env: &Env, admin: &Address) -> bool {
-    env.storage().instance().get(&DataKey::Admin).is_some_and(|stored| stored == *admin)
+    env.storage()
+        .instance()
+        .get::<_, Address>(&DataKey::Admin)
+        .is_some_and(|stored| stored == *admin)
 }
 
 /// Requires the caller to be the admin or a registered settlement agent.
@@ -163,7 +166,7 @@ impl EventEmitterContract {
     pub fn get_emitted_amount(env: Env, settlement_id: u64) -> i128 {
         env.storage()
             .instance()
-            .get(&DataKey::EmissionRecord(settlement_id))
+            .get::<_, EmissionRecord>(&DataKey::EmissionRecord(settlement_id))
             .map(|record| record.emitted_amount)
             .unwrap_or(0)
     }

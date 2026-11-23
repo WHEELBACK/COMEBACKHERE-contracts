@@ -71,45 +71,10 @@ impl ProtocolError {
 }
 
 // Exhaustive matches: adding a variant without a description fails to compile.
+// Invoice messages are owned by `invoice-errors` itself (#883), so they are
+// defined once next to the enum rather than duplicated here.
 fn invoice_description(e: InvoiceError) -> &'static str {
-    use InvoiceError::*;
-    match e {
-        Unauthorized => "Caller is not authorized for this action.",
-        ContractPaused => "The invoice contract is paused.",
-        InvalidAmount => "The invoice amount is invalid.",
-        NotPending => "The invoice is not pending.",
-        Expired => "The invoice has expired.",
-        NotFound => "Invoice not found.",
-        AlreadyInitialized => "The invoice contract is already initialized.",
-        ZeroDuration => "The invoice duration must be greater than zero.",
-        ExpiryOverflow => "The invoice expiry time is out of range.",
-        NotPaid => "The invoice has not been paid.",
-        NotReleased => "The invoice escrow has not been released.",
-        AmountPrecision => "The amount has too many decimal places.",
-        DuplicateNonce => "This invoice nonce has already been used.",
-        ExpiryTooLong => "The invoice expiry is too far in the future.",
-        MetadataMismatch => "The invoice metadata does not match.",
-        NoPendingAdmin => "There is no pending admin transfer.",
-        InvalidPaymentLinkHash => "The payment link hash is invalid.",
-        NotRefundRequested => "No refund has been requested for this invoice.",
-        TokenMismatch => "The payment token does not match the invoice.",
-        BatchTooLarge => "Too many items in one batch.",
-        CooldownActive => "Please wait before trying this action again.",
-        InvoiceCountOverflow => "The invoice limit has been reached.",
-        HashTooLong => "The provided hash is too long.",
-        PaymentStateInconsistent => "The invoice does not describe a completed payment.",
-        RefundTransferFailed => "The refund transfer failed.",
-        RefundTokenNotSet => "The invoice has no token to refund through.",
-        RefundFeeTooHigh => "The refund fee is too high.",
-        ArithmeticOverflow => "The calculation overflowed.",
-        DiscountExceedsAmount => "The discount amount exceeds the invoice amount.",
-        DiscountDeadlineAfterExpiry => "The discount deadline is after the invoice expiry.",
-        MemoTooLong => "The memo field is too long.",
-        RefundWindowClosed => "The refund window for this invoice has closed.",
-        SelfPayNotAllowed => "A merchant cannot pay its own invoice.",
-        TemplateDisabled => "The invoice template is disabled.",
-        InvalidLateFee => "The late fee exceeds 100%.",
-    }
+    e.message()
 }
 
 fn treasury_description(e: TreasuryError) -> &'static str {
@@ -169,25 +134,25 @@ fn treasury_description(e: TreasuryError) -> &'static str {
 }
 
 fn compliance_description(e: ComplianceError) -> &'static str {
+    use ComplianceError::*;
     match e {
-        ComplianceError::AlreadyInitialized => "The compliance contract is already initialized.",
+        AlreadyInitialized => "The compliance contract is already initialized.",
+        Unauthorized => "Caller is not authorized for this compliance action.",
+        ContractPaused => "The compliance contract is paused.",
+        BatchTooLarge => "Too many addresses in one compliance batch.",
+        AddressIndexFull => "The compliance address index is full.",
+        BulkOperationCooldown => "Bulk compliance operation cooldown has not elapsed.",
+        UnexpectedSchemaVersion => "Unexpected compliance storage schema version.",
+        OperatorCannotClearAdminBlock => "Operators cannot clear admin-placed blocks.",
+        OperatorSetFull => "The compliance operator set is full.",
+        InvalidJurisdictionCode => "The jurisdiction code is invalid.",
+        NoPendingAdmin => "There is no pending admin transfer.",
+        InvalidTierLimit => "The tier transaction limit is invalid.",
     }
 }
 
 fn workflow_description(e: WorkflowError) -> &'static str {
-    use WorkflowError::*;
-    match e {
-        Unauthorized => "Caller is not the emergency-pause admin.",
-        NotConfigured => "Emergency pause has not been configured.",
-        PauseTargetFailed => "A target refused to pause; no targets were paused.",
-        UnpauseTargetFailed => "A target refused to unpause; no targets were resumed.",
-        NoPauseTargets => "An empty pause target set was supplied.",
-        TooManyPauseTargets => "Too many pause targets supplied.",
-        DuplicatePauseTarget => "The pause target list contains a duplicate address.",
-        SelfPauseTarget => "The workflow contract cannot be its own pause target.",
-        EmergencyPauseActive => "Cannot reconfigure targets while an emergency pause is active.",
-        NotEmergencyPaused => "No emergency pause is currently active.",
-    }
+    e.message()
 }
 
 #[cfg(test)]

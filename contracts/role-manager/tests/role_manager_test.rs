@@ -74,11 +74,11 @@ fn grant_and_revoke_invariants_hold_across_role_matrix() {
         roles.push_back(Symbol::new(&env, name));
     }
     for role in roles.iter() {
-        assert!(!client.has_role(role, &account));
-        client.grant_role(&admin, role, &account);
-        assert!(client.has_role(role, &account));
-        client.revoke_role(&admin, role, &account);
-        assert!(!client.has_role(role, &account));
+        assert!(!client.has_role(&role, &account));
+        client.grant_role(&admin, &role, &account);
+        assert!(client.has_role(&role, &account));
+        client.revoke_role(&admin, &role, &account);
+        assert!(!client.has_role(&role, &account));
     }
 }
 

@@ -31,7 +31,7 @@ pub(crate) fn has_granted(env: &Env, account: &Address, role: &Symbol) -> bool {
 /// of panicking so clients get a typed failure.
 pub(crate) fn require_admin(env: &Env, admin: &Address) -> Result<(), RoleManagerError> {
     admin.require_auth();
-    match env.storage().instance().get(&DataKey::Admin) {
+    match env.storage().instance().get::<_, Address>(&DataKey::Admin) {
         Some(stored) if stored == *admin => Ok(()),
         _ => Err(RoleManagerError::Unauthorized),
     }

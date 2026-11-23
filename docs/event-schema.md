@@ -209,6 +209,51 @@ no `admin_transferred` at all.
 
 ---
 
+## Event Emitter contract
+
+Source: `contracts/event-emitter/src/lib.rs`.
+
+| Event | Topics | Data type | Emitted by |
+|---|---|---|---|
+| `initialized` | `(Symbol,)` | `Address` (admin) | `initialize` |
+| `emitter_paused` | `(Symbol,)` | `Address` (admin) | `pause` |
+| `emitter_unpaused` | `(Symbol,)` | `Address` (admin) | `unpause` |
+| `admin_transfer_initiated` | `(Symbol,)` | `Address` (new_admin) | `transfer_admin` |
+| `admin_transferred` | `(Symbol,)` | `Address` (new_admin) | `accept_admin` |
+| `event_emitted` | `(Symbol, event_id: u64)` | `EventRecord` | `emit_event` |
+| `event_revoked` | `(Symbol, event_id: u64)` | `Address` (revoker) | `revoke_event` |
+| `schema_registered` | `(Symbol, schema_id: u64)` | `EventSchema` | `register_schema` |
+| `schema_deprecated` | `(Symbol, schema_id: u64)` | `EventSchema` | `deprecate_schema` |
+
+### Error codes (#955)
+
+Every failing entrypoint returns an `EventEmitterError` variant. The variants are
+declared in `contracts/event-emitter/src/errors.rs` and re-exported from the crate
+root; the numeric discriminants below are the on-chain ABI that clients decode from
+a failed invocation's `ScError::Contract(u32)`, so they are **append-only**: a new
+variant must take the next free discriminant, and an existing variant must never be
+renumbered, reordered, or removed. Off-chain tooling should map the raw `u32` to a
+message using this table rather than matching on variant names.
+
+| Code | Variant | Meaning |
+|---|---|---|
+| `1` | `NotInitialized` | The contract has not been initialized yet; call `initialize` first. |
+| `2` | `AlreadyInitialized` | `initialize` was called on an already-initialized contract. |
+| `3` | `Unauthorized` | The caller is not the admin/owner required for this entrypoint. |
+| `4` | `Paused` | The contract is paused; the operation is rejected until `unpause`. |
+| `5` | `NotPaused` | `unpause` was called while the contract is not paused. |
+| `6` | `EventNotFound` | No event exists for the supplied `event_id`. |
+| `7` | `EventAlreadyRevoked` | The event was already revoked and cannot be revoked again. |
+| `8` | `SchemaNotFound` | No schema exists for the supplied `schema_id`. |
+| `9` | `SchemaAlreadyDeprecated` | The schema was already deprecated. |
+| `10` | `InvalidInput` | An argument failed validation (empty payload, zero ID, out-of-range value). |
+| `11` | `PayloadTooLarge` | The event payload exceeds the configured maximum size. |
+| `12` | `DuplicateEvent` | An event with the same idempotency key already exists. |
+| `13` | `AdminTransferPending` | An admin transfer is already outstanding; accept or cancel it first. |
+| `14` | `NoPendingAdminTransfer` | `accept_admin` was called with no outstanding nomination. |
+
+---
+
 ## Treasury contract
 
 Source: `contracts/treasury/src/{lib,settlements,disputes,deposits,holds,signers}.rs`.

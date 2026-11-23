@@ -68,7 +68,7 @@ impl RoleManagerContract {
     ) -> Result<(), RoleManagerError> {
         roles::require_admin(&env, &admin)?;
         roles::require_not_paused(&env)?;
-        if role.is_empty() {
+        if role == Symbol::new(&env, "") {
             return Err(RoleManagementError::EmptyRole.into());
         }
         let mut granted = roles::stored_roles(&env, &account);
@@ -97,7 +97,7 @@ impl RoleManagerContract {
     ) -> Result<(), RoleManagerError> {
         roles::require_admin(&env, &admin)?;
         roles::require_not_paused(&env)?;
-        if role.is_empty() {
+        if role == Symbol::new(&env, "") {
             return Err(RoleManagementError::EmptyRole.into());
         }
         let granted = roles::stored_roles(&env, &account);
@@ -106,7 +106,7 @@ impl RoleManagerContract {
         }
         let mut updated = Vec::new(&env);
         for granted_role in granted.iter() {
-            if granted_role != &role {
+            if granted_role != role {
                 updated.push_back(granted_role.clone());
             }
         }

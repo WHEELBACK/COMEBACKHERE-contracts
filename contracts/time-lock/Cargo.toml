@@ -2,7 +2,6 @@
 name = "comebackhere-time-lock"
 version = "1.0.0"
 edition = "2021"
-license.workspace = true
 publish = false
 
 [lib]
@@ -10,6 +9,7 @@ crate-type = ["cdylib", "rlib"]
 name = "time_lock"
 
 [features]
+default = ["testutils"]
 testutils = ["soroban-sdk/testutils"]
 
 [dependencies]
