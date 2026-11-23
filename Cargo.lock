@@ -341,6 +341,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "comebackhere-fee-manager"
+version = "0.1.0"
+dependencies = [
+ "soroban-sdk",
+]
+
+[[package]]
 name = "comebackhere-invoice"
 version = "1.0.0"
 dependencies = [
@@ -391,6 +398,14 @@ dependencies = [
  "comebackhere-tests",
  "comebackhere-treasury",
  "comebackhere-workflow-errors",
+ "hex",
+ "soroban-sdk",
+]
+
+[[package]]
+name = "comebackhere-storage-layout"
+version = "1.0.0"
+dependencies = [
  "soroban-sdk",
 ]
 
@@ -402,6 +417,13 @@ dependencies = [
  "comebackhere-invoice",
  "comebackhere-settlement-workflow",
  "comebackhere-treasury",
+ "soroban-sdk",
+]
+
+[[package]]
+name = "comebackhere-time-lock"
+version = "1.0.0"
+dependencies = [
  "soroban-sdk",
 ]
 
@@ -2080,9 +2102,9 @@ checksum = "06bdbd8cfc056b8d2e2e85f29b56a3bdbecb527cef81eb39e3e7b98af4652770"
 
 [[package]]
 name = "trybuild"
-version = "1.0.122"
+version = "1.0.123"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "62db9c92d704393fbf2132041720cc80b689f2d3f28521015c2ac866223c11b8"
+checksum = "5dc7029163734745d9a24da4e1c74122e719d5045495c2d8d55c4cc2f6055fdf"
 dependencies = [
  "dissimilar",
  "glob",
