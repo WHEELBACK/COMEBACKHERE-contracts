@@ -23,12 +23,14 @@ whether a human would consider the record active.
 grep -rn "extend_ttl\|bump_ttl" contracts/*/src
 ```
 
-This returns **zero matches** anywhere in the four contract crates. No contract in
-this repo currently calls `extend_ttl` on any storage instance (persistent,
-instance, or temporary). The rest of this document catalogs every persistent key
-by contract, notes read/write frequency characteristics that would determine
-natural TTL bumps if any existed, and calls out where that absence is a genuine
-gap versus effectively harmless.
+At the time this audit was first written this returned **zero matches** anywhere
+in the four contract crates. That is no longer true: `access-control` now bumps
+the TTL of every persistent key it writes (and of critical keys it reads) — see
+"Access-control (`contracts/access-control/src`)" below. The remaining contracts
+still call `extend_ttl` nowhere. The rest of this document catalogs every
+persistent key by contract, notes read/write frequency characteristics that would
+determine natural TTL bumps if any existed, and calls out where that absence is a
+genuine gap versus effectively harmless.
 
 Instance storage (`env.storage().instance()`) shares a single TTL for the whole
 contract instance and is out of scope here except where noted — the interesting
@@ -63,6 +65,42 @@ scenario the parent issue names. **Filed as a follow-up:** see
 disputes are expected to resolve or expire on a much shorter human timescale than
 settlements can remain genuinely pending, so this is a smaller window of exposure,
 but the mechanism is identical and worth carrying in the same follow-up.
+
+## Access-control (`contracts/access-control/src`)
+
+**Finding — remediated.** Persistent keys used by access-control:
+
+| Key | Written by | Read by | TTL bump? |
+|---|---|---|---|
+| `DataKey::Admin` | `initialize`, `transfer_admin` | `require_admin` on every admin-gated call | **Yes** |
+| `DataKey::Role(Address, Symbol)` | `grant_role` | `has_role`, `require_role` | **Yes** |
+| `DataKey::RoleMembers(Symbol)` | `grant_role`, `revoke_role` | `get_role_members` | **Yes** |
+| `DataKey::RoleCount(Symbol)` | `grant_role`, `revoke_role` | `get_role_member_count` | **Yes** |
+| `DataKey::PendingAdmin` | `transfer_admin`, `accept_admin`, `cancel_transfer` | `accept_admin`, `cancel_transfer` | **Yes** |
+
+**Policy.** Two constants in `contracts/access-control/src/lib.rs` define the
+window:
+
+- `TTL_THRESHOLD` — the remaining-TTL watermark below which a bump is triggered.
+- `TTL_EXTEND_TO` — the TTL the entry is extended to when bumped
+  (`TTL_EXTEND_TO > TTL_THRESHOLD`).
+
+A single helper, `bump_persistent(env, &key)`, calls
+`env.storage().persistent().extend_ttl(&key, TTL_THRESHOLD, TTL_EXTEND_TO)`.
+It is invoked:
+
+- immediately after every `persistent().set(...)` of an access-control key, so
+  any write refreshes the entry's lease; and
+- on the read paths of the critical keys (`Admin`, `Role`, `RoleMembers`,
+  `RoleCount`) so that a long-lived role or admin record that is only ever read
+  still has its TTL refreshed before it can archive.
+
+This closes the availability risk for access-control: an admin or role grant
+that is never re-written but is still consulted on every gated call no longer
+archives out from under the contract. The unit tests in
+`contracts/access-control/src/test.rs` advance the ledger sequence with
+`env.ledger().set_sequence_number(...)` past the threshold and assert the
+entries remain readable.
 
 ## Compliance (`contracts/compliance/src`)
 
@@ -136,6 +174,7 @@ this contract. **No gap.**
 
 | Contract | Persistent keys audited | TTL bump exists? | Verdict |
 |---|---|---|---|
+| Access-control | `Admin`, `Role`, `RoleMembers`, `RoleCount`, `PendingAdmin` | **Yes** | Remediated — writes and critical reads bump TTL |
 | Treasury | `Settlement`, `Dispute` | No | **Genuine gap** — long-pending settlement/dispute can archive |
 | Compliance | `Allowed`, `Blocked`, `AllowedUntil`, `BlockedUntil`, `BlockReason` | No | **Genuine gap** — stale `Blocked`/`Allowed` entries can archive |
 | Invoice | `Invoice` and secondary indices | No | Acceptable — bounded lifecycle, archival is the intended terminal state |
@@ -165,7 +204,9 @@ follow-ups should be filed and linked from the parent audit issue:
    read path).
 
 Both follow-ups are scoped as their own PRs; this audit's job is documentation
-and detection, not remediation.
+and detection, not remediation. (Access-control's equivalent gap was remediated
+in-tree — see "Access-control (`contracts/access-control/src`)" above — and is
+the reference implementation for the two follow-ups.)
 
 ## Invoice batch entrypoints (#713)
 
