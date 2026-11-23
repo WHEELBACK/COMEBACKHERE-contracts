@@ -14,9 +14,32 @@
 
 #![no_std]
 
+use core::fmt::Debug;
 use soroban_sdk::{
-    contract, contractclient, contracterror, contractimpl, contracttype, Address, Env,
+    contract, contractclient, contracterror, contractimpl, contracttype, Address, Env, IntoVal,
+    TryFromVal, Val,
 };
+
+/// Ledger lifetime remaining below which a persistent key is refreshed.
+///
+/// The network's default lifetime for a newly written persistent entry is 4096
+/// ledgers, so the threshold has to be at least that high for a fresh key to be
+/// extended on its first write. At ~5s per ledger this is about 5.7 hours.
+pub const PERSISTENT_TTL_THRESHOLD: u32 = 4_096;
+
+/// New lifetime applied when a persistent key falls below the threshold.
+///
+/// Ten thousand ledgers (~14 hours) keeps hot authorization entries alive while
+/// remaining far below the network's maximum TTL, so a key that stops being
+/// used can still age out naturally instead of being pinned forever.
+pub const PERSISTENT_TTL_EXTEND_TO: u32 = 10_000;
+
+/// Instance threshold, kept in step with persistent keys so the admin pointer
+/// cannot expire while the role entries it controls are still alive.
+pub const INSTANCE_TTL_THRESHOLD: u32 = PERSISTENT_TTL_THRESHOLD;
+
+/// Instance lifetime applied on state-changing entrypoints.
+pub const INSTANCE_TTL_EXTEND_TO: u32 = PERSISTENT_TTL_EXTEND_TO;
 
 /// Protocol roles tracked by the registry.
 ///
@@ -110,9 +133,8 @@ impl RoleManagerContract {
         }
         admin.require_auth();
         env.storage().instance().set(&DataKey::Admin, &admin);
-        env.storage()
-            .persistent()
-            .set(&DataKey::RoleMember(Role::Admin, admin), &true);
+        Self::touch_instance(&env);
+        Self::persist_set(&env, &DataKey::RoleMember(Role::Admin, admin), &true);
         Ok(())
     }
 
@@ -124,9 +146,8 @@ impl RoleManagerContract {
         member: Address,
     ) -> Result<(), RoleManagerError> {
         Self::require_admin(&env, &admin)?;
-        env.storage()
-            .persistent()
-            .set(&DataKey::RoleMember(role, member), &true);
+        Self::persist_set(&env, &DataKey::RoleMember(role, member), &true);
+        Self::touch_instance(&env);
         Ok(())
     }
 
@@ -142,18 +163,14 @@ impl RoleManagerContract {
         member: Address,
     ) -> Result<(), RoleManagerError> {
         Self::require_admin(&env, &admin)?;
-        env.storage()
-            .persistent()
-            .set(&DataKey::RoleMember(role, member), &false);
+        Self::persist_set(&env, &DataKey::RoleMember(role, member), &false);
+        Self::touch_instance(&env);
         Ok(())
     }
 
     /// Returns whether `member` currently holds `role`. Permissionless read.
     pub fn has_role(env: Env, role: Role, member: Address) -> bool {
-        env.storage()
-            .persistent()
-            .get(&DataKey::RoleMember(role, member))
-            .unwrap_or(false)
+        Self::persist_get::<_, bool>(&env, &DataKey::RoleMember(role, member)).unwrap_or(false)
     }
 
     /// Aborts unless `caller` authenticated and holds `role`.
@@ -176,10 +193,7 @@ impl RoleManagerContract {
     /// Reads are deliberately tolerant of a missing key: an unwritten budget
     /// is a legitimate zero-balance state, not a corrupted storage entry.
     pub fn get_budget(env: Env, role: Role, member: Address) -> i128 {
-        env.storage()
-            .persistent()
-            .get(&DataKey::Budget(role, member))
-            .unwrap_or(0)
+        Self::read_budget(&env, &DataKey::Budget(role, member))
     }
 
     /// Adds `amount` to `member`'s budget for `role`. Administrator-only.
@@ -208,7 +222,8 @@ impl RoleManagerContract {
         let updated = current
             .checked_add(amount)
             .ok_or(RoleManagerError::BudgetOverflow)?;
-        env.storage().persistent().set(&key, &updated);
+        Self::persist_set(&env, &key, &updated);
+        Self::touch_instance(&env);
         Ok(updated)
     }
 
@@ -252,19 +267,71 @@ impl RoleManagerContract {
             .checked_sub(amount)
             .ok_or(RoleManagerError::InsufficientBudget)?;
         if remaining == 0 {
-            env.storage().persistent().remove(&key);
+            Self::persist_remove(&env, &key);
         } else {
-            env.storage().persistent().set(&key, &remaining);
+            Self::persist_set(&env, &key, &remaining);
         }
+        Self::touch_instance(&env);
         Ok(remaining)
     }
 }
 
 impl RoleManagerContract {
+    /// Reads a persistent key and refreshes its TTL when it is close to
+    /// eviction. Every persistent read in the contract goes through here, so a
+    /// newly added key cannot accidentally be left on a bare `get`.
+    ///
+    /// The host applies its own `threshold` check before writing the extended
+    /// TTL, so a read of a healthy entry costs no storage write.
+    fn persist_get<K, V>(env: &Env, key: &K) -> Option<V>
+    where
+        K: IntoVal<Env, Val>,
+        V: TryFromVal<Env, Val>,
+        V::Error: Debug,
+    {
+        let value = env.storage().persistent().get(key)?;
+        env.storage().persistent().extend_ttl(
+            key,
+            PERSISTENT_TTL_THRESHOLD,
+            PERSISTENT_TTL_EXTEND_TO,
+        );
+        Some(value)
+    }
+
+    /// Writes a persistent key and refreshes its TTL in the same operation.
+    /// Centralising the pair keeps "write without rent top-up" impossible.
+    fn persist_set<K, V>(env: &Env, key: &K, value: &V)
+    where
+        K: IntoVal<Env, Val>,
+        V: IntoVal<Env, Val>,
+    {
+        env.storage().persistent().set(key, value);
+        env.storage().persistent().extend_ttl(
+            key,
+            PERSISTENT_TTL_THRESHOLD,
+            PERSISTENT_TTL_EXTEND_TO,
+        );
+    }
+
+    /// Removes a persistent key. No TTL call: eviction of a dead key cannot
+    /// happen while it is absent, and an `extend_ttl` on it would be wasteful.
+    fn persist_remove<K: IntoVal<Env, Val>>(env: &Env, key: &K) {
+        env.storage().persistent().remove(key);
+    }
+
+    /// Refreshes the contract instance on state-changing entrypoints. Without
+    /// this, a heavily used registry could lose its admin pointer even though
+    /// all of its persistent role entries are still alive.
+    fn touch_instance(env: &Env) {
+        env.storage()
+            .instance()
+            .extend_ttl(INSTANCE_TTL_THRESHOLD, INSTANCE_TTL_EXTEND_TO);
+    }
+
     /// Reads a budget key, treating an absent entry as the zero balance it
     /// represents. Centralised so no caller needs an `unwrap` on storage.
     fn read_budget(env: &Env, key: &DataKey) -> i128 {
-        env.storage().persistent().get(key).unwrap_or(0)
+        Self::persist_get::<_, i128>(env, key).unwrap_or(0)
     }
 
     /// Authenticates `admin` and checks it is the stored administrator.

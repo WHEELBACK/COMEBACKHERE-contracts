@@ -44,6 +44,16 @@ cannot be spent through a different role.
 | `credit_budget(admin, role, member, amount)` | admin | Adds to a budget; `0` is a storage-free no-op |
 | `debit_budget(caller, role, amount)` | self-auth of `caller` + role | Spends the caller's own budget; removes the key at zero |
 
+### TTL maintenance
+
+Every persistent read/write goes through one of two helpers that call
+`extend_ttl` with a threshold of 4,096 ledgers and a target of 10,000 ledgers.
+The host skips the write while a key is healthy, so hot authorization lookups
+do not pay for a rent top-up on every access. State-changing entrypoints also
+refresh the contract instance so its admin pointer cannot expire while the
+persistent entries it controls are alive. See `tests/ttl_bump_test.rs` for the
+exact TTL and ledger-jump assertions.
+
 ### Zero-balance behaviour
 
 An absent budget is a valid `0`, not a storage error. `debit_budget` on such a
