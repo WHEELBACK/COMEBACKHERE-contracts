@@ -341,6 +341,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "comebackhere-event-emitter"
+version = "1.0.0"
+dependencies = [
+ "soroban-sdk",
+]
+
+[[package]]
 name = "comebackhere-fee-manager"
 version = "0.1.0"
 dependencies = [
@@ -387,6 +394,13 @@ dependencies = [
 [[package]]
 name = "comebackhere-protocol-math"
 version = "0.1.0"
+
+[[package]]
+name = "comebackhere-role-manager"
+version = "1.0.0"
+dependencies = [
+ "soroban-sdk",
+]
 
 [[package]]
 name = "comebackhere-settlement-workflow"

@@ -1,6 +1,6 @@
 use soroban_sdk::{contracterror, contracttype, Address};
 
-// Issue #946: modular, well-documented error enum with descriptive variant names
+// Issue #946 & #949: modular, well-documented error enum with descriptive variant names
 // so client-side code can distinguish failure modes without parsing panic strings.
 #[contracterror]
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
@@ -30,6 +30,18 @@ pub enum TimeLockError {
     ContractPaused = 11,
     /// Deposit amount of zero is rejected; would create an unclaimable lock.
     ZeroDeposit = 12,
+    /// The target already has an active proposal (#949).
+    TimelockActive = 13,
+    /// No proposal exists for the target (#949).
+    TimelockNotFound = 14,
+    /// The proposal is not active (already executed or cancelled) (#949).
+    TimelockInactive = 15,
+    /// The ledger timestamp has not reached `executable_at` yet (#949).
+    TooEarly = 16,
+    /// `delay_secs` is zero (#949).
+    ZeroDelay = 17,
+    /// `now + delay_secs` overflowed `u64` (#949).
+    ArithmeticOverflow = 18,
 }
 
 impl TimeLockError {
@@ -52,6 +64,12 @@ impl TimeLockError {
             TimeLockError::ExpiryOverflow => "release timestamp overflow",
             TimeLockError::ContractPaused => "contract is paused",
             TimeLockError::ZeroDeposit => "deposit of zero is not allowed; create no lock instead",
+            TimeLockError::TimelockActive => "target already has an active timelock proposal",
+            TimeLockError::TimelockNotFound => "no timelock proposal exists for target",
+            TimeLockError::TimelockInactive => "timelock proposal is no longer active",
+            TimeLockError::TooEarly => "timelock delay has not elapsed yet",
+            TimeLockError::ZeroDelay => "timelock delay must be greater than zero",
+            TimeLockError::ArithmeticOverflow => "timelock timestamp arithmetic overflowed",
         }
     }
 }
@@ -65,6 +83,34 @@ pub enum LockStatus {
     Released,
     /// Lock was cancelled before maturity (admin-only action).
     Cancelled,
+}
+
+/// Lifecycle state of a timelocked proposal (#949).
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum TimelockStatus {
+    /// Queued and executable once `executable_at` is reached.
+    Active,
+    /// Executed — the delayed action was completed.
+    Executed,
+    /// Cancelled by the admin while still active.
+    Cancelled,
+}
+
+/// A timelocked proposal on a target (#949).
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct TimelockProposal {
+    /// The target the proposal applies to.
+    pub target: Address,
+    /// The delay (seconds) between `proposed_at` and `executable_at`.
+    pub delay_secs: u64,
+    /// Ledger timestamp at which the proposal was created.
+    pub proposed_at: u64,
+    /// Earliest ledger timestamp at which `execute_timelock` may succeed.
+    pub executable_at: u64,
+    /// Current lifecycle state.
+    pub status: TimelockStatus,
 }
 
 /// Role assigned to an address. Roles are ordered by privilege level:
@@ -106,4 +152,6 @@ pub enum DataKey {
     Role(Address),
     /// Whether the contract is currently paused.
     Paused,
+    /// Timelock proposal per target (instance storage, #949).
+    TimelockProposal(Address),
 }

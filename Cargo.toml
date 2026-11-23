@@ -7,6 +7,8 @@ members = [
     "contracts/settlement-workflow",
     "contracts/storage-layout",
     "contracts/fee-manager",
+    "contracts/event-emitter",
+    "contracts/role-manager",
     "tests",
     "crates/compliance-client",
     "crates/error-macros",

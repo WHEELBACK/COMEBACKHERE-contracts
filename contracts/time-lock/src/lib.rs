@@ -3,9 +3,11 @@
 mod events;
 mod types;
 
-pub use types::{DataKey, LockStatus, Role, TimeLock, TimeLockError};
+pub use types::{
+    DataKey, LockStatus, Role, TimeLock, TimeLockError, TimelockProposal, TimelockStatus,
+};
 
-use soroban_sdk::{contract, contractimpl, Address, Env};
+use soroban_sdk::{contract, contractimpl, Address, Env, Symbol};
 
 #[contract]
 pub struct TimeLockContract;
@@ -29,6 +31,8 @@ impl TimeLockContract {
             .set(&DataKey::Role(admin.clone()), &Role::Admin);
         env.storage().instance().set(&DataKey::LockCount, &0u64);
         env.storage().instance().set(&DataKey::Paused, &false);
+        env.events()
+            .publish((Symbol::new(&env, "time_lock_initialized"),), admin);
         Ok(())
     }
 
@@ -63,11 +67,6 @@ impl TimeLockContract {
 
     /// Create a time-lock holding `amount` token units for `beneficiary`.
     /// The caller must hold at least `Role::Operator`.
-    ///
-    /// # Edge cases (issue #948)
-    /// - `amount == 0`: returns `ZeroDeposit` instead of panicking.
-    /// - `duration_seconds == 0`: returns `ZeroDuration`.
-    /// - `release_at` timestamp overflow: returns `ExpiryOverflow`.
     pub fn create_lock(
         env: Env,
         depositor: Address,
@@ -75,12 +74,10 @@ impl TimeLockContract {
         amount: i128,
         duration_seconds: u64,
     ) -> Result<u64, TimeLockError> {
-        // Issue #942: operator-or-admin role required
         Self::require_at_least_operator(&env, &depositor)?;
         depositor.require_auth();
         Self::require_not_paused(&env)?;
 
-        // Issue #948: reject zero deposits without panicking
         if amount <= 0 {
             return Err(TimeLockError::ZeroDeposit);
         }
@@ -117,12 +114,6 @@ impl TimeLockContract {
     }
 
     /// Release a matured lock to its beneficiary.
-    /// The `beneficiary` address must match the lock record.
-    ///
-    /// # Edge cases (issue #948)
-    /// - Lock with zero-amount that somehow exists is handled gracefully —
-    ///   the check on `LockNotMatured` and `AlreadyReleased` applies
-    ///   regardless of the stored amount, so no panic path exists.
     pub fn release(
         env: Env,
         beneficiary: Address,
@@ -159,7 +150,6 @@ impl TimeLockContract {
     }
 
     /// Cancel an active lock before it matures. Admin-only.
-    /// Issue #942: only an admin-role address may cancel.
     pub fn cancel_lock(env: Env, admin: Address, lock_id: u64) -> Result<TimeLock, TimeLockError> {
         Self::require_admin(&env, &admin)?;
         Self::require_not_paused(&env)?;
@@ -191,6 +181,119 @@ impl TimeLockContract {
     }
 
     // -------------------------------------------------------------------------
+    // Issue #949: Generic timelocked proposal lifecycle
+    // -------------------------------------------------------------------------
+
+    /// Queues a timelocked proposal on `target` (admin-only).
+    pub fn propose_timelock(
+        env: Env,
+        admin: Address,
+        target: Address,
+        delay_secs: u64,
+    ) -> Result<(), TimeLockError> {
+        Self::require_admin(&env, &admin)?;
+        if delay_secs == 0 {
+            return Err(TimeLockError::ZeroDelay);
+        }
+        if env
+            .storage()
+            .instance()
+            .get::<_, TimelockProposal>(&DataKey::TimelockProposal(target.clone()))
+            .is_some_and(|existing| existing.status == TimelockStatus::Active)
+        {
+            return Err(TimeLockError::TimelockActive);
+        }
+        let now = env.ledger().timestamp();
+        let executable_at = now
+            .checked_add(delay_secs)
+            .ok_or(TimeLockError::ArithmeticOverflow)?;
+        let proposal = TimelockProposal {
+            target: target.clone(),
+            delay_secs,
+            proposed_at: now,
+            executable_at,
+            status: TimelockStatus::Active,
+        };
+        env.storage()
+            .instance()
+            .set(&DataKey::TimelockProposal(target.clone()), &proposal);
+        env.events()
+            .publish((Symbol::new(&env, "timelock_proposed"), target), proposal);
+        Ok(())
+    }
+
+    /// Executes the timelocked proposal on `target` once the delay has elapsed (admin-only).
+    pub fn execute_timelock(
+        env: Env,
+        admin: Address,
+        target: Address,
+    ) -> Result<TimelockProposal, TimeLockError> {
+        Self::require_admin(&env, &admin)?;
+        let mut proposal: TimelockProposal = env
+            .storage()
+            .instance()
+            .get(&DataKey::TimelockProposal(target.clone()))
+            .ok_or(TimeLockError::TimelockNotFound)?;
+        if proposal.status != TimelockStatus::Active {
+            return Err(TimeLockError::TimelockInactive);
+        }
+        let now = env.ledger().timestamp();
+        if now < proposal.executable_at {
+            return Err(TimeLockError::TooEarly);
+        }
+        proposal.status = TimelockStatus::Executed;
+        env.storage()
+            .instance()
+            .set(&DataKey::TimelockProposal(target.clone()), &proposal);
+        env.events().publish(
+            (Symbol::new(&env, "timelock_executed"), target),
+            proposal.clone(),
+        );
+        Ok(proposal)
+    }
+
+    /// Cancels the timelocked proposal on `target` (admin-only).
+    pub fn cancel_timelock(
+        env: Env,
+        admin: Address,
+        target: Address,
+    ) -> Result<TimelockProposal, TimeLockError> {
+        Self::require_admin(&env, &admin)?;
+        let mut proposal: TimelockProposal = env
+            .storage()
+            .instance()
+            .get(&DataKey::TimelockProposal(target.clone()))
+            .ok_or(TimeLockError::TimelockNotFound)?;
+        if proposal.status != TimelockStatus::Active {
+            return Err(TimeLockError::TimelockInactive);
+        }
+        proposal.status = TimelockStatus::Cancelled;
+        env.storage()
+            .instance()
+            .set(&DataKey::TimelockProposal(target.clone()), &proposal);
+        env.events().publish(
+            (Symbol::new(&env, "timelock_cancelled"), target),
+            proposal.clone(),
+        );
+        Ok(proposal)
+    }
+
+    /// Returns the timelock proposal for `target`, if any.
+    pub fn get_timelock(env: Env, target: Address) -> Option<TimelockProposal> {
+        env.storage()
+            .instance()
+            .get(&DataKey::TimelockProposal(target))
+    }
+
+    /// Returns `true` if `target` has an active (non-final) proposal.
+    pub fn has_active_timelock(env: Env, target: Address) -> bool {
+        env.storage()
+            .instance()
+            .get::<_, TimelockProposal>(&DataKey::TimelockProposal(target))
+            .is_some_and(|proposal| proposal.status == TimelockStatus::Active)
+    }
+
+    // -------------------------------------------------------------------------
     // Pause / unpause (admin-only)
     // -------------------------------------------------------------------------
 
@@ -212,10 +315,8 @@ impl TimeLockContract {
     // Internal helpers
     // -------------------------------------------------------------------------
 
-    /// Issue #942: require the caller to be the stored contract admin.
     fn require_admin(env: &Env, caller: &Address) -> Result<(), TimeLockError> {
         caller.require_auth();
-        // Issue #948: defensive — no panic if the contract is uninitialized.
         let stored: Address = env
             .storage()
             .instance()
@@ -224,7 +325,6 @@ impl TimeLockContract {
         if stored != *caller {
             return Err(TimeLockError::Unauthorized);
         }
-        // Double-check via role table for defence-in-depth.
         let role: Role = env
             .storage()
             .instance()
@@ -236,7 +336,6 @@ impl TimeLockContract {
         Ok(())
     }
 
-    /// Issue #942: require `Role::Operator` or `Role::Admin`.
     fn require_at_least_operator(env: &Env, caller: &Address) -> Result<(), TimeLockError> {
         let role: Role = env
             .storage()
