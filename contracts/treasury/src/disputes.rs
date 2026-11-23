@@ -25,14 +25,14 @@ fn is_terminal_dispute_status(status: &DisputeStatus) -> bool {
 /// Enforces the monotonic `DisputeStatus` transition invariant (#918).
 ///
 /// Only `Raised -> <terminal>` is permitted. Returns
-/// [`TreasuryError::InvalidDisputeTransition`] for any other pair so callers can
+/// [`TreasuryError::DisputeAlreadyResolved`] for any other pair so callers can
 /// fail closed instead of persisting a corrupted dispute.
 fn assert_dispute_transition(
     from: &DisputeStatus,
     to: &DisputeStatus,
 ) -> Result<(), TreasuryError> {
     if *from != DisputeStatus::Raised || !is_terminal_dispute_status(to) {
-        return Err(TreasuryError::InvalidDisputeTransition);
+        return Err(TreasuryError::DisputeAlreadyResolved);
     }
     Ok(())
 }
@@ -47,25 +47,25 @@ fn assert_dispute_transition(
 /// * the disputed `amount` is strictly positive.
 fn verify_dispute_invariants(dispute: &Dispute) -> Result<(), TreasuryError> {
     if dispute.amount <= 0 {
-        return Err(TreasuryError::InvariantViolation);
+        return Err(TreasuryError::InvalidAmount);
     }
     let approvals = dispute.resolution_approvals.len();
     if dispute.resolution_weight == 0 {
         if approvals != 0 || dispute.resolution_for_claimant {
-            return Err(TreasuryError::InvariantViolation);
+            return Err(TreasuryError::InvalidAmount);
         }
     } else if approvals == 0 {
-        return Err(TreasuryError::InvariantViolation);
+        return Err(TreasuryError::InvalidAmount);
     }
     match dispute.status {
         DisputeStatus::ResolvedSplit => {
             if !is_valid_bps(dispute.claimant_share_bps) {
-                return Err(TreasuryError::InvariantViolation);
+                return Err(TreasuryError::InvalidAmount);
             }
         }
         _ => {
             if dispute.claimant_share_bps != 0 {
-                return Err(TreasuryError::InvariantViolation);
+                return Err(TreasuryError::InvalidAmount);
             }
         }
     }
@@ -336,7 +336,7 @@ impl TreasuryContract {
             .map(|sum| sum != dispute.amount)
             .unwrap_or(true)
         {
-            soroban_sdk::panic_with_error!(env, TreasuryError::InvariantViolation);
+            soroban_sdk::panic_with_error!(env, TreasuryError::InvalidAmount);
         }
         let treasury = env.current_contract_address();
         let token_client = token::Client::new(&env, &token_contract);
@@ -403,7 +403,7 @@ impl TreasuryContract {
         if dispute.resolution_approvals.len() != approvals_before + 1
             || dispute.resolution_weight <= weight_before
         {
-            return Err(TreasuryError::InvariantViolation);
+            return Err(TreasuryError::InvalidAmount);
         }
         let threshold: u32 = env
             .storage()

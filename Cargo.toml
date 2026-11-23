@@ -3,7 +3,10 @@ members = [
     "contracts/invoice",
     "contracts/treasury",
     "contracts/compliance",
+    "contracts/time-lock",
     "contracts/settlement-workflow",
+    "contracts/storage-layout",
+    "contracts/fee-manager",
     "tests",
     "crates/compliance-client",
     "crates/error-macros",
@@ -11,9 +14,12 @@ members = [
     "crates/invoice-errors",
     "crates/compliance-errors",
     "crates/workflow-errors",
-    "crates/escrow-vault-errors",
     "crates/protocol-errors",
     "crates/protocol-math",
+]
+exclude = [
+    "contracts/storage-layout/fuzz",
+    "contracts/access-control/fuzz",
 ]
 resolver = "2"
 
@@ -25,8 +31,6 @@ repository = "https://github.com/WHEELBACK/COMEBACKHERE-contracts"
 [workspace.dependencies]
 soroban-sdk = { version = "29.0.1" }
 stellar-xdr = "0.0.18"
-comebackhere-error-macros = { path = "crates/error-macros" }
-escrow-vault-errors = { path = "crates/escrow-vault-errors" }
 
 [profile.release]
 opt-level = "z"

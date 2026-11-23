@@ -309,13 +309,22 @@ impl TreasuryContract {
             .persistent()
             .get(&DataKey::PartialApprovedTotal(settlement_id))
             .unwrap_or(0);
-        if approved_total + partial_amount > settlement.amount {
-            return Err(TreasuryError::InvalidAmount);
+        // #968: reject a corrupted (negative or over-large) stored total before
+        // accumulating, and use checked arithmetic for both the sum and the
+        // remaining-amount comparison so neither can underflow/overflow.
+        if approved_total < 0 || approved_total > settlement.amount {
+            return Err(TreasuryError::ArithmeticOverflow);
         }
-        env.storage().persistent().set(
-            &DataKey::PartialApprovedTotal(settlement_id),
-            &(approved_total + partial_amount),
-        );
+        let new_approved = approved_total
+            .checked_add(partial_amount)
+            .ok_or(TreasuryError::ArithmeticOverflow)?;
+        let _remaining = settlement
+            .amount
+            .checked_sub(new_approved)
+            .ok_or(TreasuryError::InvalidAmount)?;
+        env.storage()
+            .persistent()
+            .set(&DataKey::PartialApprovedTotal(settlement_id), &new_approved);
         record_approval(
             &env,
             &mut settlement.approvals,
@@ -529,7 +538,12 @@ impl TreasuryContract {
             .persistent()
             .get(&DataKey::PartialExecutedTotal(settlement_id))
             .unwrap_or(0);
-        let remaining = if approved > executed { approved - executed } else { 0 };
+        // #968: use checked subtraction so a corrupted or inconsistent
+        // `executed > approved` state surfaces as a typed error instead of
+        // silently saturating (or, if written naively, underflowing).
+        let remaining = approved
+            .checked_sub(executed)
+            .ok_or(TreasuryError::ArithmeticOverflow)?;
         Ok((approved, executed, remaining))
     }
 
@@ -583,12 +597,25 @@ impl TreasuryContract {
             .persistent()
             .get(&DataKey::PartialExecutedTotal(settlement_id))
             .unwrap_or(0i128);
+        // #968: guard against a negative or inconsistent stored total before
+        // accumulating, so the remaining-amount computation below can never
+        // underflow.
+        if prev_executed < 0 || prev_executed > settlement.amount {
+            return Err(TreasuryError::ArithmeticOverflow);
+        }
         let new_executed = prev_executed
             .checked_add(partial_amount)
             .ok_or(TreasuryError::ArithmeticOverflow)?;
         if new_executed > settlement.amount {
             return Err(TreasuryError::InvalidAmount);
         }
+        // #968: the amount still payable must be computed with checked
+        // subtraction; `new_executed <= settlement.amount` is enforced above,
+        // but re-verify defensively so the invariant is explicit.
+        let _remaining = settlement
+            .amount
+            .checked_sub(new_executed)
+            .ok_or(TreasuryError::ArithmeticOverflow)?;
         env.storage().persistent().set(
             &DataKey::PartialExecutedTotal(settlement_id),
             &new_executed,
@@ -745,7 +772,8 @@ impl TreasuryContract {
         let mut skipped: u64 = 0;
         for id in index.iter() {
             if skipped < start {
-                skipped += 1;
+                // #968: saturating increment so a huge `start` can't overflow.
+                skipped = skipped.saturating_add(1);
                 continue;
             }
             if (page.len() as u64) >= limit {
@@ -768,7 +796,9 @@ impl TreasuryContract {
     /// specific token are grouped under `MaybeAddress::None`. This replaces the previous
     /// single-bucket `(count, total_value)` return, which was misleading when the treasury
     /// holds multiple assets (see #585).
-    pub fn get_pending_metrics(env: Env) -> Vec<(MaybeAddress, u64, i128)> {
+    pub fn get_pending_metrics(
+        env: Env,
+    ) -> Result<Vec<(MaybeAddress, u64, i128)>, TreasuryError> {
         // #572: iterate the pending index rather than every settlement ever proposed.
         let index: Vec<u64> = env
             .storage()
@@ -794,12 +824,20 @@ impl TreasuryContract {
                 Some(i) => {
                     let i = i as u32;
                     let (b_tok, b_cnt, b_val) = buckets.get_unchecked(i);
-                    buckets.set(i, (b_tok, b_cnt + 1, b_val + settlement.amount));
+                    // #968: aggregate with checked arithmetic so a large pending
+                    // set can't wrap the per-token totals.
+                    let new_cnt = b_cnt
+                        .checked_add(1)
+                        .ok_or(TreasuryError::ArithmeticOverflow)?;
+                    let new_val = b_val
+                        .checked_add(settlement.amount)
+                        .ok_or(TreasuryError::ArithmeticOverflow)?;
+                    buckets.set(i, (b_tok, new_cnt, new_val));
                 }
                 None => buckets.push_back((tok, 1u64, settlement.amount)),
             }
         }
-        buckets
+        Ok(buckets)
     }
 
     /// Returns the settlement with the given `settlement_id`.
@@ -839,7 +877,9 @@ impl TreasuryContract {
             .instance()
             .get(&DataKey::SettlementExpirySecs)
             .unwrap_or(7u64 * 24 * 60 * 60);
-        if env.ledger().timestamp() <= settlement.proposed_at + expiry_secs {
+        // #968: use saturating addition so a proposal timestamp near `u64::MAX`
+        // cannot overflow the expiry comparison.
+        if env.ledger().timestamp() <= settlement.proposed_at.saturating_add(expiry_secs) {
             return Err(TreasuryError::TtlNotElapsed);
         }
         settlement.status = SettlementStatus::Expired;
@@ -877,9 +917,18 @@ impl TreasuryContract {
         // Drop the oldest entry once the cap is reached.
         if history.len() >= MAX_PAYOUT_HISTORY {
             let mut trimmed = Vec::new(&env);
-            let start = history.len() - MAX_PAYOUT_HISTORY + 1;
+            // #968: `history.len() >= MAX_PAYOUT_HISTORY` guarantees the
+            // subtraction below cannot underflow, but use checked arithmetic
+            // defensively so a future cap change can't reintroduce it.
+            let start = history
+                .len()
+                .checked_sub(MAX_PAYOUT_HISTORY)
+                .and_then(|v| v.checked_add(1))
+                .unwrap_or(0);
             for i in start..history.len() {
-                trimmed.push_back(history.get(i).unwrap());
+                if let Some(entry) = history.get(i) {
+                    trimmed.push_back(entry);
+                }
             }
             history = trimmed;
         }
@@ -996,7 +1045,8 @@ impl TreasuryContract {
         let mut skipped: u32 = 0;
         for id in ids.iter() {
             if skipped < start {
-                skipped += 1;
+                // #968: saturating increment so a huge `start` can't overflow.
+                skipped = skipped.saturating_add(1);
                 continue;
             }
             if (page.len() as u32) >= limit {
@@ -1031,7 +1081,11 @@ impl TreasuryContract {
         let mut signers = Vec::new(&env);
         let mut weight = 0u32;
         for signer in settlement.approvals.iter() {
-            weight += multisig::signer_weight(&env, &signer);
+            // #968: accumulate with checked arithmetic so a corrupted approval
+            // set can't wrap the reported weight.
+            weight = weight
+                .checked_add(multisig::signer_weight(&env, &signer))
+                .ok_or(TreasuryError::ArithmeticOverflow)?;
             signers.push_back(signer);
         }
         Ok((signers, weight))
