@@ -48,3 +48,10 @@ path = "fuzz_targets/execute_with_compliance_batch.rs"
 test = false
 doc = false
 bench = false
+
+[[bin]]
+name = "malicious_caller"
+path = "fuzz_targets/malicious_caller.rs"
+test = false
+doc = false
+bench = false
