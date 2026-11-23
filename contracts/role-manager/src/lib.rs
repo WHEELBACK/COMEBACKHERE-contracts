@@ -17,7 +17,7 @@
 use core::fmt::Debug;
 use soroban_sdk::{
     contract, contractclient, contracterror, contractimpl, contracttype, Address, Env, IntoVal,
-    TryFromVal, Val,
+    Symbol, TryFromVal, Val,
 };
 
 /// Ledger lifetime remaining below which a persistent key is refreshed.
@@ -63,6 +63,28 @@ pub enum Role {
     Pauser,
 }
 
+/// Granular capabilities that a role may grant.
+///
+/// Every parameter-changing entrypoint in a consumer should name exactly one
+/// of these, rather than accepting "some admin-ish role". That keeps the blast
+/// radius of a leaked key to a single operation: holding `Pauser` does not let
+/// somebody rewrite settlement thresholds, and holding `Admin` does not bypass
+/// the parameter-specific checks.
+#[contracttype]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum Permission {
+    /// Grant and revoke roles in this registry.
+    ManageRoles,
+    /// Change operational thresholds (e.g. settlement quorum).
+    SetThreshold,
+    /// Change treasury signer weights.
+    SetSignerWeight,
+    /// Change compliance tier limits.
+    SetTierLimit,
+    /// Pause or unpause protocol contracts.
+    PauseProtocol,
+}
+
 /// Storage keys for the role manager.
 ///
 /// `Admin` lives in instance storage because it is a single small value.
@@ -102,20 +124,34 @@ pub enum RoleManagerError {
     BudgetOverflow = 5,
     /// The caller's budget is zero or smaller than the requested debit.
     InsufficientBudget = 6,
+    /// No role held by the caller grants the requested permission.
+    PermissionDenied = 7,
+    /// The target contract rejected or failed the parameter write.
+    ParameterTargetRejected = 8,
 }
 
 /// Minimal call surface external contracts need from the role manager.
 ///
-/// Declaring only the check entrypoint as a client means a consumer does not
-/// link the role manager's own wasm exports (which would collide at build time
-/// if the consumer were also compiled as a contract). The real contract's
-/// `require_role` returns `Result<(), RoleManagerError>`; the host unwraps the
-/// `Ok` and traps on `Err`, which is exactly what this `()`-returning client
-/// observes.
+/// Declaring only the two check entrypoints as a client means a consumer does
+/// not link the role manager's own wasm exports (which would collide at build
+/// time if the consumer were also compiled as a contract). The real methods
+/// return `Result<(), RoleManagerError>`; the host unwraps the `Ok` and traps on
+/// `Err`, which is exactly what these `()`-returning clients observe.
 #[contractclient(name = "RoleManagerClient")]
 pub trait RoleManagerInterface {
     /// Aborts the invocation unless `caller` authenticated and holds `role`.
     fn require_role(env: Env, caller: Address, role: Role);
+
+    /// Aborts unless `caller` authenticated and one of its roles grants
+    /// `permission`. This is the granular check parameter setters should use.
+    fn require_permission(env: Env, caller: Address, permission: Permission);
+}
+
+/// Cross-contract surface the role manager uses to push an authorized
+/// parameter change to the contract that owns the parameter.
+#[contractclient(name = "ParameterTargetClient")]
+pub trait ParameterTargetInterface {
+    fn set_parameter(env: Env, key: Symbol, value: u32);
 }
 
 #[contract]
@@ -184,6 +220,64 @@ impl RoleManagerContract {
         if !Self::has_role(env.clone(), role, caller) {
             return Err(RoleManagerError::RoleNotAssigned);
         }
+        Ok(())
+    }
+
+    /// Returns whether any role held by `address` grants `permission`.
+    ///
+    /// The check is intentionally role-driven: there is no separate
+    /// "permission storage" to drift out of sync with role grants. Revoking a
+    /// role therefore revokes every permission derived from it immediately.
+    pub fn has_permission(env: Env, address: Address, permission: Permission) -> bool {
+        for role in Self::ALL_ROLES {
+            if Self::role_permits(role, permission)
+                && Self::persist_get::<_, bool>(&env, &DataKey::RoleMember(role, address.clone()))
+                    .unwrap_or(false)
+            {
+                return true;
+            }
+        }
+        false
+    }
+
+    /// Aborts unless `caller` authenticated and has `permission`.
+    ///
+    /// Consumers call this (through [`RoleManagerInterface`]) at the start of
+    /// any parameter setter, so an unauthorized caller never reaches the write.
+    pub fn require_permission(
+        env: Env,
+        caller: Address,
+        permission: Permission,
+    ) -> Result<(), RoleManagerError> {
+        caller.require_auth();
+        if !Self::has_permission(env.clone(), caller, permission) {
+            return Err(RoleManagerError::PermissionDenied);
+        }
+        Ok(())
+    }
+
+    /// Applies an authorized parameter change to `target`.
+    ///
+    /// The permission check happens *before* the cross-contract call, and the
+    /// target is only invoked after it succeeds, so a rejected caller leaves
+    /// both this contract and the target untouched. If the target rejects the
+    /// write for its own reasons, the typed `ParameterTargetRejected` error is
+    /// returned and the whole invocation rolls back.
+    #[allow(clippy::too_many_arguments)]
+    pub fn apply_parameter_change(
+        env: Env,
+        caller: Address,
+        permission: Permission,
+        target: Address,
+        key: Symbol,
+        value: u32,
+    ) -> Result<(), RoleManagerError> {
+        Self::require_permission(env.clone(), caller, permission)?;
+        let target_client = ParameterTargetClient::new(&env, &target);
+        if target_client.try_set_parameter(&key, &value).is_err() {
+            return Err(RoleManagerError::ParameterTargetRejected);
+        }
+        Self::touch_instance(&env);
         Ok(())
     }
 
@@ -277,6 +371,32 @@ impl RoleManagerContract {
 }
 
 impl RoleManagerContract {
+    /// Every role, in a fixed order used by the permission scan. Adding a role
+    /// requires updating this array — a compile-time-visible list is safer than
+    /// discovering at runtime that a new role was never considered.
+    const ALL_ROLES: [Role; 5] = [
+        Role::Admin,
+        Role::Operator,
+        Role::ComplianceOfficer,
+        Role::TreasurySigner,
+        Role::Pauser,
+    ];
+
+    /// The single source of truth for role → permission mapping.
+    ///
+    /// Matches are explicit rather than "admin can do everything" so a role's
+    /// capabilities are reviewable line by line during an audit.
+    fn role_permits(role: Role, permission: Permission) -> bool {
+        matches!(
+            (role, permission),
+            (Role::Admin, Permission::ManageRoles)
+                | (Role::Operator, Permission::SetThreshold)
+                | (Role::ComplianceOfficer, Permission::SetTierLimit)
+                | (Role::TreasurySigner, Permission::SetSignerWeight)
+                | (Role::Pauser, Permission::PauseProtocol)
+        )
+    }
+
     /// Reads a persistent key and refreshes its TTL when it is close to
     /// eviction. Every persistent read in the contract goes through here, so a
     /// newly added key cannot accidentally be left on a bare `get`.

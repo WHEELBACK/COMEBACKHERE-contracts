@@ -16,6 +16,24 @@ instead of every contract maintaining its own divergent role map.
 | `RoleMember(Role, Address)` | persistent | `bool` | Role membership; absent means not held |
 | `Budget(Role, Address)` | persistent | `i128` | Non-negative action budget; absent means zero |
 
+## Granular permissions
+
+Parameter setters should check a `Permission`, not "is this address an admin?".
+The static matrix is:
+
+| Role | Permission |
+|---|---|
+| `Admin` | `ManageRoles` |
+| `Operator` | `SetThreshold` |
+| `ComplianceOfficer` | `SetTierLimit` |
+| `TreasurySigner` | `SetSignerWeight` |
+| `Pauser` | `PauseProtocol` |
+
+`Admin` deliberately does **not** inherit every permission: leaking an admin key
+must not let its holder rewrite unrelated protocol parameters. New roles are
+added to one `ALL_ROLES` array so a forgotten role cannot silently escape the
+permission scan.
+
 Membership is keyed by role *and* address: granting an additional role is a
 single small write, and revoking one role cannot disturb any other role.
 Budgets use the same key shape, so a budget is always scoped to one role and
@@ -43,6 +61,9 @@ cannot be spent through a different role.
 | `get_budget(role, member)` | permissionless read | Returns `0` for a missing or exhausted budget |
 | `credit_budget(admin, role, member, amount)` | admin | Adds to a budget; `0` is a storage-free no-op |
 | `debit_budget(caller, role, amount)` | self-auth of `caller` + role | Spends the caller's own budget; removes the key at zero |
+| `has_permission(address, permission)` | permissionless read | True when any held role grants the permission |
+| `require_permission(caller, permission)` | self-auth of `caller` | Fails with `PermissionDenied` when no role grants it |
+| `apply_parameter_change(caller, permission, target, key, value)` | self-auth + permission | Checks first, then calls `target.set_parameter`; rolls back on rejection |
 
 ### TTL maintenance
 
