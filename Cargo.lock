@@ -341,6 +341,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "comebackhere-fee-manager"
+version = "0.1.0"
+dependencies = [
+ "soroban-sdk",
+]
+
+[[package]]
 name = "comebackhere-invoice"
 version = "1.0.0"
 dependencies = [
