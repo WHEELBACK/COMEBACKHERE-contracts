@@ -3,7 +3,8 @@
 use compliance_client::ComplianceClient;
 use multisig::{Settlement, SettlementStatus};
 use soroban_sdk::{
-    contract, contractclient, contractimpl, contracttype, Address, Env, String, Symbol, Vec,
+    contract, contractclient, contractimpl, contracttype, token::TokenClient, Address, Env, String,
+    Symbol, Vec,
 };
 
 pub mod errors;
@@ -348,6 +349,11 @@ impl SettlementWorkflowContract {
     /// so this gated path is distinguishable from a direct `Treasury::execute_settlement`
     /// call and carries the amount in one place (#366, #614).
     ///
+    /// Returns `Err(InsufficientBalance)` (with no funds moved) when execution
+    /// fails because the treasury's `token_contract` balance is zero or below
+    /// the settlement amount, instead of trapping inside the token transfer
+    /// (#876).
+    ///
     /// Note on failures: a rejected call reverts the whole invocation, so no event is
     /// published for a compliance-blocked merchant — indexers must alert on the failed
     /// transaction itself (which carries `ComplianceCheckFailed`) rather than on a
@@ -364,11 +370,20 @@ impl SettlementWorkflowContract {
         let compliance = ComplianceClient::new(&env, &compliance_id);
         compliance.require_allowed_for_treasury(&merchant)?;
         let treasury = TreasuryOnlyClient::new(&env, &treasury_id);
-        treasury.execute_settlement(
-            &env.current_contract_address(),
-            &settlement_id,
-            &token_contract,
-        );
+        let signer = env.current_contract_address();
+        if treasury
+            .try_execute_settlement(&signer, &settlement_id, &token_contract)
+            .is_err()
+        {
+            // #876: a zero/short treasury balance traps inside the token
+            // transfer with an opaque host error; report it as a typed error.
+            if Self::is_underfunded(&env, &treasury, &treasury_id, settlement_id, &token_contract) {
+                return Err(TreasuryError::InsufficientBalance);
+            }
+            // Any other failure: re-invoke (the failed attempt was rolled
+            // back) so treasury's original error surfaces unchanged.
+            treasury.execute_settlement(&signer, &settlement_id, &token_contract);
+        }
         // Read the amount *after* execution, so a non-existent / already-executed
         // settlement still fails inside `execute_settlement` exactly as before this
         // event existed instead of trapping in this read first.
@@ -443,6 +458,37 @@ impl SettlementWorkflowContract {
             (requested, executed.len()),
         );
         Ok(executed)
+    }
+
+    /// Zero/insufficient-balance diagnosis for the single-settlement path (#876),
+    /// consulted only after `execute_settlement` has already failed.
+    ///
+    /// Treasury moves funds with a plain `token.transfer`, so a treasury whose
+    /// balance of `token_contract` is zero (or below the settlement amount)
+    /// traps inside the token contract. Returns `true` when that is the cause:
+    /// the settlement is still `Pending`, has a positive amount, and
+    /// the treasury's balance is below it. Every lookup is non-trapping
+    /// (`try_*`), so a missing settlement or a non-token `token_contract`
+    /// yields `false` and the caller re-surfaces treasury's own error.
+    fn is_underfunded(
+        env: &Env,
+        treasury: &TreasuryOnlyClient,
+        treasury_id: &Address,
+        settlement_id: u64,
+        token_contract: &Address,
+    ) -> bool {
+        let settlement = match treasury.try_get_settlement(&settlement_id) {
+            Ok(Ok(s)) => s,
+            _ => return false,
+        };
+        // Only `Pending`: a held settlement keeps reporting `SettlementOnHold`.
+        if settlement.status != SettlementStatus::Pending || settlement.amount <= 0 {
+            return false;
+        }
+        match TokenClient::new(env, token_contract).try_balance(treasury_id) {
+            Ok(Ok(balance)) => balance < settlement.amount,
+            _ => false,
+        }
     }
 
     // ── emergency pause coordination (#73) ───────────────────────────────────
