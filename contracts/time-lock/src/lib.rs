@@ -3,6 +3,7 @@
 mod errors;
 mod events;
 mod invariants;
+mod proposals;
 mod types;
 
 pub use errors::{category_for, message_for, TimeLockError};
@@ -206,15 +207,10 @@ impl TimeLockContract {
         if delay_secs == 0 {
             return Err(TimeLockError::ZeroDelay);
         }
-        if let Some(existing) = env
-            .storage()
-            .instance()
-            .get::<_, TimelockProposal>(&DataKey::TimelockProposal(target.clone()))
-        {
-            invariants::verify_proposal(&existing, &target)?;
-            if existing.status == TimelockStatus::Active {
-                return Err(TimeLockError::TimelockActive);
-            }
+        // Streamlined lookup (#943): a finalized proposal needs only its
+        // status field, so its target/timestamps are never deserialized.
+        if let proposals::ProposalLookup::Active(_) = proposals::load(&env, &target)? {
+            return Err(TimeLockError::TimelockActive);
         }
         let now = env.ledger().timestamp();
         let executable_at = now
@@ -243,15 +239,11 @@ impl TimeLockContract {
         target: Address,
     ) -> Result<TimelockProposal, TimeLockError> {
         Self::require_admin(&env, &admin)?;
-        let mut proposal: TimelockProposal = env
-            .storage()
-            .instance()
-            .get(&DataKey::TimelockProposal(target.clone()))
-            .ok_or(TimeLockError::TimelockNotFound)?;
-        invariants::verify_proposal(&proposal, &target)?;
-        if proposal.status != TimelockStatus::Active {
-            return Err(TimeLockError::TimelockInactive);
-        }
+        let mut proposal = match proposals::load(&env, &target)? {
+            proposals::ProposalLookup::Missing => return Err(TimeLockError::TimelockNotFound),
+            proposals::ProposalLookup::Final => return Err(TimeLockError::TimelockInactive),
+            proposals::ProposalLookup::Active(proposal) => proposal,
+        };
         let now = env.ledger().timestamp();
         if now < proposal.executable_at {
             return Err(TimeLockError::TooEarly);
@@ -274,15 +266,11 @@ impl TimeLockContract {
         target: Address,
     ) -> Result<TimelockProposal, TimeLockError> {
         Self::require_admin(&env, &admin)?;
-        let mut proposal: TimelockProposal = env
-            .storage()
-            .instance()
-            .get(&DataKey::TimelockProposal(target.clone()))
-            .ok_or(TimeLockError::TimelockNotFound)?;
-        invariants::verify_proposal(&proposal, &target)?;
-        if proposal.status != TimelockStatus::Active {
-            return Err(TimeLockError::TimelockInactive);
-        }
+        let mut proposal = match proposals::load(&env, &target)? {
+            proposals::ProposalLookup::Missing => return Err(TimeLockError::TimelockNotFound),
+            proposals::ProposalLookup::Final => return Err(TimeLockError::TimelockInactive),
+            proposals::ProposalLookup::Active(proposal) => proposal,
+        };
         proposal.status = TimelockStatus::Cancelled;
         env.storage()
             .instance()
@@ -308,11 +296,14 @@ impl TimeLockContract {
     }
 
     /// Returns `true` only if `target` has a well-formed, active proposal.
+    ///
+    /// Uses the single-read status projection from #943 instead of decoding
+    /// the entire record; active proposals are still strictly verified.
     pub fn has_active_timelock(env: Env, target: Address) -> bool {
-        env.storage()
-            .instance()
-            .get::<_, TimelockProposal>(&DataKey::TimelockProposal(target.clone()))
-            .is_some_and(|proposal| invariants::proposal_is_active(&proposal, &target))
+        matches!(
+            proposals::load(&env, &target),
+            Ok(proposals::ProposalLookup::Active(_))
+        )
     }
 
     // -------------------------------------------------------------------------

@@ -84,8 +84,3 @@ pub fn verify_proposal(
         TimelockStatus::Active | TimelockStatus::Executed | TimelockStatus::Cancelled => Ok(()),
     }
 }
-
-/// Returns `true` only for a well-formed, still-active proposal.
-pub fn proposal_is_active(proposal: &TimelockProposal, target: &Address) -> bool {
-    verify_proposal(proposal, target).is_ok() && proposal.status == TimelockStatus::Active
-}
