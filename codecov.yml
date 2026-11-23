@@ -33,6 +33,21 @@ coverage:
         target: 95%
         threshold: 0%
         base: auto
+      invoice:
+        target: 95%
+        threshold: 0%
+        flags:
+          - invoice
+      treasury:
+        target: 95%
+        threshold: 0%
+        flags:
+          - treasury
+      compliance:
+        target: 95%
+        threshold: 0%
+        flags:
+          - compliance
 
     # ── Patch gate ────────────────────────────────────────────────────────
     # New lines introduced in a PR must themselves be ≥ 95% covered.

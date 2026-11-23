@@ -22,14 +22,14 @@ entrypoints on an interval.
 | Settlement past its TTL but not yet expired on-chain | `SETTLEMENT_TTL` is 7 days (`contracts/treasury/src/settlements.rs`); poll `get_pending_settlements_page` and alert when `proposed_at + 7d < now` for any `Pending` settlement | Warn — `expire_settlement` is admin-gated and won't fire itself |
 | Pending settlement backlog growing | `get_pending_metrics()` → `(count, total_value)` (single-call aggregate, avoids paginating `get_pending_settlements_page`) | Alert on operator-defined count/value thresholds tuned to normal throughput |
 | Treasury balance drained | `treasury_drained` event (`contracts/treasury/src/deposits.rs`) | Page immediately — this is an admin-only emergency-withdrawal path |
-| Token removed mid-flight | `token_removed` event while settlements referencing that token are still `Pending` | Warn — those settlements will fail `execute_settlement` with `TreasuryError::TokenNotAllowed` (12) |
+| Token removal blocked by pending settlements | `remove_allowed_token` failing with `TreasuryError::TokenHasPendingSettlements` (41) — removal is refused on-chain while any settlement is `Pending`, so a token can no longer be removed mid-flight | Info — resolve (execute, cancel or expire) the pending settlements, then retry the removal |
 
 ## Compliance (`contracts/compliance`)
 
 | Condition | Detection | Recommended threshold |
 |---|---|---|
 | Contract paused unexpectedly | `compliance_paused` event with no planned-maintenance window | Page immediately — all compliance checks are blocked (`ContractError::ContractPaused` = 2) while paused |
-| `AddressIndex` approaching capacity | `MAX_TRACKED_ADDRESSES` is `50_000` (`contracts/compliance/src/lib.rs`); once full, new-address tracking calls fail with `ContractError::AddressIndexFull` (5). Poll length via `export_snapshot(admin, 0, 0)` (or paginate with `export_snapshot_page`) | Warn at 80% (40,000 tracked addresses), page at 95% (47,500) — track growth rate, not just the instantaneous count, since this is a hard ceiling with no automatic eviction |
+| `AddressIndex` approaching capacity | `MAX_TRACKED_ADDRESSES` is `2_000` (`contracts/compliance/src/lib.rs`); once full, new-address tracking calls fail with `ContractError::AddressIndexFull` (5). Poll length via `export_snapshot(admin, 0, 0)` (or paginate with `export_snapshot_page`) | Warn at 80% (1,600 tracked addresses), page at 95% (1,900) — track growth rate, not just the instantaneous count, since this is a hard ceiling with no automatic eviction |
 | `AddressIndexFull` actually returned | Any call failing with `ContractError::AddressIndexFull` (5) | Page immediately — this means new addresses can no longer be onboarded at all |
 | Admin transfer left pending | `admin_transfer_initiated` event with no matching `admin_transferred` within your operational window | Warn — an unresolved pending-admin transfer is a standing privilege-escalation risk |
 | Unexpected `address_blocked` volume | `address_blocked` event rate spike vs. baseline | Warn — may indicate a misbehaving upstream risk feed rather than genuine bad actors |

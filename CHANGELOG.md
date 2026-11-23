@@ -7,7 +7,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+#### Treasury Contract
+- `get_settlement` now returns `Result<Settlement, TreasuryError>` (`SettlementNotFound`) instead
+  of panicking on unknown settlement IDs, matching `get_dispute`'s error-returning convention.
+- Unified the batch cap used by all settlement batch entrypoints (`batch_approve_settlements`,
+  `batch_cancel_settlements`, `batch_execute_settlements`) on the single `MAX_BATCH_SIZE = 50`
+  constant; see `docs/economic-parameters.md`.
+
 ### Added
+
+#### Compliance Contract
+- `cancel_admin_transfer` (#611): current admin can revoke a pending `transfer_admin` nomination; emits `admin_transfer_cancelled`.
+- `migrate` (#610): admin-only, idempotent schema migration entrypoint. Schema version bumped 1 → 2 (no data layout change; v1 storage is migrated by rewriting the version marker). Rejects unexpected stored versions with `UnexpectedSchemaVersion`.
+#### Invoice Contract
+- `get_invoices_by_payer` (#711): payers are now indexed when `mark_paid` records them, and `get_invoices_by_payer(payer, start, limit)` pages that index so a wallet can list what is addressed to a payer without scanning every invoice. `limit` is clamped to `MAX_PAGE_LIMIT` (100), and the per-payer index is bounded at `MAX_PAYER_INDEX_ENTRIES` (500) — payments beyond the cap still succeed, they are simply not indexed.
+- `get_invoice_summary` (#712): returns an `InvoiceSummary` — the list-view projection of an invoice plus `paid_usdc`/`remaining_usdc`, so a client can read how much a payer still owes in one call instead of replaying `invoice_paid` and refund events. Derived from the same storage record as `get_invoice`, so the two can never disagree.
+
+#### Treasury Contract
+- Timelocked signer and threshold-configuration changes (#447). Admin calls to `set_signer`, `remove_signer`, and `update_threshold` can now be queued via `propose_signer_change` with a 24-hour delay enforced by `execute_signer_change`; any admin can cancel the queued change within that window via `cancel_signer_change`. This restores a meaningful reaction window against a single-compromised-admin-key scenario that the pre-existing immediate entrypoints lacked.
+
+#### Settlement Workflow Contract
+- Two-step admin transfer (`transfer_admin` / `accept_admin`) matching the pattern already used by the invoice and compliance contracts (#621). `initialize` now takes an `admin` argument, and the role can be handed over without redeploying. The handover only takes effect once the nominee calls `accept_admin`, so nominating a mistyped or unreachable address is recoverable rather than a permanent loss of the contract. Both steps emit `admin_transfer_initiated` / `admin_transferred`.
+
+#### Tooling
+- `scripts/check-enum-doc-comments.sh` (#446): new lint script that verifies every `#[contracterror]` and `#[contracttype]` enum has a `///` doc comment on the enum itself (not just its variants). Integrated into `.pre-commit-config.yaml`, `justfile`, and `Makefile` alongside the existing `check-enum-ordering.sh` step.
+- All `#[contracterror]`/`#[contracttype]` enums across `contracts/` and `crates/` now carry enum-level `///` doc comments to satisfy the new lint and to provide a high-level summary before readers dive into individual variant descriptions.
 
 #### Invoice Contract
 - Core invoice lifecycle management (Pending, Paid, Released, Cancelled, Expired, RefundRequested).
@@ -42,3 +68,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Compliance-gated settlement execution (`execute_with_compliance`): the recommended entry point for compliance-gated settlements (per `ARCHITECTURE.md`). It checks `Compliance::is_allowed` before invoking `Treasury::execute_settlement` using its own address as the authorizing signer, so the compliance gate is enforced even though Treasury does not consult compliance itself.
 - Clear precondition failure: if the workflow contract has not been registered as a Treasury signer via `Treasury::set_signer` for its own address, `execute_with_compliance` returns `TreasuryError::WorkflowNotRegisteredSigner` (added to the shared `TreasuryError` enum) instead of surfacing Treasury's generic `UnauthorizedSigner`, making the missing setup step obvious to first-time deployers (#370).
 - Auditable execution history: `get_executed_settlement_ids_page(start, limit)` returns the settlement IDs executed through this workflow (in execution order, paginated to mirror `Treasury::get_pending_settlements_page`), so an operator can confirm every executed settlement passed the compliance gate and spot any executed directly against Treasury that bypassed it (#373).
+
+### Deprecated
+
+#### Compliance Contract
+- `set_operator` and `get_operator` (#749) are deprecated in favor of the multi-operator API (`add_operator`, `remove_operator`, `get_operators`). The single-operator entrypoints now delegate to the multi-operator storage so both APIs stay authoritative and consistent; they will be removed in a future release.

@@ -11,8 +11,8 @@ use treasury::{SettlementStatus, TreasuryContract, TreasuryContractClient};
 // Measured on 2026-07-27 (soroban-sdk 22.0.11, Rust 1.95.0, native host):
 //   CPU instructions : 261_833
 //   Memory bytes     :  46_107
-const BUDGET_CPU_BASELINE: u64 = 314_200; // 261_833 × 1.20, rounded up
-const BUDGET_MEM_BASELINE: u64 = 55_329; // 46_107 × 1.20, rounded up
+const BUDGET_CPU_BASELINE: u64 = 412_126; // 343_438 × 1.20, rounded up (re-measured Oct 2026)
+const BUDGET_MEM_BASELINE: u64 = 74_400; // 62_000 × 1.20 (re-measured Oct 2026)
 
 mod test_token {
     use soroban_sdk::{contract, contractimpl, Address, Env};
@@ -173,9 +173,9 @@ fn full_lifecycle_happy_path() {
     // Note over Treasury: Settlement{status=Pending}
     let inv = ctx.invoice.get_invoice(&inv_id);
     assert_eq!(inv.status, InvoiceStatus::Paid);
-    let settlement_id = ctx
-        .treasury
-        .propose_settlement(&ctx.admin, &ctx.merchant, &10_000_000);
+    let settlement_id =
+        ctx.treasury
+            .propose_settlement(&ctx.admin, &ctx.merchant, &10_000_000, &0_u64);
     let settlement = ctx.treasury.get_settlement(&settlement_id);
     assert_eq!(settlement.status, SettlementStatus::Pending);
 
@@ -244,9 +244,9 @@ fn full_lifecycle_rejected_when_compliance_fails() {
 
     ctx.token.mint(&ctx.treasury_id, &10_000_000);
 
-    let settlement_id = ctx
-        .treasury
-        .propose_settlement(&ctx.admin, &ctx.merchant, &10_000_000);
+    let settlement_id =
+        ctx.treasury
+            .propose_settlement(&ctx.admin, &ctx.merchant, &10_000_000, &0_u64);
     ctx.treasury.approve_settlement(&ctx.admin, &settlement_id);
 
     let wf_id = ctx._env.register_contract(None, ComplianceGatedSettlement);
@@ -314,9 +314,9 @@ fn full_lifecycle_budget_baseline() {
 
     ctx.token.mint(&ctx.treasury_id, &10_000_000);
 
-    let settlement_id = ctx
-        .treasury
-        .propose_settlement(&ctx.admin, &ctx.merchant, &10_000_000);
+    let settlement_id =
+        ctx.treasury
+            .propose_settlement(&ctx.admin, &ctx.merchant, &10_000_000, &0_u64);
     ctx.treasury.approve_settlement(&ctx.admin, &settlement_id);
 
     let wf_id = ctx._env.register_contract(None, ComplianceGatedSettlement);

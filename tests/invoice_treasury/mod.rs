@@ -40,8 +40,14 @@ impl InvoiceTreasuryWorkflow {
             return Err(InvoiceTreasuryError::InvoiceNotPending);
         }
         let signer = env.current_contract_address();
-        Ok(TreasuryContractClient::new(&env, &treasury_contract)
-            .propose_settlement(&signer, &inv.merchant, &inv.amount_usdc))
+        Ok(
+            TreasuryContractClient::new(&env, &treasury_contract).propose_settlement(
+                &signer,
+                &inv.merchant,
+                &inv.amount_usdc,
+                &0_u64,
+            ),
+        )
     }
 }
 
@@ -60,7 +66,9 @@ fn setup() -> Setup {
     let env = Env::default();
     let workflow_id = env.register_contract(None, InvoiceTreasuryWorkflow);
     let fixture = setup_full_protocol(&env);
-    fixture.treasury.set_signer(&fixture.admin, &workflow_id, &1);
+    fixture
+        .treasury
+        .set_signer(&fixture.admin, &workflow_id, &1);
 
     (
         env,
@@ -89,9 +97,15 @@ fn pending_invoice_allows_settlement_proposal() {
     );
     assert_eq!(invoice.get_invoice(&inv_id).status, InvoiceStatus::Pending);
 
-    let result = InvoiceTreasuryWorkflowClient::new(&env, &wf_id)
-        .try_propose_for_invoice(&invoice_cid, &treasury_cid, &inv_id);
-    assert!(result.is_ok(), "pending invoice must allow settlement proposal");
+    let result = InvoiceTreasuryWorkflowClient::new(&env, &wf_id).try_propose_for_invoice(
+        &invoice_cid,
+        &treasury_cid,
+        &inv_id,
+    );
+    assert!(
+        result.is_ok(),
+        "pending invoice must allow settlement proposal"
+    );
 }
 
 #[test]
@@ -138,7 +152,10 @@ fn cancelled_invoice_blocks_settlement_proposal() {
         &MaybeAddress::None,
     );
     invoice.cancel_invoice(&merchant, &inv_id);
-    assert_eq!(invoice.get_invoice(&inv_id).status, InvoiceStatus::Cancelled);
+    assert_eq!(
+        invoice.get_invoice(&inv_id).status,
+        InvoiceStatus::Cancelled
+    );
 
     let err = InvoiceTreasuryWorkflowClient::new(&env, &wf_id)
         .try_propose_for_invoice(&invoice_cid, &treasury_cid, &inv_id)

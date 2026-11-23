@@ -65,7 +65,7 @@ impl ReentrancyToken {
                 CallbackTarget::Deposit => {
                     let depositor: Address =
                         env.storage().instance().get(&("rt_depositor",)).unwrap();
-                    client.deposit(&depositor, &env.current_contract_address(), &amount);
+                    client.deposit(&depositor, &env.current_contract_address(), &amount, &None);
                 }
                 CallbackTarget::Withdraw => {
                     // Balance was already decremented by the outer `withdraw`,

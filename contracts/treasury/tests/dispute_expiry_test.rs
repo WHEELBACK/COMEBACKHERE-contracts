@@ -23,8 +23,8 @@ fn expire_dispute_transitions_to_expired() {
     let merchant = Address::generate(&env);
     let claimant = Address::generate(&env);
 
-    let sid = client.propose_settlement(&admin, &merchant, &10_000_000);
-    let did = client.raise_dispute(&claimant, &sid, &merchant, &5_000_000, &500);
+    let sid = client.propose_settlement(&admin, &merchant, &10_000_000, &0_u64);
+    let did = client.raise_dispute(&claimant, &sid, &merchant, &5_000_000, &500, &None);
 
     env.ledger().with_mut(|l| l.timestamp = 600);
     client.expire_dispute(&admin, &did);
@@ -42,8 +42,8 @@ fn expire_dispute_releases_settlement_hold() {
     let merchant = Address::generate(&env);
     let claimant = Address::generate(&env);
 
-    let sid = client.propose_settlement(&admin, &merchant, &10_000_000);
-    let did = client.raise_dispute(&claimant, &sid, &merchant, &5_000_000, &500);
+    let sid = client.propose_settlement(&admin, &merchant, &10_000_000, &0_u64);
+    let did = client.raise_dispute(&claimant, &sid, &merchant, &5_000_000, &500, &None);
 
     let s = client.get_settlement(&sid);
     assert_eq!(s.status, SettlementStatus::OnHold);
@@ -65,8 +65,8 @@ fn expire_dispute_at_exact_deadline_succeeds() {
     let merchant = Address::generate(&env);
     let claimant = Address::generate(&env);
 
-    let sid = client.propose_settlement(&admin, &merchant, &10_000_000);
-    let did = client.raise_dispute(&claimant, &sid, &merchant, &5_000_000, &500);
+    let sid = client.propose_settlement(&admin, &merchant, &10_000_000, &0_u64);
+    let did = client.raise_dispute(&claimant, &sid, &merchant, &5_000_000, &500, &None);
 
     // The guard is `timestamp < expires_at`, so timestamp == expires_at must succeed.
     env.ledger().with_mut(|l| l.timestamp = 500);
@@ -84,8 +84,8 @@ fn raise_dispute_stores_expires_at_field() {
     let merchant = Address::generate(&env);
     let claimant = Address::generate(&env);
 
-    let sid = client.propose_settlement(&admin, &merchant, &10_000_000);
-    let did = client.raise_dispute(&claimant, &sid, &merchant, &5_000_000, &86_400);
+    let sid = client.propose_settlement(&admin, &merchant, &10_000_000, &0_u64);
+    let did = client.raise_dispute(&claimant, &sid, &merchant, &5_000_000, &86_400, &None);
 
     let dispute = client.get_dispute(&did);
     assert_eq!(dispute.dispute_expires_at, 86_400);
@@ -105,7 +105,7 @@ fn expire_dispute_without_linked_settlement_still_succeeds() {
     let claimant = Address::generate(&env);
 
     // Raise a dispute against a non-existent settlement (no OnHold settlement to release).
-    let did = client.raise_dispute(&claimant, &9999, &merchant, &5_000_000, &500);
+    let did = client.raise_dispute(&claimant, &9999, &merchant, &5_000_000, &500, &None);
 
     env.ledger().with_mut(|l| l.timestamp = 600);
     client.expire_dispute(&admin, &did);

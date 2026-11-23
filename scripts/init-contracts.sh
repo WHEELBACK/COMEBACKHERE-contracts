@@ -47,12 +47,35 @@ log_info "Using network: $NETWORK ($RPC_URL)"
 # unscoped `cargo build`): the workspace also contains comebackhere-tests,
 # whose `default = ["testutils"]` feature enables soroban-sdk/testutils,
 # which soroban-sdk hard-disables on the wasm32 target.
+#
+# target-cpu=mvp stops rustc emitting post-MVP instructions (e.g. bulk-memory
+# `memory.copy`) that Rust >= 1.82 enables by default for wasm32 and the
+# Soroban host rejects; see the wasm-opt step below for the rest.
 log_info "Building contracts..."
+CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUSTFLAGS="-C target-cpu=mvp" \
 cargo build --target wasm32-unknown-unknown --release \
     -p comebackhere-compliance \
     -p comebackhere-invoice \
     -p comebackhere-treasury \
     -p comebackhere-settlement-workflow
+
+# target-cpu=mvp doesn't reach the prebuilt `core` that gets linked in, which
+# is built with `reference-types` and carries call_indirect encodings the
+# Soroban host's validator rejects ("reference-types not enabled: zero byte
+# expected"). Nothing actually uses reference types, so re-encoding through
+# binaryen with only MVP + sign-ext/mutable-globals enabled yields a
+# deployable module. Custom sections (contractspecv0 etc.) are preserved.
+# -Oz also shrinks the modules: treasury's unoptimized install transaction
+# grew large enough to time out on the local quickstart network.
+if ! command -v wasm-opt > /dev/null 2>&1; then
+    log_error "wasm-opt not found. Install binaryen (e.g. 'apt-get install binaryen' or 'brew install binaryen')."
+    exit 1
+fi
+log_info "Lowering contract wasm to the Soroban-supported feature set..."
+for contract in compliance invoice treasury settlement_workflow; do
+    wasm="target/wasm32-unknown-unknown/release/${contract}.wasm"
+    wasm-opt -Oz --mvp-features --enable-sign-ext --enable-mutable-globals "$wasm" -o "$wasm"
+done
 
 # 2. Setup network
 log_info "Ensuring network '$NETWORK' is configured..."
@@ -107,7 +130,7 @@ stellar contract invoke \
     --id "$TREASURY_ID" \
     --source admin \
     --network "$NETWORK" \
-    -- initialize --admin "$ADMIN_ADDRESS" --threshold 1
+    -- initialize --admin "$ADMIN_ADDRESS" --threshold 1 --signers '[]'
 
 # 7. Deploy and Initialize Settlement Workflow
 echo "Deploying Settlement Workflow contract..."
@@ -117,12 +140,15 @@ SETTLEMENT_WORKFLOW_ID=$(stellar contract deploy \
     --network "$NETWORK")
 echo "Settlement Workflow ID: $SETTLEMENT_WORKFLOW_ID"
 
+# The workflow's admin is set here and is thereafter only changeable through the
+# two-step transfer_admin/accept_admin flow (#621); there is no single-step
+# override, so choose this address deliberately.
 echo "Initializing Settlement Workflow contract..."
 stellar contract invoke \
     --id "$SETTLEMENT_WORKFLOW_ID" \
     --source admin \
     --network "$NETWORK" \
-    -- initialize --compliance_id "$COMPLIANCE_ID" --treasury_id "$TREASURY_ID"
+    -- initialize --admin "$ADMIN_ADDRESS" --compliance_id "$COMPLIANCE_ID" --treasury_id "$TREASURY_ID"
 
 echo ""
 echo "============================================================"

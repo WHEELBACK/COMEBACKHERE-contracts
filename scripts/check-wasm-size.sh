@@ -2,7 +2,7 @@
 # check-wasm-size.sh — treasury wasm size regression guard.
 #
 # Usage:
-#   ./scripts/check-wasm-size.sh [--update] [path/to/treasury.wasm]
+#   ./scripts/check-wasm-size.sh [--update] [--markdown path] [path/to/treasury.wasm]
 #
 # Options:
 #   --update   Write the current wasm size as the new baseline and exit 0.
@@ -24,14 +24,22 @@ MARGIN=2048
 # ---- Parse arguments -------------------------------------------------------
 UPDATE=0
 WASM_PATH=""
+MARKDOWN_PATH=""
 
-for arg in "$@"; do
+while [ "$#" -gt 0 ]; do
+  arg="$1"
   case "$arg" in
     --update)
       UPDATE=1
+      shift
+      ;;
+    --markdown)
+      MARKDOWN_PATH="${2:?--markdown requires a path}"
+      shift 2
       ;;
     *)
       WASM_PATH="$arg"
+      shift
       ;;
   esac
 done
@@ -76,6 +84,16 @@ BUDGET=$(( BASELINE + MARGIN ))
 echo "treasury.wasm size : ${CURRENT_SIZE} bytes"
 echo "Baseline           : ${BASELINE} bytes"
 echo "Allowed budget     : ${BUDGET} bytes  (baseline + ${MARGIN} margin)"
+
+if [ -n "$MARKDOWN_PATH" ]; then
+  {
+    echo "### Treasury WASM size"
+    echo ""
+    echo "| Current | Baseline | Budget | Delta |"
+    echo "| ---: | ---: | ---: | ---: |"
+    echo "| ${CURRENT_SIZE} B | ${BASELINE} B | ${BUDGET} B | $(( CURRENT_SIZE - BASELINE )) B |"
+  } > "$MARKDOWN_PATH"
+fi
 
 if [ "$CURRENT_SIZE" -gt "$BUDGET" ]; then
   echo ""

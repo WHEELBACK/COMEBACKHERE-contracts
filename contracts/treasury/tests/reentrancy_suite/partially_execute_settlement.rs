@@ -36,7 +36,7 @@ fn partially_execute_settlement_baseline_no_reentry_pays_merchant_once() {
     token.set_callback_target(&CallbackTarget::None, &treasury_id);
 
     let merchant = Address::generate(&env);
-    let sid = client.propose_settlement(&admin, &merchant, &total);
+    let sid = client.propose_settlement(&admin, &merchant, &total, &0_u64);
     client.partially_execute_settlement(&admin, &sid, &partial, &token_id);
 
     assert_eq!(token.balance(&merchant), partial);
@@ -67,7 +67,7 @@ fn partially_execute_settlement_reentrancy_demonstrates_cei_violation() {
     token.set_callback_target(&CallbackTarget::PartiallyExecuteSettlement, &treasury_id);
 
     let merchant = Address::generate(&env);
-    let sid = client.propose_settlement(&admin, &merchant, &total);
+    let sid = client.propose_settlement(&admin, &merchant, &total, &0_u64);
     token.set_partial_execute_params(&admin, &sid, &partial);
 
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {

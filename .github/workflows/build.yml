@@ -6,7 +6,6 @@ on:
 
 env:
   CARGO_TERM_COLOR: always
-  STELLAR_CLI_VERSION: "22.8.2"
 
 jobs:
   wasm-build:
@@ -14,10 +13,19 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Load version pins
+        shell: bash
+        run: |
+          set -a
+          source .github/versions.env
+          set +a
+          echo "RUST_VERSION=$RUST_VERSION" >> "$GITHUB_ENV"
+          echo "STELLAR_CLI_VERSION=$STELLAR_CLI_VERSION" >> "$GITHUB_ENV"
+
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@master
         with:
-          toolchain: "1.95.0"
+          toolchain: ${{ env.RUST_VERSION }}
           targets: wasm32-unknown-unknown
 
       - name: Install stellar-cli build dependencies

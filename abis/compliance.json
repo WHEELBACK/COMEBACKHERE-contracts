@@ -1,70 +1,68 @@
 {
-  "name": "compliance",
-  "version": "1.0.0",
   "functions": [
-    {
-      "name": "validate_invoice",
-      "inputs": ["invoice_id"],
-      "outputs": ["validation_result"],
-      "description": "Validates an invoice against business rules"
-    },
-    {
-      "name": "check_compliance",
-      "inputs": ["invoice_id", "customer_id"],
-      "outputs": ["compliance_status"],
-      "description": "Checks if an invoice complies with regulatory requirements"
-    },
-    {
-      "name": "generate_compliance_report",
-      "inputs": ["period_start", "period_end"],
-      "outputs": ["report"],
-      "description": "Generates a compliance report for a period"
-    },
-    {
-      "name": "flag_non_compliant",
-      "inputs": ["invoice_id"],
-      "outputs": ["flagged_invoices"],
-      "description": "Flags invoices that violate compliance rules"
-    },
-    {
-      "name": "audit_log_entry",
-      "inputs": ["action", "entity_id", "timestamp"],
-      "outputs": ["audit_record"],
-      "description": "Creates an audit log entry"
-    }
+    "accept_admin",
+    "add_operator",
+    "address_status",
+    "allow_address",
+    "allow_address_until",
+    "allow_address_with_tier",
+    "block_address",
+    "block_address_until",
+    "bulk_allow_addresses",
+    "bulk_block_addresses",
+    "bulk_check_addresses",
+    "cancel_admin_transfer",
+    "clear_address",
+    "export_snapshot",
+    "export_snapshot_page",
+    "get_address_history",
+    "get_address_tier",
+    "get_allow_expiry",
+    "get_block_placer",
+    "get_block_reason",
+    "get_blocklist_root",
+    "get_jurisdiction",
+    "get_operator",
+    "get_operators",
+    "get_pause_reason",
+    "get_schema_version",
+    "get_tier_limit",
+    "initialize",
+    "is_allowed",
+    "is_blocked",
+    "is_blocked_with_proof",
+    "migrate",
+    "pause",
+    "pause_with_reason",
+    "remove_operator",
+    "revoke_allow",
+    "set_blocklist_root",
+    "set_jurisdiction",
+    "set_operator",
+    "set_tier_limit",
+    "sweep_expired",
+    "transfer_admin",
+    "unpause"
   ],
   "events": [
-    {
-      "name": "compliance_check_passed",
-      "payload": {
-        "invoice_id": "string",
-        "rules_checked": "array[string]",
-        "passed": "boolean"
-      }
-    },
-    {
-      "name": "compliance_check_failed",
-      "payload": {
-        "invoice_id": "string",
-        "violations": "array[string]",
-        "severity": "string"
-      }
-    },
-    {
-      "name": "non_compliant_invoice_flagged",
-      "payload": {
-        "invoice_id": "string",
-        "violations": "array[string]",
-        "action": "flag"
-      }
-    },
-    {
-      "name": "audit_log_created",
-      "payload": {
-        "action": "string",
-        "entity_id": "string",
-        "timestamp": "timestamp"
-      }
-    }
+    "address_allow_expired",
+    "address_allowed",
+    "address_allowed_until",
+    "address_blocked",
+    "address_blocked_until",
+    "address_cleared",
+    "address_revoked",
+    "admin_transfer_cancelled",
+    "admin_transfer_initiated",
+    "admin_transferred",
+    "blocklist_root_set",
+    "compliance_paused",
+    "compliance_unpaused",
+    "jurisdiction_set",
+    "operator_added",
+    "operator_removed",
+    "operator_set",
+    "schema_migrated",
+    "tier_limit_set"
   ]
 }

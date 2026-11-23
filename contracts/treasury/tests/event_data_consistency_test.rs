@@ -18,7 +18,8 @@
 
 use compliance::{ComplianceContract, ComplianceContractClient, DataKey as ComplianceDataKey};
 use invoice::{
-    DataKey as InvoiceDataKey, Invoice, InvoiceContract, InvoiceContractClient, MaybeAddress,
+    DataKey as InvoiceDataKey, Invoice, InvoiceContract, InvoiceContractClient, InvoiceCreatedEvent,
+    MaybeAddress,
     MaybeBytes,
 };
 use soroban_sdk::{
@@ -62,7 +63,7 @@ fn settlement_executed_event_data_matches_storage_at_emission() {
     client.initialize(&admin, &1, &soroban_sdk::Vec::new(&env));
     let token_id = env.register_contract(None, FakeToken);
 
-    let sid = client.propose_settlement(&admin, &merchant, &10_000_000);
+    let sid = client.propose_settlement(&admin, &merchant, &10_000_000, &0_u64);
     client.execute_settlement(&admin, &sid, &token_id);
 
     assert_eq!(
@@ -102,8 +103,8 @@ fn settlement_executed_event_data_matches_storage_for_each_of_several_settlement
 
     let merchant_a = Address::generate(&env);
     let merchant_b = Address::generate(&env);
-    let sid_a = client.propose_settlement(&admin, &merchant_a, &1_000_000);
-    let sid_b = client.propose_settlement(&admin, &merchant_b, &2_000_000);
+    let sid_a = client.propose_settlement(&admin, &merchant_a, &1_000_000, &0_u64);
+    let sid_b = client.propose_settlement(&admin, &merchant_b, &2_000_000, &0_u64);
 
     client.execute_settlement(&admin, &sid_a, &token_id);
     let event_a = Settlement::try_from_val(&env, &last_event_data(&env)).unwrap();
@@ -157,8 +158,11 @@ fn invoice_created_event_data_matches_storage_at_emission() {
         &MaybeAddress::None,
     );
 
-    assert_eq!(last_event_symbol(&env), Symbol::new(&env, "invoice_created"));
-    let event_invoice = Invoice::try_from_val(&env, &last_event_data(&env)).unwrap();
+    assert_eq!(
+        last_event_symbol(&env),
+        Symbol::new(&env, "invoice_created")
+    );
+    let event = InvoiceCreatedEvent::try_from_val(&env, &last_event_data(&env)).unwrap();
 
     let env2 = env.clone();
     let stored_invoice: Invoice = env.as_contract(&invoice_id, || {
@@ -168,8 +172,14 @@ fn invoice_created_event_data_matches_storage_at_emission() {
             .unwrap()
     });
 
-    assert_eq!(event_invoice, stored_invoice);
-    assert_eq!(event_invoice.id, id);
+    assert_eq!(event.id, id);
+    assert_eq!(event.id, stored_invoice.id);
+    assert_eq!(event.merchant, stored_invoice.merchant);
+    assert_eq!(event.amount_usdc, stored_invoice.amount_usdc);
+    assert_eq!(event.gross_usdc, stored_invoice.gross_usdc);
+    assert_eq!(event.expires_at, stored_invoice.expires_at);
+    assert_eq!(event.merchant_nonce, stored_invoice.merchant_nonce);
+    assert_eq!(event.token_address, stored_invoice.token_address);
 }
 
 // ── address_blocked round-trip ──────────────────────────────────────────────
@@ -186,7 +196,10 @@ fn address_blocked_event_data_matches_storage_at_emission() {
 
     client.block_address(&admin, &subject, &None);
 
-    assert_eq!(last_event_symbol(&env), Symbol::new(&env, "address_blocked"));
+    assert_eq!(
+        last_event_symbol(&env),
+        Symbol::new(&env, "address_blocked")
+    );
     let event_address = Address::try_from_val(&env, &last_event_data(&env)).unwrap();
 
     let env2 = env.clone();

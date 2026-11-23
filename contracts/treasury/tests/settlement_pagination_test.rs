@@ -6,14 +6,14 @@ use treasury::{SettlementStatus, TreasuryContract, TreasuryContractClient};
 // is a read-only scan, so this is a generous ceiling, not a tight one.
 const PAGE_INSTRUCTION_BUDGET: u64 = 100_000_000;
 
-fn setup_with_settlements(env: &Env, n: u64) -> (TreasuryContractClient, Address) {
+fn setup_with_settlements(env: &Env, n: u64) -> (TreasuryContractClient<'_>, Address) {
     let admin = Address::generate(env);
     let contract_id = env.register_contract(None, TreasuryContract);
     let client = TreasuryContractClient::new(env, &contract_id);
     client.initialize(&admin, &100, &soroban_sdk::Vec::new(env));
     for _ in 0..n {
         let merchant = Address::generate(env);
-        client.propose_settlement(&admin, &merchant, &1_000_000);
+        client.propose_settlement(&admin, &merchant, &1_000_000, &0_u64);
     }
     (client, admin)
 }
@@ -33,7 +33,7 @@ fn setup_with_interspersed_executions<'a>(
     let mut sid = 0u64;
     for &executed in pattern {
         let merchant = Address::generate(env);
-        sid = client.propose_settlement(&admin, &merchant, &1_000_000);
+        sid = client.propose_settlement(&admin, &merchant, &1_000_000, &0_u64);
         if executed {
             client.execute_settlement(&admin, &sid, &token_id);
         }

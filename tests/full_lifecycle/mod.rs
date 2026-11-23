@@ -44,8 +44,7 @@ impl FullLifecycleWorkflow {
         invoice_id: u64,
         merchant: Address,
     ) -> Result<u64, FullLifecycleError> {
-        let inv =
-            InvoiceContractClient::new(&env, &invoice_contract).get_invoice(&invoice_id);
+        let inv = InvoiceContractClient::new(&env, &invoice_contract).get_invoice(&invoice_id);
         if inv.status != InvoiceStatus::Pending {
             return Err(FullLifecycleError::InvoiceNotPending);
         }
@@ -53,8 +52,14 @@ impl FullLifecycleWorkflow {
             return Err(FullLifecycleError::ComplianceDenied);
         }
         let signer = env.current_contract_address();
-        Ok(TreasuryContractClient::new(&env, &treasury_contract)
-            .propose_settlement(&signer, &inv.merchant, &inv.amount_usdc))
+        Ok(
+            TreasuryContractClient::new(&env, &treasury_contract).propose_settlement(
+                &signer,
+                &inv.merchant,
+                &inv.amount_usdc,
+                &0_u64,
+            ),
+        )
     }
 }
 
@@ -75,7 +80,9 @@ fn setup() -> Setup {
     let env = Env::default();
     let workflow_id = env.register_contract(None, FullLifecycleWorkflow);
     let fixture = setup_full_protocol(&env);
-    fixture.treasury.set_signer(&fixture.admin, &workflow_id, &1);
+    fixture
+        .treasury
+        .set_signer(&fixture.admin, &workflow_id, &1);
 
     (
         env,
