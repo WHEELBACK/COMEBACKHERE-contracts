@@ -71,7 +71,7 @@ uniqueness tests are per-contract and why no global key registry is needed.
 | Contract | Key enum | Location | Variants |
 |---|---|---|---|
 | Invoice (escrow + refund records) | `invoice::DataKey` | `contracts/invoice/src/invoice.rs` | 14 |
-| Treasury (escrow, settlements, signers) | `multisig::DataKey` (re-exported as `treasury::DataKey`) | `crates/multisig/src/lib.rs` | 24 |
+| Treasury (escrow, settlements, signers, roles) | `multisig::DataKey` (re-exported as `treasury::DataKey`) | `crates/multisig/src/lib.rs` | 26 |
 | Compliance (allowlist/blocklist) | `compliance::DataKey` | `contracts/compliance/src/lib.rs` | 22 |
 | Settlement workflow (orchestrator) | `settlement_workflow::DataKey` | `contracts/settlement-workflow/src/lib.rs` | 3 |
 | Storage layout (slot metadata, layout registry) | `storage_layout::DataKey` | `contracts/storage-layout/src/lib.rs` | 6 |
@@ -130,6 +130,33 @@ The corresponding structural findings and fixes:
 - Every contract exposes its enum publicly (`invoice::DataKey`,
   `treasury::DataKey`, `compliance::DataKey`, `settlement_workflow::DataKey`)
   so the audit is executable rather than a review comment.
+
+### Role storage keys (issues #960, #970)
+
+Role-based authorization state lives in the treasury key space under two
+appended variants:
+
+- `DataKey::Role(Address, Role)` — the per-address, per-role grant. The
+  composite key carries both the holder and the role so that granting one role
+  never overwrites another; a single-address form would have merged them.
+- `DataKey::RoleList` — the enumerable index of role holders, so role
+  enumeration is O(page) rather than a full storage scan.
+
+Both are append-only additions: no existing variant was renumbered, reordered
+or repurposed, so previously stored data keeps its meaning.
+
+Role lookups read exactly one key. `has_role`/`require_role` deserialize only
+`DataKey::Role(addr, role)` and never load or deserialize the full signer list
+or `RoleList`; the list is touched only by enumeration entrypoints. This keeps
+the ledger footprint of an authorization check to a single key and avoids
+paying host memory and CPU instructions for records the check does not need.
+The same targeted-key read pattern is used by the `access-control` contract
+when resolving a caller's role, replacing the previous whole-list
+deserialization.
+
+This is a non-breaking, storage-compatible update: the on-chain key
+representation and the stored value shapes are unchanged, only the set of keys
+read per call is narrowed. No migration is required.
 
 ## Change procedure
 
