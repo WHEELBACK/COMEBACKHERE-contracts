@@ -20,6 +20,7 @@ pub use multisig::TreasuryError;
 
 use soroban_sdk::{contract, contractimpl, Address, Bytes, Env, IntoVal, Symbol, Vec};
 
+mod access_control;
 mod admin;
 mod deposits;
 mod disputes;
@@ -80,6 +81,10 @@ impl TreasuryContract {
         env.storage()
             .instance()
             .set(&DataKey::SignerList, &signer_list);
+        // Bootstrap the admin as the initial role holder so granular role checks
+        // (#969) are usable immediately after initialization.
+        access_control::grant_role(&env, &admin, &access_control::role_admin(&env));
+        verify_invariants(&env);
         env.events()
             .publish((Symbol::new(&env, "treasury_initialized"),), admin);
         // Extend instance storage TTL on initialization (#866) so the contract's
@@ -188,6 +193,25 @@ pub(crate) fn require_admin(env: &Env, admin: &Address) {
     }
 }
 
+/// Granular role guard for parameter-modifying entrypoints (#969). Requires the
+/// caller's authorization and verifies it holds `role` in the access-control
+/// role table. Fails closed with `Unauthorized` when the role is not granted.
+pub(crate) fn require_role(env: &Env, caller: &Address, role: &Symbol) {
+    caller.require_auth();
+    if !access_control::has_role(env, caller, role) {
+        soroban_sdk::panic_with_error!(env, TreasuryError::Unauthorized);
+    }
+}
+
+/// Verifies the treasury's core storage invariants after a mutation (#972).
+/// Panics with `TreasuryError::InvalidAmount` when the persisted state
+/// is inconsistent so a bad write can never be committed silently.
+pub(crate) fn verify_invariants(env: &Env) {
+    if !access_control::invariants_hold(env) {
+        soroban_sdk::panic_with_error!(env, TreasuryError::InvalidAmount);
+    }
+}
+
 pub(crate) fn require_not_paused(env: &Env) {
     let paused: bool = env
         .storage()
@@ -227,6 +251,18 @@ pub(crate) fn require_compliance_allowed(
         return Err(TreasuryError::ComplianceCheckFailed);
     }
     Ok(())
+}
+
+/// Checked subtraction used by partial settlement computations (#968). Returns
+/// `TreasuryError::ArithmeticOverflow` instead of wrapping/panicking when
+/// `amount` exceeds `available`, keeping partial settlement math defensive.
+pub(crate) fn checked_sub_amount(
+    available: i128,
+    amount: i128,
+) -> Result<i128, TreasuryError> {
+    available
+        .checked_sub(amount)
+        .ok_or(TreasuryError::ArithmeticOverflow)
 }
 
 /// Writes `settlement` to storage and keeps `DataKey::PendingSettlementIndex` in sync
