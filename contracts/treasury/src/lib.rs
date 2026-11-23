@@ -1,13 +1,26 @@
 #![no_std]
 
+/// Protocol-wide basis-point denominator (10 000 = 100.00%) and typed helpers,
+/// re-exported from `crates/protocol-math` so clients building against the
+/// treasury resolve ratios against the same value the contract validates them
+/// with (#707).
+pub use protocol_math::{apply_bps_i128, is_valid_bps, split_bps_i128, BPS_DENOMINATOR};
+
 pub use multisig::{
-    DataKey, Dispute, DisputeStatus, RotationStatus, Settlement, SettlementHoldReason,
-    SettlementStatus, SignerChangeKind, SignerChangeProposal, SignerChangeStatus,
-    SignerRotationProposal, TreasuryError,
+    DataKey, Dispute, DisputeStatus, MaybeAddress, RotationStatus, Settlement,
+    SettlementHoldReason, SettlementStatus, SignerChangeKind, SignerChangeProposal,
+    SignerChangeStatus, SignerRotationProposal,
 };
+// Explicit re-export so external consumers can import TreasuryError from this
+// crate directly. TreasuryError is canonically defined in `crates/multisig`
+// (the shared error authority for all treasury operations) and re-exported here
+// for convenience. See the doc comment on `TreasuryError` in that crate for the
+// full rationale.
+pub use multisig::TreasuryError;
 
-use soroban_sdk::{contract, contractimpl, Address, Env, Symbol, Vec};
+use soroban_sdk::{contract, contractimpl, Address, Bytes, Env, IntoVal, Symbol, Vec};
 
+mod admin;
 mod deposits;
 mod disputes;
 mod holds;
@@ -49,6 +62,9 @@ impl TreasuryContract {
         env.storage().instance().set(&DataKey::DisputeCount, &0u64);
         env.storage()
             .instance()
+            .set(&DataKey::SettlementExpirySecs, &(7u64 * 24 * 60 * 60));
+        env.storage()
+            .instance()
             .set(&DataKey::Signer(admin.clone()), &1u32);
         let mut signer_list = Vec::new(&env);
         signer_list.push_back(admin.clone());
@@ -67,97 +83,19 @@ impl TreasuryContract {
             .publish((Symbol::new(&env, "treasury_initialized"),), admin);
         Ok(())
     }
-
-    /// Updates the multisig approval threshold required to execute settlements (admin-only).
-    /// Errors: `ZeroThreshold`, `ThresholdUnreachable`.
-    /// Emits: `threshold_updated`.
-    pub fn update_threshold(
-        env: Env,
-        admin: Address,
-        new_threshold: u32,
-    ) -> Result<(), TreasuryError> {
-        require_admin(&env, &admin);
-        if new_threshold == 0 {
-            return Err(TreasuryError::ZeroThreshold);
-        }
-        let total_weight: u32 = Self::get_all_signers(env.clone())
-            .iter()
-            .map(|(_, weight)| weight)
-            .sum();
-        if new_threshold > total_weight {
-            return Err(TreasuryError::ThresholdUnreachable);
-        }
-        env.storage()
-            .instance()
-            .set(&DataKey::Threshold, &new_threshold);
-        env.events()
-            .publish((Symbol::new(&env, "threshold_updated"),), new_threshold);
-        Ok(())
-    }
-
-    /// Pauses the contract, blocking all state-mutating operations except admin functions (admin-only).
-    /// Emits: `treasury_paused`.
-    pub fn pause(env: Env, admin: Address) {
-        require_admin(&env, &admin);
-        env.storage().instance().set(&DataKey::Paused, &true);
-        env.events()
-            .publish((Symbol::new(&env, "treasury_paused"),), admin);
-    }
-
-    /// Resumes normal operations after a pause (admin-only).
-    /// Emits: `treasury_unpaused`.
-    pub fn unpause(env: Env, admin: Address) {
-        require_admin(&env, &admin);
-        env.storage().instance().set(&DataKey::Paused, &false);
-        env.events()
-            .publish((Symbol::new(&env, "treasury_unpaused"),), admin);
-    }
-
-    /// Configures the maximum amount withdrawable per rolling time window (admin-only).
-    /// Applies to both `withdraw` (tracked per recipient `to`) and `withdraw_all` (tracked
-    /// per `recipient`) — see `deposits.rs`. Passing `limit <= 0` disables the cap
-    /// (the default at initialization is uncapped), trading off protection against a
-    /// compromised-but-authorized withdrawer for the ability to move arbitrarily large
-    /// legitimate withdrawals in a single call; admins needing large one-off withdrawals
-    /// should raise the limit first rather than relying on an uncapped default long-term.
-    /// Emits: `withdrawal_limit_set`.
-    pub fn set_withdrawal_limit(env: Env, admin: Address, limit: i128, window_secs: u64) {
-        require_admin(&env, &admin);
-        env.storage()
-            .instance()
-            .set(&DataKey::WithdrawalLimitPerWindow, &limit);
-        env.storage()
-            .instance()
-            .set(&DataKey::WithdrawalWindowSecs, &window_secs);
-        env.events().publish(
-            (Symbol::new(&env, "withdrawal_limit_set"),),
-            (limit, window_secs),
-        );
-    }
-
-    /// Returns the currently configured `(limit, window_secs)`. `limit <= 0` means uncapped.
-    pub fn get_withdrawal_limit(env: Env) -> (i128, u64) {
-        let limit: i128 = env
-            .storage()
-            .instance()
-            .get(&DataKey::WithdrawalLimitPerWindow)
-            .unwrap_or(0);
-        let window_secs: u64 = env
-            .storage()
-            .instance()
-            .get(&DataKey::WithdrawalWindowSecs)
-            .unwrap_or(0);
-        (limit, window_secs)
-    }
 }
 
 /// Maximum number of tokens allowed in the allowlist to prevent unbounded storage growth.
 pub(crate) const MAX_ALLOWED_TOKENS: u32 = 20;
 
+/// Default TTL (in ledgers) for a deposit reference id before it can be reused (#747).
+pub(crate) const DEPOSIT_REF_TTL_LEDGERS: u32 = 30 * 24 * 60 * 60 / 5;
+
 pub(crate) fn require_admin(env: &Env, admin: &Address) {
     admin.require_auth();
-    let stored: Address = env.storage().instance().get(&DataKey::Admin).unwrap();
-    if stored != *admin {
+    // An uninitialized contract has no admin, so it fails closed as Unauthorized.
+    let stored: Option<Address> = env.storage().instance().get(&DataKey::Admin);
+    if stored.as_ref() != Some(admin) {
         soroban_sdk::panic_with_error!(env, TreasuryError::Unauthorized);
     }
 }
@@ -171,6 +109,104 @@ pub(crate) fn require_not_paused(env: &Env) {
     if paused {
         soroban_sdk::panic_with_error!(env, TreasuryError::ContractPaused);
     }
+}
+
+/// Enforces the recipient's compliance tier transaction limit before a settlement
+/// transfers funds (#757). Calls `is_allowed_for_amount` on the configured
+/// `compliance-client` contract; if the recipient is not allowed for `amount` the
+/// settlement execution fails closed with `TreasuryError::ComplianceCheckFailed`.
+///
+/// When no compliance client is configured the check is skipped so existing
+/// deployments without compliance keep working.
+pub(crate) fn require_compliance_allowed(
+    env: &Env,
+    recipient: &Address,
+    amount: i128,
+) -> Result<(), TreasuryError> {
+    let client: Option<Address> = env
+        .storage()
+        .instance()
+        .get(&DataKey::ComplianceId);
+    let Some(compliance) = client else {
+        return Ok(());
+    };
+    let allowed: bool = env.invoke_contract(
+        &compliance,
+        &Symbol::new(env, "is_allowed_for_amount"),
+        soroban_sdk::vec![env, recipient.into_val(env), amount.into_val(env)],
+    );
+    if !allowed {
+        return Err(TreasuryError::ComplianceCheckFailed);
+    }
+    Ok(())
+}
+
+/// Writes `settlement` to storage and keeps `DataKey::PendingSettlementIndex` in sync
+/// with its `status` (#572). This is the *only* place a `Settlement` should be persisted
+/// in this crate — every write site (propose, approve, execute, cancel, expire, hold,
+/// dispute-driven hold/release, force-cancel) goes through here so the index can never
+/// drift from what `settlement.status == Pending` actually says, without having to
+/// duplicate that add/remove bookkeeping at each call site individually.
+pub(crate) fn write_settlement(env: &Env, id: u64, settlement: &Settlement) {
+    env.storage()
+        .persistent()
+        .set(&DataKey::Settlement(id), settlement);
+
+    let mut index: Vec<u64> = env
+        .storage()
+        .instance()
+        .get(&DataKey::PendingSettlementIndex)
+        .unwrap_or_else(|| Vec::new(env));
+    if matches!(
+        settlement.status,
+        SettlementStatus::Executed | SettlementStatus::Cancelled | SettlementStatus::Expired
+    ) {
+        clear_hold_state(env, id);
+    }
+
+    let is_pending = settlement.status == SettlementStatus::Pending;
+    let already_indexed = index.contains(id);
+
+    if is_pending && !already_indexed {
+        index.push_back(id);
+        env.storage()
+            .instance()
+            .set(&DataKey::PendingSettlementIndex, &index);
+    } else if !is_pending && already_indexed {
+        let mut updated = Vec::new(env);
+        for existing in index.iter() {
+            if existing != id {
+                updated.push_back(existing);
+            }
+        }
+        env.storage()
+            .instance()
+            .set(&DataKey::PendingSettlementIndex, &updated);
+    }
+}
+
+/// Clears any hold-related storage for `id` (#745). Called by `write_settlement`
+/// on every terminal settlement transition (execute, cancel, expire, force-cancel)
+/// so a held settlement never leaves a `HoldExpiry` entry behind once it is no
+/// longer live. Idempotent: safe to call when no hold was ever set.
+pub(crate) fn clear_hold_state(env: &Env, id: u64) {
+    env.storage().persistent().remove(&DataKey::HoldExpiry(id));
+}
+
+/// Rejects a deposit whose reference id was already seen within the TTL window
+/// (#747). Records `ref_id` with a TTL so storage stays bounded and the id can
+/// be reused once the entry expires.
+/// Errors: `DuplicateReferenceId`.
+pub(crate) fn record_deposit_reference(env: &Env, ref_id: &Bytes) -> Result<(), TreasuryError> {
+    let key = DataKey::DepositRef(ref_id.clone());
+    if env.storage().temporary().has(&key) {
+        return Err(TreasuryError::DuplicateReferenceId);
+    }
+    env.storage().temporary().set(&key, &true);
+    env.storage()
+        .temporary()
+        .extend_ttl(&key, DEPOSIT_REF_TTL_LEDGERS, DEPOSIT_REF_TTL_LEDGERS);
+    Ok(())
 }
 
 #[cfg(test)]

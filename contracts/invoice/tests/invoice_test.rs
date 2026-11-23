@@ -796,12 +796,16 @@ fn test_abi_snapshot_matches_contract() {
         "mark_paid",
         "get_invoice",
         "get_invoice_status",
+        "get_invoice_summary",
         "batch_get_invoice_status",
         "get_invoices_page",
         "cancel_invoice",
         "amend_invoice",
         "request_refund",
         "approve_refund",
+        "process_refund",
+        "calculate_net_refund",
+        "get_refund_breakdown",
         "reject_refund",
         "release_escrow",
         "batch_expire",
@@ -813,6 +817,7 @@ fn test_abi_snapshot_matches_contract() {
         "extend_expiry",
         "get_invoice_count",
         "get_invoices_by_merchant",
+        "get_invoices_by_payer",
         "get_pending_ids",
         "transfer_admin",
     ]
@@ -833,6 +838,7 @@ fn test_abi_snapshot_matches_contract() {
         "contract_unpaused",
         "refund_approved",
         "refund_rejected",
+        "refund_processed",
     ]
     .iter()
     .copied()

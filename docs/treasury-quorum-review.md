@@ -1,8 +1,89 @@
 # Treasury quorum-unreachability review: does `remove_signer` / `set_signer` risk a stuck threshold?
 
-> **Status:** Design review · Documentation only, no code changes accompany this file.
+> **Status:** Design review · Updated in #593 to reflect the signer-change timelock that
+> landed in PR #526.
 > **Related:** Issue #33 (static "threshold reachable given total signer weight at init"
-> test), `contracts/treasury/src/signers.rs`, `contracts/treasury/src/lib.rs`.
+> test), PR #526 (signer-change timelock, `contracts/treasury/src/timelock.rs`),
+> `contracts/treasury/src/signers.rs`, `contracts/treasury/src/lib.rs`.
+
+---
+
+## Signer-change timelock (PR #526)
+
+### What changed
+
+PR #526 introduced a **propose → wait → execute** flow for all signer and
+threshold configuration changes. The new module is
+`contracts/treasury/src/timelock.rs`.
+
+**Three new entrypoints:**
+
+| Entrypoint | Role |
+|---|---|
+| `propose_signer_change(admin, kind)` | Queues a `SignerChangeProposal`; returns its `change_id`. The change is **not applied yet**. |
+| `execute_signer_change(admin, change_id)` | Applies the queued change once `SIGNER_CHANGE_TIMELOCK_SECS` (24 h) have elapsed since `proposed_at`. |
+| `cancel_signer_change(admin, change_id)` | Permanently blocks a pending proposal before it is executed. |
+
+`SignerChangeKind` covers all three previous instant-mutation paths:
+`SetSigner(Address, u32)`, `RemoveSigner(Address)`, `UpdateThreshold(u32)`.
+
+**Delay constant:**
+
+```rust
+// contracts/treasury/src/timelock.rs
+pub(crate) const SIGNER_CHANGE_TIMELOCK_SECS: u64 = 24 * 60 * 60; // 24 hours
+```
+
+**Lifecycle:**
+
+```
+propose_signer_change  →  [Pending, waiting 24 h]
+                          ├─ cancel_signer_change  →  Cancelled (terminal)
+                          └─ execute_signer_change (after delay)  →  Executed (terminal)
+```
+
+### Events
+
+| Event topic | Data | Triggered by |
+|---|---|---|
+| `signer_change_proposed` | `SignerChangeProposal` | `propose_signer_change` |
+| `signer_change_executed` | `SignerChangeProposal` | `execute_signer_change` |
+| `signer_change_cancelled` | `SignerChangeProposal` | `cancel_signer_change` |
+
+### New security guarantees
+
+The 24-hour delay window means:
+
+1. **Observation window.** Any off-chain monitor, co-admin, or auditing tool
+   watching `signer_change_proposed` events has 24 hours to detect and
+   react to a suspicious proposal before it takes effect on-chain.
+2. **Cancellation path.** Any admin (the proposing admin or another) may call
+   `cancel_signer_change` to permanently block a proposal before its delay
+   elapses. This is the primary mitigation against a compromised-admin-key
+   attack: the attacker must control the admin key *and* keep it for 24+
+   hours undetected, after which a co-admin can still cancel.
+3. **Proposal is immutable.** A proposal stores `kind`, `proposed_at`, and
+   `executable_at` at creation time. Those fields cannot be altered; a
+   changed intention requires a new `propose_signer_change` call.
+
+### Backward-compatibility note
+
+The immediate `set_signer`, `remove_signer`, and `update_threshold`
+entrypoints in `signers.rs` are **preserved** for backward compatibility.
+They still apply changes instantly, bypassing the timelock entirely.
+Production deployments should prefer the timelocked flow for any signer- or
+threshold-configuration change; the immediate paths should be treated as
+emergency escape hatches.
+
+---
+
+## Original quorum-unreachability analysis
+
+The analysis below was written before PR #526 landed. It remains accurate for
+all paths that still bypass the timelock (the immediate `set_signer` /
+`remove_signer` / `update_threshold` entrypoints in `signers.rs`).
+
+---
 
 ## Question
 

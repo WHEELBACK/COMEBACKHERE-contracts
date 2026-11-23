@@ -43,6 +43,20 @@ to close.
 | Signer rotation cooldown | `3_600` (1 hour) | `signers.rs:104` (`COOLDOWN_SECS`, local to `propose_signer_rotation`) | Minimum time between rotation proposals from the same proposer, to prevent rotation-proposal spam (e.g. from a compromised signer attempting to grind toward an unwanted rotation, or simple griefing). Not exposed as an admin-configurable value — changing it requires a code upgrade; see `docs/upgrade-guide.md`. |
 | `threshold` | Set at `initialize`/`update_threshold`, no compile-time default | `lib.rs` (`initialize`, `update_threshold`) | Not a constant — enforced invariant is `0 < threshold <= total_weight` of registered signers. See `docs/deployment-runbook.md` §3 for how the actual mainnet value should be chosen relative to the weighted-quorum model. |
 
+### `get_pending_metrics` budget (#743)
+
+`get_pending_metrics` aggregates over every pending settlement and token, so
+its cost scales with the size of the pending-work queue. The budget test in
+`contracts/treasury/tests/pending_metrics_budget_test.rs` measures the call
+with **100 pending settlements across 10 tokens** using `env.budget()`.
+
+| Scenario | CPU instructions | Memory (bytes) |
+|---|---|---|
+| 100 settlements / 10 tokens | _recorded from test run_ | _recorded from test run_ |
+
+Re-run `cargo test -p treasury --test pending_metrics_budget_test -- --nocapture`
+to refresh these numbers after changing the aggregation logic.
+
 ## Settlement-Workflow (`contracts/settlement-workflow/src`)
 
 Settlement-workflow defines no numeric caps or windows of its own — it holds

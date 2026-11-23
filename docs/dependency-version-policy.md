@@ -2,11 +2,13 @@
 
 ## soroban-sdk pin
 
-The workspace pins `soroban-sdk = "22.0.4"` in the root `Cargo.toml` (and the
+The workspace pins `soroban-sdk = "22.0.8"` in the root `Cargo.toml` (and the
 Stellar CLI used in CI is pinned to `22.8.2` to match its major version).
-`22.0.4` is the floor because the test suite uses `Env::cost_estimate()`, which
-first shipped in that release; the `test-soroban-sdk-22x-matrix` CI job starts
-its matrix at the same version.
+`22.0.8` is the floor because `multisig::Dispute::evidence_hash` (#574) is an
+`Option<BytesN<32>>` field on a `#[contracttype]`, whose `testutils` XDR
+conversion doesn't compile before 22.0.8; the test suite's use of `Env::cost_estimate()` (added in 22.0.4) was the
+previous floor. The `test-soroban-sdk-22x-matrix` CI job starts its matrix at
+the same version.
 
 This pin is deliberate, not an oversight. Dependabot has repeatedly opened
 major-version bump PRs against the `soroban-sdk` group (22.0.11 → 26.1.0,

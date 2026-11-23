@@ -15,6 +15,9 @@ The Invoice contract manages the lifecycle of merchant invoices, from creation t
 | `release_escrow`     | `admin`       | `admin: Address, id: u64`                                                                                                                                        | `Result<(), InvoiceError>`            | `Unauthorized`, `ContractPaused`, `NotFound`, `NotPaid`                                                   |
 | `get_invoice`        | None          | `id: u64`                                                                                                                                                        | `Result<Invoice, InvoiceError>`       | `NotFound`                                                                                                |
 | `get_invoice_status` | None          | `id: u64`                                                                                                                                                        | `Result<InvoiceStatus, InvoiceError>` | `NotFound`                                                                                                |
+| `get_invoice_summary` | None         | `id: u64`                                                                                                                                                        | `Result<InvoiceSummary, InvoiceError>`  | `NotFound`                                                                                                |
+| `get_invoices_by_merchant` | None     | `merchant: Address, start: u32, limit: u32`                                                                                                                     | `Vec<u64>`                              | None                                                                                                     |
+| `get_invoices_by_payer` | None        | `payer: Address, start: u32, limit: u32`                                                                                                                        | `Vec<u64>`                              | None                                                                                                     |
 | `batch_get_invoice_status` | None    | `ids: Vec<u64>`                                                                                                                                                  | `Vec<Result<InvoiceStatus, InvoiceError>>` | Per-ID `NotFound`                                                                                     |
 | `cancel_invoice`     | `caller`      | `caller: Address, id: u64`                                                                                                                                       | `Result<(), InvoiceError>`            | `Unauthorized`, `ContractPaused`, `NotFound`, `NotPending`                                                |
 | `batch_expire`       | `admin`       | `admin: Address, ids: Vec<u64>`                                                                                                                                  | `Result<u32, InvoiceError>`           | `Unauthorized`                                                                                            |
@@ -22,6 +25,51 @@ The Invoice contract manages the lifecycle of merchant invoices, from creation t
 | `reject_refund`      | `admin`       | `admin: Address, id: u64`                                                                                                                                        | `Result<(), InvoiceError>`            | `Unauthorized`, `ContractPaused`, `NotFound`, `NotRefundRequested`                                        |
 | `pause`              | `admin`       | `admin: Address`                                                                                                                                                 | `Result<(), InvoiceError>`            | `Unauthorized`                                                                                            |
 | `unpause`            | `admin`       | `admin: Address`                                                                                                                                                 | `Result<(), InvoiceError>`            | `Unauthorized`                                                                                            |
+
+## Invoice summaries and outstanding balances
+
+`get_invoice_summary` returns an `InvoiceSummary`: the list-view projection of an
+invoice (`id`, `status`, `amount_usdc`, `gross_usdc`, `paid_usdc`,
+`remaining_usdc`, `expires_at`). It is derived from the same storage record
+`get_invoice` reads, so it can never disagree with the full record, and it is
+the cheap way for a wallet to show "still owed" without replaying events.
+
+`remaining_usdc` is the gross amount the payer still owes:
+
+| Status | `paid_usdc` | `remaining_usdc` |
+| --- | --- | --- |
+| `Pending` | `0` | `gross_usdc` (amendments are reflected) |
+| `Paid`, `RefundRequested`, `Released`, `Refunded` | `gross_usdc` | `0` |
+| `Expired`, `Cancelled` | `0` | `0` (no longer collectible) |
+
+Partial payments are not recorded on-chain yet (`mark_paid` is all-or-nothing), so
+there is no intermediate partially-paid state: the figure drops from the full
+`gross_usdc` to `0` when `mark_paid` fires. Once per-invoice collected-amount
+accounting lands, this field reports the shortfall with no change to the rest of
+the summary.
+
+## Payer index
+
+`mark_paid` records the paying address in a per-payer index, so a wallet can list
+the invoices addressed to a payer with `get_invoices_by_payer(payer, start, limit)`
+instead of scanning every invoice. Entries are appended in `mark_paid` order and
+never reordered or removed; `start` is a zero-based offset and `limit` is clamped
+to `MAX_PAGE_LIMIT` (100) rather than rejected, so paging is the only way to walk
+a large index.
+
+The payer is set once, in `mark_paid`, and no entrypoint reassigns it, so the
+index never needs migrating: `reject_refund` returns an invoice to `Paid` with the
+same payer, leaving its entry valid.
+
+The index is a read model, so it is **bounded per payer at
+`MAX_PAYER_INDEX_ENTRIES` (500) entries**. Once a payer has that many indexed
+invoices, further payments still succeed and the invoice behaves normally — it is
+simply not added to the index. A payment is never blocked because a convenience
+index is full. For a payer's complete history, page `get_invoices_page` or index
+the `invoice_paid` event stream.
+
+Invoices that have not been paid yet have no designated payer and belong to no
+payer index; `get_invoices_by_payer` returns an empty page for them.
 
 ## Merchant nonce lifecycle
 
@@ -31,6 +79,29 @@ a successful invoice creation: cancelling or expiring the invoice does not delet
 the `MerchantNonce` storage entry, so a later creation by the same merchant with
 that nonce returns `DuplicateNonce`. Different merchants may use the same nonce.
 
+## Recurring invoice templates
+
+A merchant creates a template with `create_template`, which stores the invoice
+amounts, recurrence interval, expiry window, and optional metadata and payment
+link hashes. The merchant must authorize creation; the contract must not be
+paused. The first scheduled run is one full interval after creation, not
+immediate. Intervals are `Daily` (24 hours), `Weekly` (7 days), and `Monthly`
+(a fixed 30 days, without calendar-month arithmetic).
+
+The merchant or contract admin can disable or re-enable a template with
+`set_template_active`. Disabling preserves `next_run_at`; inactive templates
+are skipped by scheduled generation. A merchant can also call
+`generate_from_template` to create an invoice immediately from an active
+template. This on-demand call does not advance its recurrence schedule.
+
+Scheduled generation is permissionless: a keeper calls `generate_due_invoices`
+with template IDs. It creates one invoice for each active, due template and
+advances that template's next run past the current ledger time, so a late keeper
+does not create one invoice for every missed period. Unknown, inactive, and
+not-yet-due IDs are skipped. One call accepts at most 20 IDs, and generation is
+blocked while the invoice contract is paused. Use `get_invoice_template` or
+`list_templates_by_merchant` to inspect templates and their `next_run_at`.
+
 ## Reconstructing status history
 
 Off-chain indexers should reconstruct invoice status history from contract events,
@@ -39,7 +110,7 @@ event topic as the stream key:
 
 | Event | Status represented | Data |
 | --- | --- | --- |
-| `invoice_created` | `Pending` | Full `Invoice` |
+| `invoice_created` | `Pending` | `InvoiceCreatedEvent { id, merchant, amount_usdc, gross_usdc, expires_at, merchant_nonce, token_address }` (schema v2; see `docs/event-schema.md`) |
 | `invoice_paid` | `Paid` | Full `Invoice` |
 | `invoice_expired` | `Expired` | Full `Invoice` |
 | `invoice_cancelled` | `Cancelled` | Full `Invoice` |
@@ -55,7 +126,7 @@ source for a complete chronological audit trail.
 
 ## CLI usage examples
 
-Replace `$INVOICE_CONTRACT`, `$ADMIN`, `$MERCHANT`, `$PAYER`, and `$NETWORK` with your deployed values.
+Replace `$INVOICE_CONTRACT`, `$ADMIN`, `$MERCHANT`, `$PAYER`, `$KEEPER`, `$TEMPLATE_ID`, and `$NETWORK` with your deployed values.
 
 ### initialize
 
@@ -110,6 +181,67 @@ stellar contract invoke \
   -- release_escrow \
   --admin $ADMIN \
   --id 0
+```
+
+### Create a recurring template
+
+The interval is a contract enum; this example uses the `Weekly` variant.
+
+```sh
+stellar contract invoke \
+  --id $INVOICE_CONTRACT \
+  --source $MERCHANT \
+  --network $NETWORK \
+  -- create_template \
+  --merchant $MERCHANT \
+  --amount_usdc 10000000 \
+  --gross_usdc 10500000 \
+  --interval '{"Weekly":null}' \
+  --expires_in_seconds 604800 \
+  --metadata_hash null \
+  --payment_link_hash null
+```
+
+### Disable a template
+
+The merchant or contract admin can disable a template. Use the same address as
+`--source` and `--caller` so it authorizes the call.
+
+```sh
+stellar contract invoke \
+  --id $INVOICE_CONTRACT \
+  --source $MERCHANT \
+  --network $NETWORK \
+  -- set_template_active \
+  --caller $MERCHANT \
+  --id $TEMPLATE_ID \
+  --active false
+```
+
+### Generate invoices from a template
+
+The merchant can create one invoice immediately from an active template:
+
+```sh
+stellar contract invoke \
+  --id $INVOICE_CONTRACT \
+  --source $MERCHANT \
+  --network $NETWORK \
+  -- generate_from_template \
+  --merchant $MERCHANT \
+  --template_id $TEMPLATE_ID
+```
+
+A permissionless keeper can instead process due templates by ID (up to 20 IDs
+per call):
+
+```sh
+stellar contract invoke \
+  --id $INVOICE_CONTRACT \
+  --source $KEEPER \
+  --network $NETWORK \
+  -- generate_due_invoices \
+  --template_ids '[1,2]'
 ```
 
 ---

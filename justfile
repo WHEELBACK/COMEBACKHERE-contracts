@@ -24,9 +24,34 @@ fmt:
 lint:
     cargo clippy -- -D warnings
 
+# Assert no contract error enum repeats a discriminant within its own ABI namespace
+check-error-codes:
+    scripts/check-error-code-uniqueness.sh
+
+# Run settlement workflow fuzz target
+fuzz-settlement-workflow:
+    cd contracts/settlement-workflow/fuzz && cargo fuzz run execute_with_compliance
+
+# Run invoice amount precision fuzz target
+fuzz-invoice-amount:
+    cd contracts/invoice/fuzz && cargo fuzz run amount_precision
+
+# List the available cargo-fuzz targets
+fuzz-list:
+    @echo "settlement-workflow: execute_with_compliance"
+    @echo "invoice: amount_precision"
+
 # Check dependencies for vulnerabilities and license issues
 deny:
     cargo deny check
+
+# Check event schema docs against published event symbols in source
+check-event-schema:
+    python3 scripts/check-event-schema-drift.py
+
+# Verify every mod x; declaration has a corresponding source file
+check-mod-files:
+    scripts/check-mod-files.sh
 
 # Audit dependencies for known security vulnerabilities
 audit:
@@ -37,7 +62,7 @@ check: fmt lint test deny
     @echo "✓ All checks passed"
 
 # Run all quality gates before pushing
-check-all: fmt lint test audit
+check-all: fmt lint test audit check-mod-files
     @echo "✓ All quality gates passed"
 
 # Literal mirror of the Pre-commit CI job's command sequence (see .github/workflows/pre-commit.yml
@@ -49,6 +74,11 @@ precommit:
     scripts/check-enum-ordering.sh
     scripts/check-enum-doc-comments.sh
     @echo "✓ Pre-commit checks passed"
+
+# Run the invoice refund-math fuzz target for a bounded duration (seconds).
+# Requires nightly + cargo-fuzz: cargo install cargo-fuzz
+fuzz-net-refund seconds="300":
+    cd contracts/invoice/fuzz && cargo +nightly fuzz run net_refund -- -max_total_time={{seconds}}
 
 # Deploy all three contracts to testnet.
 #
@@ -88,3 +118,16 @@ deploy:
 
 # Default target
 default: check
+
+# Test a single contract by short name (invoice, treasury, compliance, workflow)
+test-contract name:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    case "{{name}}" in
+      invoice) pkg=comebackhere-invoice ;;
+      treasury) pkg=comebackhere-treasury ;;
+      compliance) pkg=comebackhere-compliance ;;
+      workflow) pkg=comebackhere-settlement-workflow ;;
+      *) pkg="{{name}}" ;;
+    esac
+    cargo test -p "$pkg"

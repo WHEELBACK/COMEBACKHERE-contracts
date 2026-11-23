@@ -8,19 +8,28 @@ The Compliance contract manages an allowlist of addresses permitted to interact 
 |----------|---------------|------------|---------|--------|
 | `initialize` | `admin` | `admin: Address` | `Result<(), ContractError>` | `AlreadyInitialized` |
 | `is_allowed` | None | `address: Address` | `bool` | None |
+| `bulk_check_addresses` | None | `addresses: Vec<Address>` | `Vec<bool>` | None |
 | `is_blocked` | None | `address: Address` | `bool` | None |
 | `allow_address` | `admin` | `admin: Address, address: Address` | `Result<(), ContractError>` | `Unauthorized`, `ContractPaused` |
-| `block_address` | `admin` | `admin: Address, address: Address` | `Result<(), ContractError>` | `Unauthorized` |
+| `block_address` | `admin` or `operator` | `caller: Address, address: Address, reason: Option<Bytes>` | `Result<(), ContractError>` | `Unauthorized`, `AddressIndexFull` |
 | `allow_address_until` | `admin` | `admin: Address, address: Address, expires_at: u64` | `Result<(), ContractError>` | `Unauthorized`, `ContractPaused` |
 | `allow_address_with_tier` | `admin` | `admin: Address, address: Address, tier: u32` | `Result<(), ContractError>` | `Unauthorized`, `ContractPaused` |
 | `get_address_tier` | None | `address: Address` | `u32` | None |
-| `set_jurisdiction` | `admin` | `admin: Address, address: Address, jurisdiction_code: Symbol` | `Result<(), ContractError>` | `Unauthorized`, `ContractPaused` |
-| `get_jurisdiction` | None | `address: Address` | `Option<Symbol>` | None |
+| `get_address_history` | None | `address: Address` | `Vec<StatusHistoryEntry>` | None |
+| `set_tier_limit` | `admin` | `admin: Address, tier: u32, limit: i128` | `Result<(), ContractError>` | `Unauthorized` |
+| `get_tier_limit` | None | `tier: u32` | `Option<i128>` | None |
+| `is_allowed_for_amount` | None | `address: Address, amount: i128` | `bool` | None |
+| `set_jurisdiction` | `admin` | `admin: Address, address: Address, code: Bytes` | `Result<(), ContractError>` | `Unauthorized`, `InvalidJurisdictionCode` |
+| `get_jurisdiction` | None | `address: Address` | `Option<Bytes>` | None |
 | `transfer_admin` | `admin` | `admin: Address, new_admin: Address` | `Result<(), ContractError>` | `Unauthorized` |
 | `accept_admin` | `new_admin` | `new_admin: Address` | `Result<(), ContractError>` | `Unauthorized` |
 | `clear_address` | `admin` | `admin: Address, address: Address` | `Result<(), ContractError>` | `Unauthorized` |
-| `pause` | `admin` | `admin: Address` | `Result<(), ContractError>` | `Unauthorized` |
+| `pause` | `admin` | `admin: Address, reason: Symbol` | `Result<(), ContractError>` | `Unauthorized` |
 | `unpause` | `admin` | `admin: Address` | `Result<(), ContractError>` | `Unauthorized` |
+| `get_pause_reason` | None | — | `Option<Symbol>` | None |
+| `set_blocklist_root` | `admin` | `admin: Address, root: BytesN<32>` | `Result<(), ContractError>` | `Unauthorized` |
+| `get_blocklist_root` | None | — | `Option<BytesN<32>>` | None |
+| `is_blocked_with_proof` | None | `address: Address, proof: Vec<BytesN<32>>` | `bool` | None |
 
 ## CLI usage examples
 
@@ -75,6 +84,43 @@ stellar contract invoke \
 
 This means an address that is both `Allowed` and `Blocked` is treated as blocked;
 `clear_address` must be called to restore it to an allowed state.
+
+### Read order in `is_allowed`
+
+The four rules above describe the *answer*; the order in which storage is
+actually read is a separate, deliberate choice, and it is the one that makes
+`bulk_check_addresses` affordable.
+
+The two flags are not symmetric in the precedence. A block only ever *overrides*
+an allow — an address that is not allowed is `false` whether or not it is
+blocked — so the `Allowed` entry alone settles the answer for every address not
+on the allowlist. `is_allowed` therefore reads **`Allowed` first**, and only
+consults `Blocked` / `BlockedUntil` for addresses that are actually on the
+allowlist.
+
+Consequences:
+
+- An address with no `Allowed` entry costs **one** storage read; the block flag
+  is never read.
+- A block still overrides an allow, so an address that is both is `false` while
+  the block is in force — the same answer as before, just reached with the
+  reads in the other order.
+- `AllowedUntil` is only read once the address is known to be allowed, since a
+  lapsed allow and a missing allow both mean `false`.
+
+The observable result is identical either way.
+`tests/is_allowed_differential_test.rs` re-derives these rules from this section
+independently and sweeps the full
+(blocked, blocked_until, allowed, allowed_until, now) product, so a reordering
+that changed any answer would fail there.
+
+> **Do not probe the flags with `has()`.** `clear_address` writes
+> `Blocked = false` rather than removing the key, so the key's *presence* and
+> the address's block *status* are not the same thing. Read the value.
+
+`tests/bulk_check_budget_test.rs` measures the entrypoint's cost and holds
+`bulk_check_addresses` to a budget ceiling; see that file for the
+before/after numbers behind this read order.
 
 ## `is_blocked`
 
@@ -148,6 +194,24 @@ returns `false`. Callers relying on `AddressState` alone cannot distinguish
 "actually on the blocklist" from "was simply never allowed" — use
 `is_blocked` directly when that distinction matters.
 
+### Who may clear a block, and who placed it
+
+Every block records the address that placed it (`DataKey::BlockedBy`), readable via
+`get_block_placer`:
+
+- An **admin** may clear any block, including operator-placed ones.
+- An **operator** may only clear a block it placed itself. A block placed by the
+  admin — the sanctions case — returns `OperatorCannotClearAdminBlock`, which is a
+  distinct error from `Unauthorized` so a caller can tell "you may not reverse admin
+  blocks" apart from "you are not an operator".
+- A block with no recorded placer predates provenance tracking and is treated as
+  admin-placed, so the check fails closed.
+- Clearing drops the provenance; a later block records its own placer.
+
+`block_address` / `block_address_until` are callable by the admin or the operator —
+the operator places day-to-day blocks — and record which it was. `bulk_block_addresses`
+stays admin-only, so its blocks are admin-placed and not operator-clearable.
+
 ### Which entrypoints work while the contract is paused
 
 Per the "Emergency policy" comment in `lib.rs`, `block_address`,
@@ -167,3 +231,157 @@ blocks list *mutations*, not `is_allowed` reads.
 | `block_address`, `block_address_until`, `bulk_block_addresses`, `clear_address` | Yes (emergency remediation policy) |
 | `is_allowed`, `is_blocked`, `address_status`, `export_snapshot*` | Yes — reads are never gated by `Paused` |
 | `sweep_expired` | Yes — no `require_not_paused` call in its implementation |
+| `set_blocklist_root` | Yes (emergency remediation policy) |
+
+## Tier and allow-expiry interaction
+
+A tier (set by `allow_address_with_tier`) is metadata stored independently of
+allow status. Allow expiry and `sweep_expired` never clear it:
+
+| State | `is_allowed` | `get_address_tier` |
+|---|---|---|
+| Tiered, allow not yet expired | `true` | stored tier |
+| Tiered, allow expired (swept or not) | `false` | stored tier (unchanged) |
+| `allow_address_until` then `allow_address_with_tier` | `true` (allow becomes permanent) | stored tier |
+| Never tiered, allow expired | `false` | `0` |
+
+Integrators must gate on `is_allowed` first and only then read the tier; a
+non-zero tier alone does **not** mean the address is currently allowed. See
+`tests/tier_expiry_interaction_test.rs`.
+
+## Tiers, amount limits, and jurisdictions
+
+Tiers are integer labels. Tier `0` is the basic-KYC tier and is also the value
+returned when no tier has been stored; higher values are conventionally used
+for enhanced or institutional checks. The contract does not prescribe a fixed
+meaning for each higher number, so integrators and administrators must agree on
+their tier policy.
+
+The admin can configure a maximum settlement amount per tier with
+`set_tier_limit`. Amounts are in stroops. An unset limit is unlimited.
+`is_allowed_for_amount` is an on-chain check that returns `true` only when the
+address is currently allowed and the amount is no greater than its configured
+tier limit. The check is not automatically applied to every contract flow:
+treasury transfers call it, while the settlement workflow currently checks
+`is_allowed` without an amount. A limit therefore constrains only paths that
+call `is_allowed_for_amount`; it is not a protocol-wide cap by virtue of being
+configured.
+
+Jurisdictions are optional per-address tags set by the admin and read as
+`Bytes`. A code must contain 2 or 3 ASCII uppercase letters or digits (for
+example, `US`, `EU`, or `840`). This is a format check, not validation against
+an ISO registry. The contract stores and returns the tag but does not evaluate
+jurisdiction rules or use it in allow/deny or amount-limit decisions.
+
+## Operator guide
+
+Daily workflows for the compliance admin. Every command below uses the same
+`$COMPLIANCE_CONTRACT` / `$ADMIN` / `$ADDRESS` / `$NETWORK` placeholders.
+
+### Roles
+
+| Role | Can | Cannot |
+|---|---|---|
+| Admin | Every mutation: allow, block, clear, expiry, tier, pause/unpause, sweep, blocklist root, `set_operator`, `transfer_admin` | Allow addresses while paused |
+| Operator (`set_operator`) | `address_status` | Any allow/block/pause mutation |
+| Anyone | `is_allowed`, `is_blocked`, `is_blocked_with_proof`, `get_*` getters | Any mutation |
+
+### Allow an address (permanently, with a tier, or until a timestamp)
+
+```sh
+stellar contract invoke --id $COMPLIANCE_CONTRACT --source $ADMIN --network $NETWORK \
+  -- allow_address --admin $ADMIN --address $ADDRESS
+
+stellar contract invoke --id $COMPLIANCE_CONTRACT --source $ADMIN --network $NETWORK \
+  -- allow_address_with_tier --admin $ADMIN --address $ADDRESS --tier 1
+
+# Expiry is a UNIX timestamp; the allow lapses once ledger time >= expires_at.
+stellar contract invoke --id $COMPLIANCE_CONTRACT --source $ADMIN --network $NETWORK \
+  -- allow_address_until --admin $ADMIN --address $ADDRESS --expires_at 1767225600
+```
+
+Check the expiry with `get_allow_expiry --address $ADDRESS`.
+
+### Block an address
+
+```sh
+stellar contract invoke --id $COMPLIANCE_CONTRACT --source $ADMIN --network $NETWORK \
+  -- block_address --admin $ADMIN --address $ADDRESS --reason 6f666163
+
+# Temporary block, lifted automatically at the given timestamp.
+stellar contract invoke --id $COMPLIANCE_CONTRACT --source $ADMIN --network $NETWORK \
+  -- block_address_until --admin $ADMIN --address $ADDRESS --unblock_at 1767225600
+```
+
+A block always overrides an allow. `clear_address` removes the block.
+
+### Sweep expired allows
+
+Lapsed allows already fail `is_allowed`; `sweep_expired` removes their storage
+entries. Run it periodically (e.g. daily):
+
+```sh
+stellar contract invoke --id $COMPLIANCE_CONTRACT --source $ADMIN --network $NETWORK \
+  -- sweep_expired --admin $ADMIN
+```
+
+### Export a snapshot
+
+```sh
+stellar contract invoke --id $COMPLIANCE_CONTRACT --source $ADMIN --network $NETWORK \
+  -- export_snapshot_page --admin $ADMIN --start 0 --limit 100
+```
+
+Advance `--start` by `--limit` until an empty page is returned and archive the output.
+
+#### Consistency guarantee for multi-page exports
+
+`export_snapshot_page` reads the AddressIndex, which is **append-only**: entries are
+never moved, replaced, or deleted from an existing index slot — only appended at the
+end when a new address is first tracked (via `allow_address`, `allow_address_until`,
+`allow_address_with_tier`, or their bulk equivalents).
+
+This guarantee holds for callers that read the index in multiple page calls, with
+arbitrary time or writes between them:
+
+- **Already-fetched pages are stable.** A page returned by an earlier call cannot
+  change: no subsequent `allow_address` or `block_address` call can modify a slot
+  that has already been written to. Repeating a page fetch with the same `start`/
+  `limit` parameters always returns the same addresses in the same order.
+- **Mid-export additions appear in later pages.** If an address is added after you
+  read page N but before you read page N+1, it will appear at the tail of the index.
+  If that tail falls within a page you have not yet fetched, you will see it there.
+  If it falls beyond the last page you intend to fetch, you may miss it — this is
+  expected and is not a bug. Off-chain exporters that require a complete snapshot
+  should record the total count from an initial probe call and read only up to that
+  count.
+- **No entry is skipped or duplicated.** Because the index is append-only, a
+  sequential scan (incrementing `start` by `limit` on each call) will never visit
+  the same index slot twice and will never skip a slot that existed at the time of
+  the first page call.
+
+**Known limitation:** entries added *after* your export started may or may not be
+included, depending on whether you have already advanced past their index slot. If
+complete, point-in-time consistency is required, record the total count with an
+initial `export_snapshot_page` call at `start=0, limit=0` (which returns an empty
+page but still reflects the current count via the `AddrIndexCount` storage key), and
+stop reading at that count.
+
+### Incident response
+
+1. **Block first.** Block the offending address(es) immediately. Blocking works
+   even while paused, so do not wait on step 2.
+2. **Pause if the list itself is at risk** (compromised key, bad bulk import),
+   with a reason code:
+   ```sh
+   stellar contract invoke --id $COMPLIANCE_CONTRACT --source $ADMIN --network $NETWORK \
+     -- pause --admin $ADMIN --reason incident
+   ```
+   Pausing stops new allows; `is_allowed` reads keep working. Use reason codes
+   such as `maint`, `incident` or `investig` (max 32 chars, `[a-zA-Z0-9_]`).
+3. **Verify the block took effect:** `is_allowed --address $ADDRESS` must return
+   `false` and `is_blocked --address $ADDRESS` must return `true`.
+4. **Remediate**, e.g. `clear_address` wrongly blocked addresses or rotate the
+   blocklist root with `set_blocklist_root`.
+5. **Unpause** with `unpause --admin $ADMIN` once resolved; `get_pause_reason`
+   then returns `None`.

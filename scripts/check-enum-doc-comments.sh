@@ -29,6 +29,12 @@
 #   - Private enums (no `pub` keyword).
 #   - Test files (paths containing `/tests/` or ending in `_test.rs`).
 #
+# #627: error enums declared through `declare_contract_error!` (crates/error-macros)
+# are checked too. The macro supplies `#[contracterror]` itself, so the source
+# contains the invocation instead; the invocation is treated as an equivalent
+# block starter, and the doc comment is expected inside the braces, directly
+# above the `pub enum` line the macro forwards it to.
+#
 # USAGE
 #   ./scripts/check-enum-doc-comments.sh
 #
@@ -42,6 +48,9 @@ echo "=== Enum-level doc-comment check ==="
 
 status_file="$(mktemp)"
 trap 'rm -f "$status_file"' EXIT
+
+# Macro invocations that stand in for `#[contracterror] pub enum <Name> { ... }`.
+ERROR_ENUM_MACROS='declare_contract_error'
 
 find contracts crates -name '*.rs' -type f | sort | while read -r file; do
     # Skip test files
@@ -90,6 +99,26 @@ find contracts crates -name '*.rs' -type f | sort | while read -r file; do
             fi
             has_attr=1
             continue
+        fi
+
+        # #627: a `declare_contract_error!` invocation is the macro form of a
+        # `#[contracterror]` attribute block, so it opens the same candidate
+        # block. Only the macros named in $ERROR_ENUM_MACROS are treated this
+        # way — an arbitrary macro could expand to anything.
+        if [[ "$trimmed" =~ ^([A-Za-z0-9_]+)! ]]; then
+            macro_name="${BASH_REMATCH[1]}"
+            case "|$ERROR_ENUM_MACROS|" in
+                *"|$macro_name|"*)
+                    if [[ $in_block -eq 0 ]]; then
+                        in_block=1
+                        has_attr=0
+                        has_doc=0
+                        block_start=$lineno
+                    fi
+                    has_attr=1
+                    continue
+                    ;;
+            esac
         fi
 
         if [[ $in_block -eq 1 ]]; then

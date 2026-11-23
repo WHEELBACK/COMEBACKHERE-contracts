@@ -4,6 +4,9 @@ version = "1.0.0"
 edition = "2021"
 license.workspace = true
 publish = false
+description = "COMEBACKHERE treasury and settlement contract"
+keywords = ["soroban", "stellar", "treasury"]
+categories = ["cryptography::cryptocurrencies"]
 
 [lib]
 crate-type = ["cdylib", "rlib"]
@@ -15,10 +18,16 @@ testutils = ["soroban-sdk/testutils"]
 [dependencies]
 soroban-sdk.workspace = true
 multisig = { package = "comebackhere-multisig", path = "../../crates/multisig" }
+# Used by propose_settlement's optional compliance gate (#571). Holds no
+# #[contractimpl] of its own (only a #[contractclient]-generated invocation
+# client over the compliance contract's interface), so — like `multisig` above —
+# depending on it directly does not statically link any foreign wasm exports
+# into this contract.
+compliance-client = { package = "comebackhere-compliance-client", path = "../../crates/compliance-client" }
+protocol-math = { package = "comebackhere-protocol-math", path = "../../crates/protocol-math" }
 
 [dev-dependencies]
 soroban-sdk = { workspace = true, features = ["testutils"] }
 compliance = { package = "comebackhere-compliance", path = "../compliance" }
-compliance-client = { package = "comebackhere-compliance-client", path = "../../crates/compliance-client" }
 invoice = { package = "comebackhere-invoice", path = "../invoice" }
 proptest = "1"

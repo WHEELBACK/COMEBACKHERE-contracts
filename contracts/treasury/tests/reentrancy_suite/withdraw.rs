@@ -30,7 +30,7 @@ fn withdraw_reentrancy_is_blocked_by_insufficient_balance() {
 
     // Pre-fund internal balance via a normal deposit (no callback).
     token.set_callback_target(&CallbackTarget::None, &treasury_id);
-    client.deposit(&user, &token_id, &amount);
+    client.deposit(&user, &token_id, &amount, &None);
     assert_eq!(client.get_balance(&user, &token_id), amount);
 
     // Replace the malicious token's configuration with a `Withdraw`
@@ -75,7 +75,7 @@ fn withdraw_reentrancy_with_sufficient_balance_drains_twice() {
     // User deposits exactly `2 * amount` so two `amount`-sized withdrawals
     // both survive the `Balance < amount` check.
     token.set_callback_target(&CallbackTarget::None, &treasury_id);
-    client.deposit(&user, &token_id, &(amount * 2));
+    client.deposit(&user, &token_id, &(amount * 2), &None);
     assert_eq!(client.get_balance(&user, &token_id), amount * 2);
 
     token.set_callback_target(&CallbackTarget::Withdraw, &treasury_id);

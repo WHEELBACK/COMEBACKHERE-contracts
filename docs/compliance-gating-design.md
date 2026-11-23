@@ -13,6 +13,29 @@ The current compliance design is intentionally explicit and on-chain:
 
 The resulting design is simple but materially important: every participant can observe the same rule, and every enforcement point evaluates the same state. In this protocol, the gate is not merely a notification channel. It is a hard condition enforced by the contract system itself.
 
+### Tiers, limits, and jurisdiction tags
+
+An address tier is an integer label stored separately from its allow status.
+Tier `0` denotes basic KYC and is also returned when no tier has been set;
+higher values are conventionally used for enhanced or institutional checks,
+but the contract does not define a fixed taxonomy for them. A tier value alone
+does not allow an address.
+
+The admin may configure a maximum settlement amount for each tier with
+`set_tier_limit` (amounts are in stroops). An unset limit is unlimited.
+`is_allowed_for_amount` performs an on-chain check of both current allow status
+and the configured amount limit. Treasury transfers use this check; the
+settlement workflow currently checks `is_allowed` only. Consequently, a
+configured tier limit is enforced on-chain only along paths that call
+`is_allowed_for_amount`, and is not a universal cap for every protocol flow.
+
+An admin may also attach an optional jurisdiction tag to an address. The
+contract accepts 2- or 3-byte codes made of ASCII uppercase letters or digits,
+such as `US`, `EU`, or `840`, and stores them as bytes. This validates the code's
+shape, not membership in an ISO registry. Jurisdiction is metadata today: the
+contract does not apply jurisdiction-specific rules or include the tag in
+allow/deny or amount-limit checks.
+
 ## 2. Why the protocol chose this form
 
 The design is built around four practical requirements:

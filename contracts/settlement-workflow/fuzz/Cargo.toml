@@ -15,9 +15,10 @@ cargo-fuzz = true
 [dependencies]
 libfuzzer-sys = "0.4"
 arbitrary = { version = "1", features = ["derive"] }
-soroban-sdk = { version = "22.0.4", features = ["testutils"] }
+soroban-sdk = { version = "22.0.8", features = ["testutils"] }
 
 [dependencies.settlement_workflow]
+package = "comebackhere-settlement-workflow"
 path = ".."
 features = ["testutils"]
 
@@ -28,15 +29,22 @@ features = ["testutils"]
 # in the full implementation crates here is safe.
 [dependencies.compliance]
 package = "comebackhere-compliance"
-path = "../../contracts/compliance"
+path = "../../compliance"
 
 [dependencies.treasury]
 package = "comebackhere-treasury"
-path = "../../contracts/treasury"
+path = "../../treasury"
 
 [[bin]]
 name = "execute_with_compliance"
 path = "fuzz_targets/execute_with_compliance.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "execute_with_compliance_batch"
+path = "fuzz_targets/execute_with_compliance_batch.rs"
 test = false
 doc = false
 bench = false

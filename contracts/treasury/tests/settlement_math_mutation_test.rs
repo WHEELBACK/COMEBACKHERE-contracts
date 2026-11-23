@@ -51,7 +51,7 @@ fn propose_settlement_records_amount_and_initial_approval_weight() {
     let env = Env::default();
     let (client, admin, merchant, _) = setup_treasury(&env);
 
-    let settlement_id = client.propose_settlement(&admin, &merchant, &10_000_000);
+    let settlement_id = client.propose_settlement(&admin, &merchant, &10_000_000, &0_u64);
     let settlement = client.get_settlement(&settlement_id);
 
     assert_eq!(settlement.amount, 10_000_000);
@@ -70,7 +70,7 @@ fn approve_partial_settlement_accepts_exact_remaining_amount() {
     client.set_signer(&admin, &signer_two, &1);
     client.set_signer(&admin, &signer_three, &1);
 
-    let settlement_id = client.propose_settlement(&admin, &merchant, &10_000_000);
+    let settlement_id = client.propose_settlement(&admin, &merchant, &10_000_000, &0_u64);
     client.approve_partial_settlement(&signer_two, &settlement_id, &5_000_000);
     let settlement = client.approve_partial_settlement(&signer_three, &settlement_id, &5_000_000);
 
@@ -88,7 +88,7 @@ fn execute_settlement_pays_exact_amount_and_marks_executed() {
     let token_client = TestTokenClient::new(&env, &token_id);
     token_client.mint(&treasury_id, &10_000_000);
 
-    let settlement_id = client.propose_settlement(&admin, &merchant, &10_000_000);
+    let settlement_id = client.propose_settlement(&admin, &merchant, &10_000_000, &0_u64);
     client.execute_settlement(&admin, &settlement_id, &token_id);
 
     let settlement = client.get_settlement(&settlement_id);

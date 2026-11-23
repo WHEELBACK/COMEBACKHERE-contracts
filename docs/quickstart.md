@@ -14,6 +14,21 @@ to request assignment.
 scripts/check-tools.sh   # confirms your local toolchain matches what's pinned
 ```
 
+## Local network
+
+For end-to-end development, run the repository's local network and deploy the
+contracts before using integration scripts:
+
+```bash
+docker compose up -d
+scripts/init-contracts.sh
+```
+
+`scripts/init-contracts.sh` prints the deployed contract IDs and writes them to
+`.protocol-ids` for helper scripts such as `scripts/protocol-health.sh`.
+Restarting the local network resets ledger state, so rerun initialization after
+`docker compose down -v`.
+
 ## Commands to run before pushing
 
 ```bash

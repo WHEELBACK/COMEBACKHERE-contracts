@@ -66,14 +66,19 @@ instead.
 
 ### Where does the repository enable integer overflow checks?
 
-There is currently no explicit `overflow-checks = true` profile setting in
-the tracked Cargo configuration. Normal `cargo test` builds use Cargo's debug
-profile, where Rust arithmetic overflow checks are enabled by default; release
-WASM builds have different profile behavior. Overflow remains a deliberate
-security concern here: boundary tests cover invoice ID and amount arithmetic,
-and `SECURITY.md` lists integer overflow and underflow in payment or
-settlement math as in scope. Do not remove or weaken those tests when changing
-arithmetic.
+The root `Cargo.toml` explicitly sets `overflow-checks = true` in the release
+profile, so optimized WASM builds retain arithmetic overflow checks. Normal
+`cargo test` builds also use Cargo's debug profile, where Rust arithmetic
+overflow checks are enabled by default. Overflow remains a deliberate security
+concern here: boundary tests cover invoice ID and amount arithmetic, and
+`SECURITY.md` lists integer overflow and underflow in payment or settlement
+math as in scope. Do not remove or weaken those tests when changing arithmetic.
+
+### Is there an MSRV check?
+
+Yes. The `MSRV` workflow reads `rust-toolchain.toml`, installs the pinned
+toolchain, and runs `cargo check --workspace`. Treat that pinned channel as the
+minimum supported Rust version unless maintainers intentionally update it.
 
 ## Contribution process
 

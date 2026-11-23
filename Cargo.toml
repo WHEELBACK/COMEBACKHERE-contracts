@@ -9,10 +9,13 @@ members = [
     "contracts/time-lock",
     "tests",
     "crates/compliance-client",
+    "crates/error-macros",
     "crates/multisig",
     "crates/invoice-errors",
     "crates/compliance-errors",
+    "crates/workflow-errors",
     "crates/protocol-errors",
+    "crates/protocol-math",
 ]
 resolver = "2"
 
@@ -22,7 +25,7 @@ license = "MIT"
 repository = "https://github.com/WHEELBACK/COMEBACKHERE-contracts"
 
 [workspace.dependencies]
-soroban-sdk = { version = "22.0.4" }
+soroban-sdk = { version = "29.0.1" }
 stellar-xdr = "0.0.18"
 
 [profile.release]
