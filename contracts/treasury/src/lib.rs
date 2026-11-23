@@ -23,6 +23,7 @@ use soroban_sdk::{contract, contractimpl, Address, Bytes, Env, IntoVal, Symbol, 
 mod admin;
 mod deposits;
 mod disputes;
+pub mod errors;
 mod holds;
 mod settlements;
 mod signers;
@@ -81,6 +82,11 @@ impl TreasuryContract {
             .set(&DataKey::SignerList, &signer_list);
         env.events()
             .publish((Symbol::new(&env, "treasury_initialized"),), admin);
+        // Extend instance storage TTL on initialization (#866) so the contract's
+        // core configuration is not evicted before the first real activity bumps it.
+        env.storage()
+            .instance()
+            .extend_ttl(MIN_TTL_LEDGERS, TARGET_TTL_LEDGERS);
         Ok(())
     }
 }
@@ -90,6 +96,88 @@ pub(crate) const MAX_ALLOWED_TOKENS: u32 = 20;
 
 /// Default TTL (in ledgers) for a deposit reference id before it can be reused (#747).
 pub(crate) const DEPOSIT_REF_TTL_LEDGERS: u32 = 30 * 24 * 60 * 60 / 5;
+
+// ── Persistent-storage TTL constants (#866) ──────────────────────────────────
+//
+// Soroban persistent entries are evicted from the ledger once their TTL reaches
+// zero.  We pro-actively extend them on every live write so a settlement that
+// sits in `Pending` or `OnHold` for weeks never disappears mid-approval.
+//
+// At ~5 s per ledger:
+//   MIN_TTL_LEDGERS  = 100_000 ≈  5.78 days  (don't bump if already this fresh)
+//   TARGET_TTL_LEDGERS = 535_000 ≈ 30.9 days  (extend to this target when bumped)
+//
+// Callers: `bump_settlement_ttl` (called from `write_settlement` for live
+// settlements) and the `initialize` instance-TTL bump.
+pub(crate) const MIN_TTL_LEDGERS: u32 = 100_000;
+pub(crate) const TARGET_TTL_LEDGERS: u32 = 535_000;
+
+/// Extends the TTL of all persistent storage entries associated with
+/// `settlement_id` (#866). Only bumps each key when it currently exists in
+/// storage so this never accidentally creates a stale entry for a key that was
+/// never written (e.g. `HoldExpiry` before the first hold, or
+/// `PartialApprovedTotal`/`PartialExecutedTotal` before the first partial step).
+///
+/// Called by [`write_settlement`] for every write where the settlement status is
+/// still live (`Pending` or `OnHold`). Terminal writes (Executed, Cancelled,
+/// Expired) intentionally skip this call — eviction is fine for finished
+/// settlements.
+pub(crate) fn bump_settlement_ttl(env: &Env, id: u64) {
+    // The main settlement record always exists when this is called.
+    let key = DataKey::Settlement(id);
+    env.storage()
+        .persistent()
+        .extend_ttl(&key, MIN_TTL_LEDGERS, TARGET_TTL_LEDGERS);
+
+    // Optional companion keys: only extend if the key was previously written.
+    let hold_key = DataKey::HoldExpiry(id);
+    if env.storage().persistent().has(&hold_key) {
+        env.storage()
+            .persistent()
+            .extend_ttl(&hold_key, MIN_TTL_LEDGERS, TARGET_TTL_LEDGERS);
+    }
+
+    let partial_approved_key = DataKey::PartialApprovedTotal(id);
+    if env.storage().persistent().has(&partial_approved_key) {
+        env.storage()
+            .persistent()
+            .extend_ttl(&partial_approved_key, MIN_TTL_LEDGERS, TARGET_TTL_LEDGERS);
+    }
+
+    let partial_executed_key = DataKey::PartialExecutedTotal(id);
+    if env.storage().persistent().has(&partial_executed_key) {
+        env.storage()
+            .persistent()
+            .extend_ttl(&partial_executed_key, MIN_TTL_LEDGERS, TARGET_TTL_LEDGERS);
+    }
+}
+
+/// Verifies runtime invariants for a live settlement before it is written to
+/// storage (#864). Returns `Err` for any impossible/corrupt state so the caller
+/// surfaces a typed error rather than silently persisting bad data.
+///
+/// Only called on `Pending` and `OnHold` writes — terminal writes (Executed,
+/// Cancelled, Expired) are allowed to bypass the guards so cleanup paths are
+/// never blocked by a corrupt field.
+///
+/// Invariants checked:
+/// 1. `settlement.amount > 0` — a zero-amount settlement can never execute.
+/// 2. `settlement.approval_weight == 0 || !settlement.approvals.is_empty()` —
+///    positive weight implies at least one approver was recorded; a mismatch
+///    means the approval accounting drifted.
+pub(crate) fn verify_settlement_invariants(
+    env: &Env,
+    settlement: &Settlement,
+) -> Result<(), TreasuryError> {
+    if settlement.amount <= 0 {
+        return Err(TreasuryError::InvalidAmount);
+    }
+    // weight > 0 must imply at least one recorded approver.
+    if settlement.approval_weight > 0 && settlement.approvals.is_empty() {
+        soroban_sdk::panic_with_error!(env, TreasuryError::Unauthorized);
+    }
+    Ok(())
+}
 
 pub(crate) fn require_admin(env: &Env, admin: &Address) {
     admin.require_auth();
@@ -147,10 +235,37 @@ pub(crate) fn require_compliance_allowed(
 /// dispute-driven hold/release, force-cancel) goes through here so the index can never
 /// drift from what `settlement.status == Pending` actually says, without having to
 /// duplicate that add/remove bookkeeping at each call site individually.
+///
+/// For live settlements (`Pending` or `OnHold`):
+/// * Calls [`verify_settlement_invariants`] to catch impossible/corrupt states
+///   early (#864).
+/// * Calls [`bump_settlement_ttl`] to extend persistent-entry TTLs so ledger
+///   eviction cannot remove an in-flight settlement (#866).
 pub(crate) fn write_settlement(env: &Env, id: u64, settlement: &Settlement) {
+    // Run invariant guards and TTL bump only for live (non-terminal) settlements
+    // (#864, #866). Terminal writes are allowed through unconditionally so that
+    // cleanup paths (cancel, execute, expire, force-cancel) are never blocked by
+    // a pre-existing corrupt field.
+    let is_live = matches!(
+        settlement.status,
+        SettlementStatus::Pending | SettlementStatus::OnHold
+    );
+    if is_live {
+        // Invariant guard (#864): panics or returns Err for corrupt states.
+        // Use unwrap_or_else with panic_with_error! so the error is typed.
+        if let Err(e) = verify_settlement_invariants(env, settlement) {
+            soroban_sdk::panic_with_error!(env, e);
+        }
+    }
+
     env.storage()
         .persistent()
         .set(&DataKey::Settlement(id), settlement);
+
+    // TTL bump (#866): extend after the write so the entry definitely exists.
+    if is_live {
+        bump_settlement_ttl(env, id);
+    }
 
     let mut index: Vec<u64> = env
         .storage()
