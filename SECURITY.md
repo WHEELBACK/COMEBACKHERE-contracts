@@ -13,7 +13,7 @@ Only the latest release on `main` receives security fixes.
 
 **Do not open a public GitHub issue for security vulnerabilities.**
 
-Report privately via [GitHub Security Advisories](https://github.com/chucksentertainment-hash/COMEBACKHERE-contracts/security/advisories/new).
+Report privately via [GitHub Security Advisories](https://github.com/WHEELBACK/COMEBACKHERE-contracts/security/advisories/new).
 
 Include as much of the following as possible:
 

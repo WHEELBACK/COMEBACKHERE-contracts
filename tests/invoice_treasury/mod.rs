@@ -6,13 +6,14 @@
 //! (`Paid`, `Cancelled`, `Expired`) must be rejected before reaching the
 //! treasury.
 
-use invoice::{InvoiceContract, InvoiceContractClient, InvoiceStatus, MaybeBytes};
+use crate::fixtures::setup_full_protocol;
+use invoice::{InvoiceContractClient, InvoiceStatus, MaybeAddress, MaybeBytes};
 use soroban_sdk::{
     contract, contracterror, contractimpl,
     testutils::{Address as _, Ledger},
     Address, Env,
 };
-use treasury::{TreasuryContract, TreasuryContractClient};
+use treasury::TreasuryContractClient;
 
 extern crate std;
 
@@ -39,8 +40,14 @@ impl InvoiceTreasuryWorkflow {
             return Err(InvoiceTreasuryError::InvoiceNotPending);
         }
         let signer = env.current_contract_address();
-        Ok(TreasuryContractClient::new(&env, &treasury_contract)
-            .propose_settlement(&signer, &inv.merchant, &inv.amount_usdc))
+        Ok(
+            TreasuryContractClient::new(&env, &treasury_contract).propose_settlement(
+                &signer,
+                &inv.merchant,
+                &inv.amount_usdc,
+                &0_u64,
+            ),
+        )
     }
 }
 
@@ -57,30 +64,20 @@ type Setup = (
 
 fn setup() -> Setup {
     let env = Env::default();
-    env.mock_all_auths();
-
-    let admin = Address::generate(&env);
-    let merchant = Address::generate(&env);
-
     let workflow_id = env.register_contract(None, InvoiceTreasuryWorkflow);
-
-    let invoice_contract_id = env.register_contract(None, InvoiceContract);
-    let invoice = InvoiceContractClient::new(&env, &invoice_contract_id);
-    invoice.initialize(&admin);
-
-    let treasury_contract_id = env.register_contract(None, TreasuryContract);
-    let treasury = TreasuryContractClient::new(&env, &treasury_contract_id);
-    treasury.initialize(&admin, &1);
-    treasury.set_signer(&admin, &workflow_id, &1);
+    let fixture = setup_full_protocol(&env);
+    fixture
+        .treasury
+        .set_signer(&fixture.admin, &workflow_id, &1);
 
     (
         env,
-        admin,
-        merchant,
-        invoice_contract_id,
-        invoice,
-        treasury_contract_id,
-        treasury,
+        fixture.admin,
+        fixture.merchant,
+        fixture.invoice_contract_id,
+        fixture.invoice,
+        fixture.treasury_contract_id,
+        fixture.treasury,
         workflow_id,
     )
 }
@@ -96,12 +93,19 @@ fn pending_invoice_allows_settlement_proposal() {
         &MaybeBytes::None,
         &MaybeBytes::None,
         &0,
+        &MaybeAddress::None,
     );
     assert_eq!(invoice.get_invoice(&inv_id).status, InvoiceStatus::Pending);
 
-    let result = InvoiceTreasuryWorkflowClient::new(&env, &wf_id)
-        .try_propose_for_invoice(&invoice_cid, &treasury_cid, &inv_id);
-    assert!(result.is_ok(), "pending invoice must allow settlement proposal");
+    let result = InvoiceTreasuryWorkflowClient::new(&env, &wf_id).try_propose_for_invoice(
+        &invoice_cid,
+        &treasury_cid,
+        &inv_id,
+    );
+    assert!(
+        result.is_ok(),
+        "pending invoice must allow settlement proposal"
+    );
 }
 
 #[test]
@@ -116,8 +120,15 @@ fn paid_invoice_blocks_settlement_proposal() {
         &MaybeBytes::None,
         &MaybeBytes::None,
         &0,
+        &MaybeAddress::None,
     );
-    invoice.mark_paid(&admin, &inv_id, &payer);
+    invoice.mark_paid(
+        &admin,
+        &inv_id,
+        &payer,
+        &MaybeBytes::None,
+        &MaybeAddress::None,
+    );
     assert_eq!(invoice.get_invoice(&inv_id).status, InvoiceStatus::Paid);
 
     let err = InvoiceTreasuryWorkflowClient::new(&env, &wf_id)
@@ -138,9 +149,13 @@ fn cancelled_invoice_blocks_settlement_proposal() {
         &MaybeBytes::None,
         &MaybeBytes::None,
         &0,
+        &MaybeAddress::None,
     );
     invoice.cancel_invoice(&merchant, &inv_id);
-    assert_eq!(invoice.get_invoice(&inv_id).status, InvoiceStatus::Cancelled);
+    assert_eq!(
+        invoice.get_invoice(&inv_id).status,
+        InvoiceStatus::Cancelled
+    );
 
     let err = InvoiceTreasuryWorkflowClient::new(&env, &wf_id)
         .try_propose_for_invoice(&invoice_cid, &treasury_cid, &inv_id)
@@ -160,6 +175,7 @@ fn expired_invoice_blocks_settlement_proposal() {
         &MaybeBytes::None,
         &MaybeBytes::None,
         &0,
+        &MaybeAddress::None,
     );
     env.ledger().with_mut(|l| l.timestamp += 2);
     invoice.batch_expire(&admin, &soroban_sdk::vec![&env, inv_id]);

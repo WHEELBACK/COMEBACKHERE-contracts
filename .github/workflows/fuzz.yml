@@ -1,0 +1,50 @@
+name: Scheduled Fuzz
+
+on:
+  schedule:
+    - cron: "17 3 * * 1"
+  workflow_dispatch: {}
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  cargo-fuzz:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: settlement-workflow
+            directory: contracts/settlement-workflow/fuzz
+            target: execute_with_compliance
+          - name: invoice
+            directory: contracts/invoice/fuzz
+            target: amount_precision
+          - name: invoice-net-refund
+            directory: contracts/invoice/fuzz
+            target: net_refund
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install nightly Rust
+        uses: dtolnay/rust-toolchain@nightly
+
+      - name: Install cargo-fuzz
+        run: cargo install cargo-fuzz
+
+      - name: Cache fuzz build artifacts
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: ${{ matrix.directory }}
+
+      - name: Run fuzz target
+        run: cargo +nightly fuzz run "${{ matrix.target }}" -- -max_total_time=120
+        working-directory: ${{ matrix.directory }}
+
+      - name: Upload fuzz crash artifacts
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fuzz-crash-${{ matrix.name }}
+          path: ${{ matrix.directory }}/artifacts/

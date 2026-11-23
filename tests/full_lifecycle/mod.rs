@@ -1,21 +1,22 @@
 //! End-to-end integration tests spanning all three contracts.
 //!
 //! A workflow contract enforces two sequential gates:
-//!
+//! A workflow contract enforces two sequential gates:
 //! 1. **Invoice gate** – invoice must be `Pending` (not paid, expired, or cancelled).
 //! 2. **Compliance gate** – merchant must be allowed by the compliance contract.
 //!
 //! Only when both gates pass is a treasury settlement proposal emitted.  The
 //! tests cover the happy path and every relevant failure combination.
 
-use compliance::{ComplianceContract, ComplianceContractClient};
-use invoice::{InvoiceContract, InvoiceContractClient, InvoiceStatus, MaybeBytes};
+use crate::fixtures::setup_full_protocol;
+use compliance::ComplianceContractClient;
+use invoice::{InvoiceContractClient, InvoiceStatus, MaybeAddress, MaybeBytes};
 use soroban_sdk::{
     contract, contracterror, contractimpl,
     testutils::{Address as _, Ledger},
     Address, Env,
 };
-use treasury::{TreasuryContract, TreasuryContractClient};
+use treasury::TreasuryContractClient;
 
 extern crate std;
 
@@ -43,8 +44,7 @@ impl FullLifecycleWorkflow {
         invoice_id: u64,
         merchant: Address,
     ) -> Result<u64, FullLifecycleError> {
-        let inv =
-            InvoiceContractClient::new(&env, &invoice_contract).get_invoice(&invoice_id);
+        let inv = InvoiceContractClient::new(&env, &invoice_contract).get_invoice(&invoice_id);
         if inv.status != InvoiceStatus::Pending {
             return Err(FullLifecycleError::InvoiceNotPending);
         }
@@ -52,8 +52,14 @@ impl FullLifecycleWorkflow {
             return Err(FullLifecycleError::ComplianceDenied);
         }
         let signer = env.current_contract_address();
-        Ok(TreasuryContractClient::new(&env, &treasury_contract)
-            .propose_settlement(&signer, &inv.merchant, &inv.amount_usdc))
+        Ok(
+            TreasuryContractClient::new(&env, &treasury_contract).propose_settlement(
+                &signer,
+                &inv.merchant,
+                &inv.amount_usdc,
+                &0_u64,
+            ),
+        )
     }
 }
 
@@ -72,36 +78,22 @@ type Setup = (
 
 fn setup() -> Setup {
     let env = Env::default();
-    env.mock_all_auths();
-
-    let admin = Address::generate(&env);
-    let merchant = Address::generate(&env);
-
     let workflow_id = env.register_contract(None, FullLifecycleWorkflow);
-
-    let invoice_contract_id = env.register_contract(None, InvoiceContract);
-    let invoice = InvoiceContractClient::new(&env, &invoice_contract_id);
-    invoice.initialize(&admin);
-
-    let compliance_contract_id = env.register_contract(None, ComplianceContract);
-    let compliance = ComplianceContractClient::new(&env, &compliance_contract_id);
-    compliance.initialize(&admin);
-
-    let treasury_contract_id = env.register_contract(None, TreasuryContract);
-    let treasury = TreasuryContractClient::new(&env, &treasury_contract_id);
-    treasury.initialize(&admin, &1);
-    treasury.set_signer(&admin, &workflow_id, &1);
+    let fixture = setup_full_protocol(&env);
+    fixture
+        .treasury
+        .set_signer(&fixture.admin, &workflow_id, &1);
 
     (
         env,
-        admin,
-        merchant,
-        invoice_contract_id,
-        invoice,
-        compliance_contract_id,
-        compliance,
-        treasury_contract_id,
-        treasury,
+        fixture.admin,
+        fixture.merchant,
+        fixture.invoice_contract_id,
+        fixture.invoice,
+        fixture.compliance_contract_id,
+        fixture.compliance,
+        fixture.treasury_contract_id,
+        fixture.treasury,
         workflow_id,
     )
 }
@@ -129,6 +121,7 @@ fn pending_and_compliant_merchant_settlement_succeeds() {
         &MaybeBytes::None,
         &MaybeBytes::None,
         &0,
+        &MaybeAddress::None,
     );
     compliance.allow_address(&admin, &merchant);
 
@@ -168,6 +161,7 @@ fn pending_but_non_compliant_merchant_blocked() {
         &MaybeBytes::None,
         &MaybeBytes::None,
         &0,
+        &MaybeAddress::None,
     );
     // merchant is never added to the compliance allowlist
 
@@ -208,8 +202,15 @@ fn paid_invoice_blocked_before_compliance_check() {
         &MaybeBytes::None,
         &MaybeBytes::None,
         &0,
+        &MaybeAddress::None,
     );
-    invoice.mark_paid(&admin, &inv_id, &payer);
+    invoice.mark_paid(
+        &admin,
+        &inv_id,
+        &payer,
+        &MaybeBytes::None,
+        &MaybeAddress::None,
+    );
     compliance.allow_address(&admin, &merchant);
 
     // Invoice gate fires first; compliance is irrelevant.
@@ -249,6 +250,7 @@ fn expired_invoice_blocked_before_compliance_check() {
         &MaybeBytes::None,
         &MaybeBytes::None,
         &0,
+        &MaybeAddress::None,
     );
     env.ledger().with_mut(|l| l.timestamp += 2);
     invoice.batch_expire(&admin, &soroban_sdk::vec![&env, inv_id]);
@@ -290,6 +292,7 @@ fn cancelled_invoice_blocked_before_compliance_check() {
         &MaybeBytes::None,
         &MaybeBytes::None,
         &0,
+        &MaybeAddress::None,
     );
     invoice.cancel_invoice(&merchant, &inv_id);
 

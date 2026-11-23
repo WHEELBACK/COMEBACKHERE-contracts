@@ -2,19 +2,25 @@
 name = "comebackhere-invoice"
 version = "1.0.0"
 edition = "2021"
+license.workspace = true
 publish = false
+description = "COMEBACKHERE invoice escrow contract"
+keywords = ["soroban", "stellar", "escrow"]
+categories = ["cryptography::cryptocurrencies"]
 
 [lib]
 crate-type = ["cdylib", "rlib"]
 name = "invoice"
 
 [features]
-default = ["testutils"]
 testutils = ["soroban-sdk/testutils"]
 
 [dependencies]
 soroban-sdk.workspace = true
+invoice-errors = { package = "comebackhere-invoice-errors", path = "../../crates/invoice-errors" }
 
 [dev-dependencies]
-derive_arbitrary.workspace = true
+hex = "0.4"
+proptest = "1"
+serde_json = "1"
 soroban-sdk = { workspace = true, features = ["testutils"] }

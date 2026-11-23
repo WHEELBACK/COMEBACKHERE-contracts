@@ -1,0 +1,109 @@
+name: Changelog Release Check
+
+on:
+  push:
+    tags:
+      - "v*"
+
+jobs:
+  changelog-check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Validate CHANGELOG.md for release tag
+        run: |
+          # Strip the leading 'v' from the tag to get the version number (e.g. v1.2.3 -> 1.2.3)
+          VERSION="${GITHUB_REF_NAME#v}"
+          echo "Validating CHANGELOG.md for version: $VERSION"
+
+          # ── Check 1: A versioned section matching this tag must exist ──────────
+          # Keep a Changelog format: ## [x.y.z] - YYYY-MM-DD
+          if ! grep -qE "^## \[$VERSION\]" CHANGELOG.md; then
+            echo "::error::CHANGELOG.md has no section for version [$VERSION]." \
+                 "Move the [Unreleased] content into a '## [$VERSION] - YYYY-MM-DD' section before tagging."
+            exit 1
+          fi
+          echo "✓ Version section [$VERSION] found in CHANGELOG.md."
+
+          # ── Check 2: The versioned section must have non-empty content ─────────
+          # Extract lines between ## [VERSION] and the next ## heading
+          version_content=$(awk "/^## \[$VERSION\]/{found=1; next} found && /^## /{exit} found{print}" CHANGELOG.md \
+            | grep -v '^\s*$' || true)
+
+          if [ -z "$version_content" ]; then
+            echo "::error::CHANGELOG.md section [$VERSION] exists but is empty." \
+                 "Add release notes to the versioned section before tagging."
+            exit 1
+          fi
+          echo "✓ Version section [$VERSION] has content."
+
+          # ── Check 3: [Unreleased] must be empty after the rollover ────────────
+          # If [Unreleased] still has content, the developer forgot to move it
+          unreleased=$(awk '/^## \[Unreleased\]/{found=1; next} found && /^## \[/{exit} found{print}' CHANGELOG.md \
+            | grep -v '^\s*$' || true)
+
+          if [ -n "$unreleased" ]; then
+            echo "::error::CHANGELOG.md [Unreleased] section is not empty." \
+                 "Move all unreleased entries into the '## [$VERSION] - YYYY-MM-DD' section before tagging."
+            exit 1
+          fi
+          echo "✓ [Unreleased] section is empty — rollover complete."
+
+          echo ""
+          echo "All CHANGELOG.md checks passed. Release tag v$VERSION is valid."
+
+  wasm-size-trend:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Load version pins
+        shell: bash
+        run: |
+          set -a
+          source .github/versions.env
+          set +a
+          echo "RUST_VERSION=$RUST_VERSION" >> "$GITHUB_ENV"
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ env.RUST_VERSION }}
+          targets: wasm32-unknown-unknown
+
+      - name: Build contract WASM
+        run: |
+          set -e
+          cargo build --target wasm32-unknown-unknown --release \
+            -p comebackhere-compliance \
+            -p comebackhere-invoice \
+            -p comebackhere-treasury \
+            -p comebackhere-settlement-workflow
+
+      - name: Append WASM sizes to history
+        run: |
+          set -e
+          VERSION="${GITHUB_REF_NAME#v}"
+          DATE="$(date -u +%Y-%m-%d)"
+          mkdir -p docs
+          touch docs/wasm-size-history.md
+          {
+            echo "## $VERSION - $DATE"
+            echo ""
+            echo "| Contract | Size (bytes) |"
+            echo "|----------|-------------:|"
+            for wasm in target/wasm32-unknown-unknown/release/*.wasm; do
+              name=$(basename "$wasm" .wasm)
+              size=$(stat --format=%s "$wasm")
+              echo "| $name | $size |"
+            done
+            echo ""
+          } >> docs/wasm-size-history.md
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add docs/wasm-size-history.md
+          git commit -m "ci: record wasm size for $VERSION" || echo "No changes to commit"
+          git push

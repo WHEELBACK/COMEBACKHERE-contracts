@@ -1,0 +1,33 @@
+[package]
+name = "comebackhere-settlement-workflow"
+version = "1.0.0"
+edition.workspace = true
+license.workspace = true
+publish = false
+description = "COMEBACKHERE settlement workflow orchestration contract"
+keywords = ["soroban", "stellar", "settlement"]
+categories = ["cryptography::cryptocurrencies"]
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+name = "settlement_workflow"
+
+[features]
+testutils = ["soroban-sdk/testutils"]
+
+[dependencies]
+soroban-sdk.workspace = true
+compliance-client = { package = "comebackhere-compliance-client", path = "../../crates/compliance-client" }
+# `multisig` holds no `#[contractimpl]` (only the shared `TreasuryError` enum and
+# contract types), so depending on it directly does not statically link any
+# foreign wasm exports into this contract — unlike the `compliance` / `treasury`
+# impl crates, which stay dev-only for that reason.
+multisig = { package = "comebackhere-multisig", path = "../../crates/multisig" }
+workflow-errors = { package = "comebackhere-workflow-errors", path = "../../crates/workflow-errors" }
+
+[dev-dependencies]
+soroban-sdk = { workspace = true, features = ["testutils"] }
+compliance = { package = "comebackhere-compliance", path = "../compliance" }
+treasury = { package = "comebackhere-treasury", path = "../treasury" }
+comebackhere-tests = { path = "../../tests" }
+hex = "0.4"

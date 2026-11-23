@@ -13,7 +13,7 @@ fn setup(env: &Env) -> (TreasuryContractClient<'_>, Address) {
     let admin = Address::generate(env);
     let id = env.register_contract(None, TreasuryContract);
     let client = TreasuryContractClient::new(env, &id);
-    client.initialize(&admin, &1);
+    client.initialize(&admin, &1, &soroban_sdk::Vec::new(env));
     (client, admin)
 }
 
@@ -25,7 +25,7 @@ fn execute_settlement_succeeds_with_allowed_token() {
     let token_id = env.register_contract(None, FakeToken);
 
     client.add_allowed_token(&admin, &token_id);
-    let sid = client.propose_settlement(&admin, &merchant, &10_000_000);
+    let sid = client.propose_settlement(&admin, &merchant, &10_000_000, &0_u64);
     client.execute_settlement(&admin, &sid, &token_id);
 }
 
@@ -39,8 +39,10 @@ fn execute_settlement_panics_when_token_not_in_allowlist() {
     let other_token = Address::generate(&env);
 
     client.add_allowed_token(&admin, &allowed_token);
-    let sid = client.propose_settlement(&admin, &merchant, &10_000_000);
-    assert!(client.try_execute_settlement(&admin, &sid, &other_token).is_err());
+    let sid = client.propose_settlement(&admin, &merchant, &10_000_000, &0_u64);
+    assert!(client
+        .try_execute_settlement(&admin, &sid, &other_token)
+        .is_err());
 }
 
 #[test]
@@ -50,7 +52,7 @@ fn execute_settlement_with_empty_allowlist_succeeds() {
     let merchant = Address::generate(&env);
     let token_id = env.register_contract(None, FakeToken);
 
-    let sid = client.propose_settlement(&admin, &merchant, &10_000_000);
+    let sid = client.propose_settlement(&admin, &merchant, &10_000_000, &0_u64);
     client.execute_settlement(&admin, &sid, &token_id);
 }
 
@@ -67,7 +69,25 @@ fn remove_allowed_token_prevents_execution() {
     client.add_allowed_token(&admin, &token_b);
     client.remove_allowed_token(&admin, &token_a);
 
-    let sid = client.propose_settlement(&admin, &merchant, &10_000_000);
+    let sid = client.propose_settlement(&admin, &merchant, &10_000_000, &0_u64);
     // token_a removed; allowlist still non-empty (token_b present) → rejected
-    assert!(client.try_execute_settlement(&admin, &sid, &token_a).is_err());
+    assert!(client
+        .try_execute_settlement(&admin, &sid, &token_a)
+        .is_err());
+}
+
+#[test]
+fn adding_beyond_max_allowed_tokens_is_rejected() {
+    let env = Env::default();
+    let (client, admin) = setup(&env);
+
+    // Add MAX_ALLOWED_TOKENS (20) tokens — all should succeed
+    for _ in 0..20 {
+        let token = Address::generate(&env);
+        client.add_allowed_token(&admin, &token);
+    }
+
+    // The 21st addition should panic
+    let extra_token = Address::generate(&env);
+    assert!(client.try_add_allowed_token(&admin, &extra_token).is_err());
 }

@@ -8,14 +8,14 @@ use soroban_sdk::{
     testutils::{Address as _, Events},
     Address, Env, FromVal, Symbol,
 };
-use treasury::{SettlementStatus, TreasuryContract, TreasuryContractClient};
+use treasury::{TreasuryContract, TreasuryContractClient};
 
-fn setup(env: &Env, threshold: u32) -> (TreasuryContractClient, Address, Address) {
+fn setup(env: &Env, threshold: u32) -> (TreasuryContractClient<'_>, Address, Address) {
     env.mock_all_auths();
     let admin = Address::generate(env);
     let id = env.register_contract(None, TreasuryContract);
     let client = TreasuryContractClient::new(env, &id);
-    client.initialize(&admin, &threshold);
+    client.initialize(&admin, &threshold, &soroban_sdk::Vec::new(env));
     (client, admin, id)
 }
 
@@ -35,45 +35,45 @@ fn cancel_pending_settlement_removes_it_from_pending() {
     let (client, admin, _) = setup(&env, 1);
     let merchant = Address::generate(&env);
 
-    let sid = client.propose_settlement(&admin, &merchant, &10_000_000);
+    let sid = client.propose_settlement(&admin, &merchant, &10_000_000, &0_u64);
     client.cancel_settlement(&admin, &sid);
 
     assert_eq!(client.get_pending_settlements().len(), 0);
 }
 
 #[test]
-#[should_panic(expected = "AlreadyExecuted")]
+#[should_panic(expected = "Error(Contract, #4)")]
 fn execute_after_cancel_panics() {
     let env = Env::default();
     let (client, admin, _) = setup(&env, 1);
     let merchant = Address::generate(&env);
     let token_id = env.register_contract(None, FakeToken);
 
-    let sid = client.propose_settlement(&admin, &merchant, &10_000_000);
+    let sid = client.propose_settlement(&admin, &merchant, &10_000_000, &0_u64);
     client.cancel_settlement(&admin, &sid);
     client.execute_settlement(&admin, &sid, &token_id);
 }
 
 #[test]
-#[should_panic(expected = "AlreadyExecuted")]
+#[should_panic(expected = "Error(Contract, #4)")]
 fn approve_after_cancel_panics() {
     let env = Env::default();
     let (client, admin, _) = setup(&env, 2);
     let merchant = Address::generate(&env);
 
-    let sid = client.propose_settlement(&admin, &merchant, &10_000_000);
+    let sid = client.propose_settlement(&admin, &merchant, &10_000_000, &0_u64);
     client.cancel_settlement(&admin, &sid);
     client.approve_settlement(&admin, &sid);
 }
 
 #[test]
-#[should_panic(expected = "AlreadyExecuted")]
+#[should_panic(expected = "Error(Contract, #26)")]
 fn double_cancel_panics() {
     let env = Env::default();
     let (client, admin, _) = setup(&env, 1);
     let merchant = Address::generate(&env);
 
-    let sid = client.propose_settlement(&admin, &merchant, &10_000_000);
+    let sid = client.propose_settlement(&admin, &merchant, &10_000_000, &0_u64);
     client.cancel_settlement(&admin, &sid);
     client.cancel_settlement(&admin, &sid);
 }
@@ -81,8 +81,11 @@ fn double_cancel_panics() {
 // ─── #117 Event ordering snapshots ───────────────────────────────────────────
 
 fn event_symbol(env: &Env, topics: &soroban_sdk::Vec<soroban_sdk::Val>) -> String {
+    use soroban_sdk::TryFromVal;
     let val = topics.get_unchecked(0);
-    Symbol::from_val(env, &val).to_string()
+    Symbol::try_from_val(env, &val)
+        .unwrap_or_else(|_| Symbol::new(env, ""))
+        .to_string()
 }
 
 #[test]
@@ -93,32 +96,16 @@ fn event_order_propose_approve_cancel() {
     let merchant = Address::generate(&env);
     client.set_signer(&admin, &backup, &1);
 
-    let sid = client.propose_settlement(&admin, &merchant, &5_000_000);
+    let sid = client.propose_settlement(&admin, &merchant, &5_000_000, &0_u64);
+    let proposed_symbol = event_symbol(&env, &env.events().all().last().unwrap().1);
     client.approve_settlement(&backup, &sid);
+    let approved_symbol = event_symbol(&env, &env.events().all().last().unwrap().1);
     client.cancel_settlement(&admin, &sid);
+    let cancelled_symbol = event_symbol(&env, &env.events().all().last().unwrap().1);
 
-    let events = env.events().all();
-    let symbols: std::vec::Vec<String> = events
-        .iter()
-        .map(|(_, topics, _)| event_symbol(&env, &topics))
-        .collect();
-
-    // Find positions of the three key events
-    let proposed = symbols
-        .iter()
-        .position(|s| s == "settlement_proposed")
-        .unwrap();
-    let approved = symbols
-        .iter()
-        .position(|s| s == "settlement_approved")
-        .unwrap();
-    let cancelled = symbols
-        .iter()
-        .position(|s| s == "settlement_cancelled")
-        .unwrap();
-
-    assert!(proposed < approved, "proposed must come before approved");
-    assert!(approved < cancelled, "approved must come before cancelled");
+    assert_eq!(proposed_symbol, "settlement_proposed");
+    assert_eq!(approved_symbol, "settlement_approved");
+    assert_eq!(cancelled_symbol, "settlement_cancelled");
 }
 
 #[test]
@@ -128,25 +115,13 @@ fn event_order_propose_then_execute() {
     let merchant = Address::generate(&env);
     let token_id = env.register_contract(None, FakeToken);
 
-    let sid = client.propose_settlement(&admin, &merchant, &1_000);
+    let sid = client.propose_settlement(&admin, &merchant, &1_000, &0_u64);
+    let proposed_symbol = event_symbol(&env, &env.events().all().last().unwrap().1);
     client.execute_settlement(&admin, &sid, &token_id);
+    let executed_symbol = event_symbol(&env, &env.events().all().last().unwrap().1);
 
-    let events = env.events().all();
-    let symbols: std::vec::Vec<String> = events
-        .iter()
-        .map(|(_, topics, _)| event_symbol(&env, &topics))
-        .collect();
-
-    let proposed = symbols
-        .iter()
-        .position(|s| s == "settlement_proposed")
-        .unwrap();
-    let executed = symbols
-        .iter()
-        .position(|s| s == "settlement_executed")
-        .unwrap();
-
-    assert!(proposed < executed, "proposed must come before executed");
+    assert_eq!(proposed_symbol, "settlement_proposed");
+    assert_eq!(executed_symbol, "settlement_executed");
 }
 
 // ─── #118 Signer rotation scenario coverage ──────────────────────────────────
@@ -159,12 +134,12 @@ fn rotated_in_signer_can_propose() {
     let merchant = Address::generate(&env);
 
     client.set_signer(&admin, &new_signer, &1);
-    let sid = client.propose_settlement(&new_signer, &merchant, &1_000);
+    let sid = client.propose_settlement(&new_signer, &merchant, &1_000, &0_u64);
     assert_eq!(sid, 1);
 }
 
 #[test]
-#[should_panic(expected = "UnauthorizedSigner")]
+#[should_panic(expected = "Error(Contract, #10)")]
 fn rotated_out_signer_cannot_propose() {
     let env = Env::default();
     let (client, admin, _) = setup(&env, 1);
@@ -173,11 +148,11 @@ fn rotated_out_signer_cannot_propose() {
 
     client.set_signer(&admin, &old_signer, &1);
     client.set_signer(&admin, &old_signer, &0); // rotate out
-    client.propose_settlement(&old_signer, &merchant, &1_000);
+    client.propose_settlement(&old_signer, &merchant, &1_000, &0_u64);
 }
 
 #[test]
-#[should_panic(expected = "UnauthorizedSigner")]
+#[should_panic(expected = "Error(Contract, #10)")]
 fn rotated_out_signer_cannot_approve() {
     let env = Env::default();
     let (client, admin, _) = setup(&env, 2);
@@ -185,7 +160,7 @@ fn rotated_out_signer_cannot_approve() {
     let merchant = Address::generate(&env);
 
     client.set_signer(&admin, &signer, &1);
-    let sid = client.propose_settlement(&admin, &merchant, &1_000);
+    let sid = client.propose_settlement(&admin, &merchant, &1_000, &0_u64);
     client.set_signer(&admin, &signer, &0);
     client.approve_settlement(&signer, &sid);
 }
@@ -198,7 +173,7 @@ fn rotation_after_approval_preserves_weight_snapshot() {
     let merchant = Address::generate(&env);
 
     client.set_signer(&admin, &signer_b, &1);
-    let sid = client.propose_settlement(&admin, &merchant, &1_000);
+    let sid = client.propose_settlement(&admin, &merchant, &1_000, &0_u64);
     client.approve_settlement(&signer_b, &sid);
 
     // rotate signer_b out after approval
@@ -216,7 +191,7 @@ fn new_signer_can_approve_after_rotation() {
     let merchant = Address::generate(&env);
 
     client.set_signer(&admin, &new_signer, &1);
-    let sid = client.propose_settlement(&admin, &merchant, &1_000);
+    let sid = client.propose_settlement(&admin, &merchant, &1_000, &0_u64);
     let settlement = client.approve_settlement(&new_signer, &sid);
 
     assert_eq!(settlement.approval_weight, 2);
@@ -226,7 +201,7 @@ fn new_signer_can_approve_after_rotation() {
 // ─── #120 Execute on non-existent settlement typed failure ───────────────────
 
 #[test]
-#[should_panic(expected = "SettlementNotFound")]
+#[should_panic(expected = "Error(Contract, #3)")]
 fn execute_nonexistent_settlement_panics() {
     let env = Env::default();
     let (client, admin, _) = setup(&env, 1);
@@ -235,7 +210,7 @@ fn execute_nonexistent_settlement_panics() {
 }
 
 #[test]
-#[should_panic(expected = "SettlementNotFound")]
+#[should_panic(expected = "Error(Contract, #3)")]
 fn approve_nonexistent_settlement_panics() {
     let env = Env::default();
     let (client, admin, _) = setup(&env, 1);
@@ -243,7 +218,7 @@ fn approve_nonexistent_settlement_panics() {
 }
 
 #[test]
-#[should_panic(expected = "SettlementNotFound")]
+#[should_panic(expected = "Error(Contract, #3)")]
 fn cancel_nonexistent_settlement_panics() {
     let env = Env::default();
     let (client, admin, _) = setup(&env, 1);

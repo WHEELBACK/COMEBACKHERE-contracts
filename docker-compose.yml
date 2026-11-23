@@ -1,0 +1,17 @@
+# Local Stellar quickstart network matching the service container configuration used by
+# .github/workflows/init-smoke-test.yml (image, env vars, and port), so `docker compose up`
+# reproduces the exact network scripts/init-contracts.sh targets in CI. Keep this in sync with
+# that workflow file if either one changes.
+services:
+  stellar:
+    image: stellar/quickstart:latest
+    ports:
+      - "8000:8000"
+    environment:
+      ENABLE_SOROBAN_RPC: "true"
+      NETWORK: local
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:8000/health"]
+      interval: 5s
+      timeout: 3s
+      retries: 20

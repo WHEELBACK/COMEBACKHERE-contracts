@@ -7,3 +7,19 @@ updates:
     target-branch: "main"
     labels:
       - "dependencies"
+    groups:
+      soroban-sdk:
+        patterns:
+          - "soroban-sdk"
+          - "soroban-sdk-macros"
+          - "soroban-ledger-snapshot"
+          - "soroban-spec*"
+          - "stellar-xdr"
+      dev-dependencies:
+        dependency-type: "development"
+        exclude-patterns:
+          - "soroban-sdk"
+          - "soroban-sdk-macros"
+          - "soroban-ledger-snapshot"
+          - "soroban-spec*"
+          - "stellar-xdr"

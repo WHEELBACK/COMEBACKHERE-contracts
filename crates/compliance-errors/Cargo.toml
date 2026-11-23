@@ -1,0 +1,20 @@
+[package]
+name = "comebackhere-compliance-errors"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+description = "Stable compliance error ABI for COMEBACKHERE contracts"
+keywords = ["soroban", "stellar", "errors"]
+categories = ["cryptography::cryptocurrencies"]
+
+[lib]
+name = "compliance_errors"
+
+[features]
+testutils = ["soroban-sdk/testutils"]
+
+[dependencies]
+soroban-sdk.workspace = true
+error-macros = { package = "comebackhere-error-macros", path = "../error-macros" }

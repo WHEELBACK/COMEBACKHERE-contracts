@@ -1,0 +1,59 @@
+name: ABI Snapshot Drift Check
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - "contracts/invoice/src/**"
+      - "abis/**"
+
+jobs:
+  abi-drift:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Extract invoice functions from source
+        id: src_functions
+        run: |
+          grep -rh '^\s*pub fn ' contracts/invoice/src/entrypoints/ \
+            | sed 's/.*pub fn \([a-z_][a-z0-9_]*\).*/\1/' \
+            | sort -u > /tmp/src_functions.txt
+          echo "--- source functions ---"
+          cat /tmp/src_functions.txt
+
+      - name: Extract invoice events from source
+        id: src_events
+        run: |
+          grep -h 'Symbol::new(env, ' contracts/invoice/src/events.rs \
+            | grep -v '#\[' \
+            | sed 's/.*Symbol::new(env, "\([^"]*\)").*/\1/' \
+            | sort -u > /tmp/src_events.txt
+          echo "--- source events ---"
+          cat /tmp/src_events.txt
+
+      - name: Extract functions from ABI snapshot
+        run: |
+          jq -r '.functions[]' abis/invoice.json | sort > /tmp/snap_functions.txt
+          echo "--- snapshot functions ---"
+          cat /tmp/snap_functions.txt
+
+      - name: Extract events from ABI snapshot
+        run: |
+          jq -r '.events[]' abis/invoice.json | sort > /tmp/snap_events.txt
+          echo "--- snapshot events ---"
+          cat /tmp/snap_events.txt
+
+      - name: Diff functions
+        run: |
+          if ! diff -u /tmp/snap_functions.txt /tmp/src_functions.txt; then
+            echo "::error::abis/invoice.json functions are stale. Update the snapshot to match the contract source."
+            exit 1
+          fi
+
+      - name: Diff events
+        run: |
+          if ! diff -u /tmp/snap_events.txt /tmp/src_events.txt; then
+            echo "::error::abis/invoice.json events are stale. Update the snapshot to match the contract source."
+            exit 1
+          fi

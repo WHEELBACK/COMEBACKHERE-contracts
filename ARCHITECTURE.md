@@ -1,3 +1,22 @@
+> **Glossary:** For definitions of terms used throughout this document and the contract READMEs, see [`docs/GLOSSARY.md`](docs/GLOSSARY.md).
+
+> **Economic parameters:** `Treasury::execute_settlement` pays out the full, exact
+> proposed amount — there is no protocol fee or comparable deduction. This is a
+> deliberate design choice, not an unaddressed gap; see
+> [`docs/economic-parameters.md`](docs/economic-parameters.md) for the rationale and
+> the conditions under which it should be revisited.
+
+## Contract Size Budget
+
+The CI size gate (`contract-size.yml`) rejects any compiled WASM that exceeds **65 536 bytes (64 KiB)**.
+
+Rationale:
+- Soroban's current network-enforced maximum for a deployed contract WASM is **65 536 bytes**. Deploying a larger binary is rejected at the protocol level, so the CI threshold mirrors the hard ceiling exactly — there is no separate "margin" buffer because any byte over the limit is already a deploy failure.
+- The threshold is set via the `MAX_CONTRACT_SIZE` env var in `contract-size.yml` so it can be updated in one place if the network limit changes.
+- All three contracts (compliance, invoice, treasury) are currently well under this ceiling. The check exists to catch accidental size regressions before they reach a deploy attempt.
+
+---
+
 # Architecture
 
 This document describes the protocol-level design of the three COMEBACKHERE smart contracts, their data storage, and how they interact during a typical payment lifecycle.
@@ -41,10 +60,14 @@ sequenceDiagram
     Note over Treasury: approval_weight >= threshold
 
     SettlementWorkflow->>Compliance: is_allowed(merchant)
-    Compliance-->>SettlementWorkflow: true
-    SettlementWorkflow->>Treasury: execute_settlement(signer, id, token)
-    Treasury->>Token: transfer(treasury → merchant, amount)
-    Note over Treasury: Settlement{status=Executed}
+    Compliance-->>SettlementWorkflow: true / false
+    alt is_allowed(merchant) == true
+        SettlementWorkflow->>Treasury: execute_settlement(signer, id, token)
+        Treasury->>Token: transfer(treasury → merchant, amount)
+        Note over Treasury: Settlement{status=Executed}
+    else is_allowed(merchant) == false
+        Note over SettlementWorkflow: returns Err(TreasuryError::ComplianceCheckFailed), Treasury untouched
+    end
 
     Invoice-->>Invoice: release_escrow(admin, id)
     Note over Invoice: status = Released
@@ -66,6 +89,8 @@ sequenceDiagram
 | `GraceWindow` | Instance | `u64` | Seconds added to `expires_at` during `mark_paid` |
 | `Invoice(u64)` | Persistent | `Invoice` | Full invoice record keyed by ID |
 | `MerchantNonce(Address, u64)` | Persistent | `bool` | Idempotency guard; rejects duplicate merchant nonces |
+| `PayerIndexCount(Address)` | Persistent | `u64` | Number of invoices recorded in a payer's index (#711) |
+| `PayerIndexEntry(Address, u64)` | Persistent | `u64` | Payer → invoice ID index, appended in `mark_paid` order; capped at `MAX_PAYER_INDEX_ENTRIES` per payer (#711) |
 
 ### Treasury (`contracts/treasury`)
 
@@ -96,27 +121,226 @@ sequenceDiagram
 | `Allowed(Address)` | Persistent | `bool` | Whether an address is on the allow-list |
 | `Blocked(Address)` | Persistent | `bool` | Whether an address is blocked (overrides allow) |
 | `AllowedUntil(Address)` | Persistent | `u64` | Optional expiry timestamp for a temporary allow |
+| `Tier(Address)` | Persistent | `u32` | Compliance tier set via `allow_address_with_tier`; `0` (basic KYC) if unset. Metadata only — not consulted by `is_allowed` |
+| `Jurisdiction(Address)` | Persistent | `Symbol` | Optional jurisdiction code (e.g. ISO 3166 alpha-2) set via `set_jurisdiction`. Metadata only — not consulted by `is_allowed` |
+
+## Error-Code Ranges per Contract
+
+Each contract defines error codes via a `#[contracterror]` enum. New variants **must** be appended at the end (highest numeric value) to preserve on-chain backwards compatibility — existing contracts and clients may depend on the current ordinal positions.
+
+### Invoice Contract (`InvoiceError` — range 1..=28)
+
+| Code | Name | Description |
+|---|---|---|
+| 1 | `Unauthorized` | Caller is not the expected admin or merchant |
+| 2 | `ContractPaused` | Contract is paused and the operation is blocked |
+| 3 | `InvalidAmount` | Amount is zero, negative, or gross < amount |
+| 4 | `NotPending` | Invoice status is not `Pending` for the required transition |
+| 5 | `Expired` | Payment window (including grace period) has elapsed |
+| 6 | `NotFound` | No invoice exists for the given ID |
+| 7 | `AlreadyInitialized` | `initialize` has already been called |
+| 8 | `ZeroDuration` | `expires_in_seconds` is zero |
+| 9 | `ExpiryOverflow` | `expires_at` arithmetic overflowed `u64` |
+| 10 | `NotPaid` | Invoice is not in `Paid` status |
+| 11 | `NotReleased` | Invoice has not been released from escrow |
+| 12 | `AmountPrecision` | Amount below minimum USDC unit (< 10_000_000 stroops) |
+| 13 | `DuplicateNonce` | Merchant nonce has already been used |
+| 14 | `ExpiryTooLong` | `expires_in_seconds` exceeds max (5 years) |
+| 15 | `MetadataMismatch` | Provided `metadata_hash` does not match stored hash |
+| 16 | `NoPendingAdmin` | No pending admin transfer to accept |
+| 17 | `InvalidPaymentLinkHash` | `payment_link_hash` is not exactly 32 bytes |
+| 18 | `NotRefundRequested` | Invoice is not in `RefundRequested` status |
+| 19 | `TokenMismatch` | Provided payment token does not match invoice's expected token |
+| 20 | `BatchTooLarge` | Batch input exceeds `MAX_BATCH_SIZE` |
+| 21 | `CooldownActive` | `create_invoice` called again before `CreationCooldown` elapsed |
+| 22 | `InvoiceCountOverflow` | `u64` invoice id counter would overflow |
+| 23 | `HashTooLong` | Optional hash field exceeds `MAX_HASH_BYTES` (64) |
+| 24 | `PaymentStateInconsistent` | Invoice does not describe a completed payment (no `paid_at`, no recorded payer, or `amount_usdc`/`gross_usdc` inconsistent) — refunds are refused (#70) |
+| 25 | `RefundTransferFailed` | The cross-contract token transfer executing a refund failed; the refund is abandoned with no state change (#70) |
+| 26 | `RefundTokenNotSet` | Refund payout attempted on an invoice created without a `token_address` (#70) |
+| 27 | `RefundFeeTooHigh` | `fee_bps` above `MAX_REFUND_FEE_BPS` (10_000 bps = 100%); rejected before the payout transfer is attempted (#71) |
+| 28 | `ArithmeticOverflow` | Refund fee arithmetic exceeded `i128`; unreachable for any in-range input, kept as a typed backstop so a bound change fails as an error rather than a trap (#71) |
+
+### Treasury Contract (`TreasuryError` — range 1..=47)
+
+| Code | Name | Description |
+|---|---|---|
+| 1 | `AlreadyInitialized` | `initialize` has already been called |
+| 2 | `ZeroThreshold` | Approval threshold cannot be zero |
+| 3 | `SettlementNotFound` | No settlement exists for the given ID |
+| 4 | `AlreadyExecuted` | Settlement is already executed, cancelled, or expired |
+| 5 | `ThresholdNotMet` | Approval weight is below the required threshold |
+| 6 | `ThresholdNotConfigured` | Threshold has not been set |
+| 7 | `InvalidAmount` | Amount is zero or negative |
+| 8 | `ContractPaused` | Contract is paused and the operation is blocked |
+| 9 | `Unauthorized` | Caller is not the admin |
+| 10 | `UnauthorizedSigner` | Caller is not an authorised signer (zero weight) |
+| 11 | `InvalidTokenContract` | Token contract is the treasury itself |
+| 12 | `TokenNotAllowed` | Token is not on the settlement allowlist |
+| 13 | `RotationNotFound` | No signer rotation proposal for the given ID |
+| 14 | `RotationAlreadyExecuted` | Rotation proposal already executed or cancelled |
+| 15 | `SettlementOnHold` | Settlement is on hold and cannot be executed |
+| 16 | `DisputeNotExpired` | Dispute expiry timestamp has not been reached |
+| 17 | `AlreadyOnHold` | Settlement is already on hold |
+| 18 | `ThresholdUnreachable` | The threshold exceeds the available signer weight |
+| 19 | `ComplianceCheckFailed` | The address failed the compliance check |
+| 20 | `ArithmeticOverflow` | The calculation overflowed |
+| 21 | `DisputeNotFound` | Dispute not found |
+| 22 | `DisputeAlreadyResolved` | The dispute has already been resolved |
+| 23 | `ResolutionDirectionMismatch` | The dispute resolution direction is invalid |
+| 24 | `BatchTooLarge` | Too many items in one batch |
+| 25 | `WeightOverflow` | The total signer weight is too large |
+| 26 | `SettlementNotCancellable` | The settlement cannot be cancelled |
+| 27 | `TtlNotElapsed` | The settlement has not expired yet |
+| 28 | `AllowlistFull` | The allowlist is full |
+| 29 | `NotOnHold` | The settlement is not on hold |
+| 30 | `DestinationNotAllowed` | The destination address is not allowed |
+| 31 | `InsufficientBalance` | Insufficient treasury balance |
+| 32 | `NotPaused` | The treasury contract is not paused |
+| 33 | `RotationProposalCooldown` | Please wait before proposing another signer rotation |
+| 34 | `WorkflowNotRegisteredSigner` | The settlement workflow is not a registered signer |
+| 35 | `WithdrawalLimitExceeded` | The withdrawal limit has been exceeded |
+| 36 | `InvalidSplitRatio` | The dispute split ratio is invalid |
+| 37 | `ForceCancelNotAllowed` | The settlement cannot be force-cancelled |
+| 38 | `SignerChangeTooEarly` | The signer change delay has not elapsed yet |
+| 39 | `SignerChangeNotFound` | Signer change not found |
+| 40 | `SignerChangeAlreadyFinalised` | The signer change has already been finalised |
+| 41 | `ExecutionDeadlineExceeded` | The settlement execution deadline has passed |
+| 42 | `QuorumBreak` | Removing this signer would make the threshold unreachable |
+| 43 | `TokenHasPendingSettlements` | The token still has pending settlements |
+| 44 | `ApprovalNotFound` | The signer has not approved this settlement |
+| 45 | `DuplicateVote` | The signer has already voted on this dispute |
+| 46 | `NoPendingAdmin` | There is no pending admin transfer |
+| 47 | `LabelTooLong` | The signer label is too long |
+
+> **Note:** 42–47 were each first merged at a discriminant another PR had already
+> taken (38 or 41). `main` never compiled with those numbers, so they were
+> re-appended in merge order in multisig 0.6.0; see `crates/multisig/CHANGELOG.md`.
+
+### Compliance Contract (`ComplianceError` / `ContractError` — range 1..=11)
+
+| Code | Name | Description |
+|---|---|---|
+| 1 | `Unauthorized` (ContractError) | Caller is not the admin or operator |
+| 2 | `ContractPaused` (ContractError) | Contract is paused and the operation is blocked |
+| 3 | `AlreadyInitialized` (ContractError) | `initialize` has already been called |
+| 4 | `BatchTooLarge` (ContractError) | Batch input exceeds `MAX_BATCH_SIZE` |
+| 5 | `AddressIndexFull` (ContractError) | Tracking a new address would exceed `MAX_TRACKED_ADDRESSES` |
+| 6 | `BulkOperationCooldown` (ContractError) | Bulk allow/block called before `BULK_OP_COOLDOWN_SECS` elapsed |
+| 7 | `UnexpectedSchemaVersion` (ContractError) | `migrate` has no path from the stored schema version |
+| 8 | `OperatorCannotClearAdminBlock` (ContractError) | An operator tried to clear or override an admin-placed block |
+| 9 | `OperatorSetFull` (ContractError) | `add_operator` called with `MAX_OPERATORS` operators already set |
+| 10 | `InvalidJurisdictionCode` (ContractError) | `set_jurisdiction` code is not 2–3 uppercase ASCII letters or digits |
+| 11 | `NoPendingAdmin` (ContractError) | `accept_admin` / `cancel_admin_transfer` called with no pending transfer |
+
+> **Note:** `ComplianceError` enum exists separately with code `AlreadyInitialized = 1` for historical compatibility. New error variants should be added to `ContractError`.
+
+### Settlement Workflow Contract (`WorkflowError` — range 1..=10)
+
+Coordination errors raised by the workflow contract itself, distinct from the
+`TreasuryError` values its settlement path returns (borrowed from `multisig`
+because that crate was already a dependency).
+
+| Code | Name | Description |
+|---|---|---|
+| 1 | `Unauthorized` | Caller is not the configured emergency-pause admin |
+| 2 | `NotConfigured` | `initialize_emergency_pause` has not been called, so there is no target set |
+| 3 | `PauseTargetFailed` | A target refused to pause; the whole sweep is rolled back, so nothing is left paused (#73) |
+| 4 | `UnpauseTargetFailed` | A target refused to unpause; the whole sweep is rolled back, so nothing is left resumed (#73) |
+| 5 | `NoPauseTargets` | An empty target set was supplied |
+| 6 | `TooManyPauseTargets` | More than `MAX_PAUSE_TARGETS` (8) targets |
+| 7 | `DuplicatePauseTarget` | The same address appears twice in the target set |
+| 8 | `SelfPauseTarget` | The workflow contract itself was supplied as a target |
+| 9 | `EmergencyPauseActive` | The target set cannot be repointed while an emergency pause is open |
+| 10 | `NotEmergencyPaused` | `resume_all` was called with no emergency pause active |
+
+---
+
+## Shared Crates — Types, Not Storage
+
+The shared crates (`crates/multisig`, `crates/protocol-errors`, `crates/error-macros` and `crates/protocol-math`) provide types, math constants and error definitions that are imported by the contracts. They are **not deployed contracts** and have **no DataKeys or on-chain storage of their own**.
+
+| Crate | What it provides | Storage |
+|---|---|---|
+| `crates/multisig` | `SettlementHoldReason` enum, multisig helper types, `TreasuryError` | None |
+| `crates/protocol-errors` | Shared error type utilities | None |
+| `crates/error-macros` | `declare_contract_error!` macro used by every `#[contracterror]` enum | None |
+| `crates/protocol-math` | Protocol-wide math constants (`BPS_DENOMINATOR`) and typed basis-point helpers | None |
+
+`crates/protocol-math` exists so a ratio means exactly one thing protocol-wide:
+`BPS_DENOMINATOR` (10 000 bps = 100.00%) is defined once, and
+`apply_bps_i128` / `split_bps_i128` perform the multiply-divide on `i128`
+amounts, returning `Option` so overflow surfaces as the caller's own error
+instead of a wrap. A contract that needs basis-point math (today: the treasury
+dispute split in `contracts/treasury/src/disputes.rs`) takes the denominator and
+the helpers from this crate rather than re-declaring its own copy of `10_000`
+(#707).
+
+If you are looking for where a type like `SettlementHoldReason` is stored on-chain, look at the **Treasury** DataKey table above (`Settlement(u64)` embeds it). The crates themselves are compile-time dependencies only.
 
 ---
 
 ## Cross-Contract Call Map
 
+```mermaid
+flowchart LR
+    Merchant[Merchant dashboard] --> Invoice[Invoice contract]
+    Invoice --> Proposal[Settlement proposal workflow]
+    Proposal --> Treasury[Treasury contract]
+    SettlementWorkflow[SettlementWorkflow contract] --> Compliance[Compliance contract]
+    SettlementWorkflow --> Treasury
+    Treasury --> Token[SEP-41 token]
 ```
+
+```text
 SettlementProposalWorkflow
   ├── Invoice::get_invoice(id)              → validates status == Pending
   └── Treasury::propose_settlement(...)     → creates Settlement record
 
 SettlementWorkflow
-  ├── Compliance::is_allowed(merchant)      → compliance gate (must be true)
-  └── Treasury::execute_settlement(...)     → transfers tokens to merchant
+  ├── Compliance::is_allowed(merchant)      → compliance gate; if false, returns Err(ComplianceCheckFailed)
+  └── Treasury::execute_settlement(...)     → called ONLY if the gate passes; transfers tokens to merchant
+
+SettlementWorkflow (emergency pause coordination, #73)
+  └── {Invoice,Treasury,Compliance}::pause(admin)
+       → fanned out over the configured target set in order, passing this
+         contract's own address as `admin`. All-or-nothing: the first target that
+         does not return Ok aborts the whole call with PauseTargetFailed, and
+         returning Err reverts the targets already paused. The orchestrator's
+         only authority over the rest of the protocol is "stop it" — the client
+         trait declares pause/unpause and nothing else.
 
 Treasury::execute_settlement
   └── Token::transfer(treasury → merchant)  → SEP-41 token transfer
 
-Invoice (standalone — no outbound cross-contract calls)
+Invoice::process_refund                      → verify payment state, then
+  └── Token::transfer(escrow → payer)         Token::transfer(escrow → payer)  → SEP-41 token transfer; a failure reverts the whole
+                                               refund with RefundTransferFailed (#70)
+
+Invoice (cross-contract calls: Token only, on the refund payout path)
 Treasury (standalone — no outbound cross-contract calls except Token)
 Compliance (standalone — no outbound cross-contract calls)
+SettlementWorkflow (cross-contract calls: Compliance::is_allowed and
+  Treasury::execute_settlement on the settlement path, plus pause/unpause on the
+  emergency-pause path)
 ```
+
+### Cross-Contract Compliance Call Failure Modes
+
+Soroban cross-contract calls have no network-style timeout or retry — a call either
+returns synchronously within the same transaction or the invocation aborts. This
+documents how the calling contract (`Treasury`, via `compliance-client`) reacts to
+each failure mode when invoking `Compliance::is_allowed`:
+
+| Failure mode | Behavior | Caller impact |
+|---|---|---|
+| Compliance contract not deployed / wrong contract ID | The host call fails immediately (no such contract instance) | The calling transaction aborts entirely; all state changes made earlier in the same transaction (e.g. a prior `Treasury` write) are rolled back. There is no partial-execution state to clean up. |
+| Compliance contract paused | `is_allowed` does not check the `Paused` flag — only administrative mutations (`allow_address`, `block_address`, etc.) enforce `require_not_paused`. `is_allowed` still executes and returns its normal `bool` result while paused. | No special handling needed; a pause does not block compliance reads, only compliance list mutations. |
+| Compliance contract panics (unexpected internal error) | The panic propagates up through the cross-contract call boundary | The calling transaction aborts entirely, identical to a missing-contract failure. Soroban provides no automatic retry — the caller (or off-chain orchestrator driving `SettlementWorkflow`) must resubmit a fresh transaction after the underlying issue is resolved. |
+
+Because there is no retry/backoff primitive at the protocol level, any retry policy
+(e.g. re-attempting `execute_settlement` after a transient compliance failure) must
+be implemented off-chain by whatever process submits these transactions.
 
 ### Invoice Status State Machine
 
@@ -129,3 +353,130 @@ Cancelled
 
 Pending ──batch_expire──► Expired  (when ledger.timestamp >= expires_at)
 ```
+
+### Invoice Status Audit Trail
+
+Off-chain indexers reconstruct the chronological status history for each invoice
+from the invoice contract's emitted events, using the invoice ID topic as the
+stream key. `invoice_created`, `invoice_paid`, `invoice_expired`,
+`invoice_cancelled`, `invoice_refund_requested`, and `refund_approved` carry the
+resulting full `Invoice`; `escrow_released` carries the invoice ID, merchant,
+amount, and release timestamp. Consumers must process events in ledger/event
+order, checkpoint their position, and deduplicate replayed events. The current
+state can be reconciled with `get_invoice` or the `batch_get_invoice_status`
+entrypoint.
+
+---
+
+## Storage Migration Strategy
+
+Soroban has no automatic storage migration. Once a `#[contracttype]` struct is deployed, changing its fields is a breaking change for any data already written under that type.
+
+### Intended approach
+
+**Additive-only field changes** are the default strategy:
+- New fields must be wrapped in `Option<T>` so that existing stored values (which lack the field) deserialise without error.
+- Removing or reordering fields is forbidden after mainnet deployment.
+- Renaming a field is equivalent to removing the old one and adding a new one — treat it as a breaking change.
+
+**Explicit migration entrypoint** (when additive-only is insufficient):
+- Add a `migrate(admin: Address)` entrypoint that reads records under the old schema, transforms them, and writes them under the new schema.
+- Gate it with `require_auth` on `admin` and a one-time `Migrated` instance-storage flag so it cannot be called twice.
+- The entrypoint should be removed (or made a no-op) in a subsequent release once migration is confirmed complete on-chain.
+
+### Per-contract notes
+
+| Contract | Current risk | Notes |
+|---|---|---|
+| Invoice | `Invoice` struct has grown incrementally; all new fields are `Option<T>` | Follow additive-only going forward |
+| Treasury | `Settlement` and `Dispute` structs embed `SettlementHoldReason` from `crates/multisig` | Adding variants to `SettlementHoldReason` is safe; removing or renumbering is not |
+| Compliance | Minimal stored types (`bool`, `u64`) | Low migration risk |
+
+---
+
+## Weighted Quorum Model — `crates/multisig`
+
+### What it is
+
+The `meets_threshold` helper in `crates/multisig` evaluates quorum by comparing
+accumulated *weight* — a `u32` value — against a configured threshold, not by
+counting how many signers have approved. The decisive expression is:
+
+```rust
+weight >= threshold
+```
+
+Weight is accumulated across approval calls: each time `record_approval` is invoked
+for a previously-unseen signer, that signer's registered weight is added to the
+running total.
+
+### Why weight-based, not count-based
+
+The weight model is a deliberate design choice. Operators can assign higher weight
+to signers they trust more or that offer stronger security guarantees — for example,
+an HSM-backed key or a cold-storage multisig controlled by a security team. This
+lets a deployment express **trust asymmetry** that a plain N-of-M count scheme
+cannot represent.
+
+A consequence of this model is that a single signer assigned a weight equal to or
+greater than the threshold can satisfy quorum alone. This is a feature, not a bug —
+it enables patterns like an emergency break-glass admin key — but operators must
+understand the implication: that signer effectively acts unilaterally.
+
+### Economic and security assumptions
+
+A healthy deployment distributes weights such that **no single signer's weight
+meets or exceeds the threshold on its own**, unless that is an explicit operational
+policy (e.g. an emergency admin key that is kept offline and heavily audited).
+
+The threshold should be calibrated so that the minimum number of signers required
+to collude and satisfy quorum matches the deployment's trust model. A higher
+threshold forces more weight to accumulate, reducing the risk that a single
+compromised key can execute a settlement.
+
+### Threshold-setting guidance
+
+Set the threshold to the **sum of weights** that represents acceptable quorum —
+not to a signer count. For example:
+
+| Signer | Weight |
+|---|---|
+| Signer A | 3 |
+| Signer B | 2 |
+| Signer C | 1 |
+
+With `threshold = 4`, the following combinations satisfy quorum:
+- Signer A (weight 3) + any one of B or C
+- Signer B (weight 2) + Signer C (weight 1) — their combined weight is 3, which
+  does **not** reach 4; they must both approve but that is still insufficient
+  without Signer A — adjust weights to match your intent.
+
+Revise weights and threshold together whenever signers are rotated or the trust
+model changes. The `set_threshold` and `set_signer` entrypoints require admin
+authentication precisely to ensure these changes are deliberate and auditable.
+
+### Overflow protection
+
+`record_approval` accumulates weight using `checked_add`. If the accumulated total
+would exceed `u32::MAX` (4 294 967 295), the call panics with
+`TreasuryError::WeightOverflow` rather than silently wrapping around to a small
+number. In practice no deployment should approach this ceiling; the check exists
+as a correctness guarantee, not a routine guard.
+
+### Audit note
+
+The external security audit planned under issue #117 should evaluate whether the
+weight distribution in the actual deployment matches the stated trust model. In
+particular, auditors should verify that no single signer's weight meets or exceeds
+the threshold unless an emergency break-glass policy is explicitly documented and
+justified.
+
+### Storage
+
+Signer weights are stored under `DataKey::Signer(Address)` in instance storage
+(see the Treasury DataKey table above). `signer_weight` returns `0` for any address
+that has not been registered via `set_signer` — it never panics on an unknown
+address. The `.unwrap_or(0)` in `signer_weight`'s implementation is the contract:
+unregistered addresses are silently treated as having zero weight and will be
+rejected by `require_authorized_signer` before they can influence any approval
+accumulation.

@@ -6,7 +6,20 @@
 version = 2
 db-path = "~/.cargo/advisory-db"
 db-urls = ["https://github.com/rustsec/advisory-db"]
-ignore = []
+# The advisory database is updated independently of this repo, so the weekly
+# re-check in `.github/workflows/deny.yml` can flag a crate pinned in
+# Cargo.lock even when nothing here changed. Every ignore entry must name the
+# advisory, say why it is not actionable from this repo, and say when to
+# remove it.
+ignore = [
+  # Both are "unmaintained" notices, not vulnerabilities, and neither has a
+  # safe upgrade. They reach us only through soroban-sdk -> soroban-env-host
+  # -> ark-bls12-381 / ark-ec / ark-ff, so the fix has to come from upstream.
+  # Remove each entry once a soroban-sdk upgrade drops the crate from
+  # Cargo.lock.
+  "RUSTSEC-2024-0436", # paste: unmaintained
+  "RUSTSEC-2024-0388", # derivative: unmaintained (reported in #688)
+]
 
 [licenses]
 version = 2
@@ -19,6 +32,7 @@ allow = [
   "BSD-3-Clause",
   "ISC",
   "Unicode-DFS-2016",
+  "Unicode-3.0",
   "CC0-1.0",
   "0BSD",
 ]

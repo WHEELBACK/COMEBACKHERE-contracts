@@ -12,6 +12,7 @@ on:
       - "contracts/**"
       - "Cargo.toml"
       - "Cargo.lock"
+  workflow_dispatch: {}
 
 env:
   CARGO_TERM_COLOR: always
@@ -23,9 +24,18 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Load version pins
+        shell: bash
+        run: |
+          set -a
+          source .github/versions.env
+          set +a
+          echo "RUST_VERSION=$RUST_VERSION" >> "$GITHUB_ENV"
+
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@master
         with:
+          toolchain: ${{ env.RUST_VERSION }}
           targets: wasm32-unknown-unknown
 
       - name: Cache cargo build
@@ -34,16 +44,33 @@ jobs:
           path: target
           key: ${{ runner.os }}-contract-size-${{ hashFiles('Cargo.lock') }}
 
-      - name: Build contracts to WASM
+      - name: Build contract WASM
         run: |
           set -e
-          echo "=== Building contracts ==="
-          for contract in contracts/*/; do
-            if [ -f "$contract/Cargo.toml" ]; then
-              name=$(basename "$contract")
-              echo "--- Building $name ---"
-              cargo build --package "comebackhere-$name" --target wasm32-unknown-unknown --release 2>&1
-            fi
+          cargo build --target wasm32-unknown-unknown --release \
+            -p comebackhere-compliance \
+            -p comebackhere-invoice \
+            -p comebackhere-treasury \
+            -p comebackhere-settlement-workflow
+
+      - name: Install wasm-opt
+        run: sudo apt-get update && sudo apt-get install -y binaryen
+
+      - name: Optimize contract WASM
+        run: |
+          set -e
+          # Mirrors the size reduction `stellar contract optimize` performs
+          # before deployment, so the measured size matches what actually
+          # ships. wasm-opt only touches code/data, not the custom
+          # contractspecv0/contractmetav0/contractenvmetav0 sections that
+          # encode the contract's on-chain ABI.
+          # --all-features: the apt-packaged wasm-opt doesn't read the
+          # module's target-features custom section, so it must be told
+          # about every feature LLVM's wasm32 backend may emit (sign-ext,
+          # bulk-memory, etc.) rather than enabling them one by one.
+          for wasm in target/wasm32-unknown-unknown/release/*.wasm; do
+            wasm-opt -Oz --strip-debug --strip-dwarf --vacuum --all-features "$wasm" -o "$wasm.opt"
+            mv "$wasm.opt" "$wasm"
           done
 
       - name: Report .wasm sizes
@@ -56,8 +83,19 @@ jobs:
           for wasm in target/wasm32-unknown-unknown/release/*.wasm; do
             name=$(basename "$wasm" .wasm)
             size=$(stat --format=%s "$wasm")
-            if [ "$size" -gt "$MAX_CONTRACT_SIZE" ]; then
-              status=":x: Exceeds ${MAX_CONTRACT_SIZE} bytes"
+            # treasury carries a temporarily raised threshold: first for the
+            # Result-refactor series (#386/#387/#388), then for the admin
+            # signer/threshold-change timelock (#526), then for the treasury
+            # features merged Sept 26-29, 2026 (~99 KB after wasm-opt 108).
+            # Revert to MAX_CONTRACT_SIZE once a size-reduction pass brings it
+            # back under.
+            if [ "$name" = "treasury" ]; then
+              limit=100000
+            else
+              limit="$MAX_CONTRACT_SIZE"
+            fi
+            if [ "$size" -gt "$limit" ]; then
+              status=":x: Exceeds ${limit} bytes"
               EXIT_CODE=1
             else
               status=":white_check_mark: OK"
@@ -66,3 +104,58 @@ jobs:
             echo "$name: ${size} bytes"
           done
           exit $EXIT_CODE
+
+  wasm-size-regression:
+    runs-on: ubuntu-latest
+    needs: check-size
+    permissions:
+      contents: read
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Load version pins
+        shell: bash
+        run: |
+          set -a
+          source .github/versions.env
+          set +a
+          echo "RUST_VERSION=$RUST_VERSION" >> "$GITHUB_ENV"
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ env.RUST_VERSION }}
+          targets: wasm32-unknown-unknown
+
+      - name: Cache cargo build
+        uses: actions/cache@v4
+        with:
+          path: target
+          key: ${{ runner.os }}-contract-size-${{ hashFiles('Cargo.lock') }}
+
+      - name: Build treasury contract to WASM
+        run: |
+          set -e
+          cargo build --package comebackhere-treasury --target wasm32-unknown-unknown --release
+
+      - name: Install wasm-opt
+        run: sudo apt-get update && sudo apt-get install -y binaryen
+
+      - name: Optimize treasury WASM
+        run: |
+          set -e
+          wasm=target/wasm32-unknown-unknown/release/treasury.wasm
+          wasm-opt -Oz --strip-debug --strip-dwarf --vacuum --all-features "$wasm" -o "$wasm.opt"
+          mv "$wasm.opt" "$wasm"
+
+      - name: Check wasm size regression
+        run: bash scripts/check-wasm-size.sh --markdown wasm-size.md target/wasm32-unknown-unknown/release/treasury.wasm
+
+      - name: Comment wasm size diff
+        if: github.event_name == 'pull_request'
+        # Informational only; PRs from forks get a read-only token and can't comment.
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh pr comment "${{ github.event.pull_request.number }}" --body-file wasm-size.md

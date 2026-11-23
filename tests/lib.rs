@@ -18,9 +18,10 @@
 //! cargo test -p protocol-integration-tests
 //! ```
 
+pub mod fixtures;
+#[cfg(test)]
+mod full_lifecycle;
 #[cfg(test)]
 mod invoice_treasury;
 #[cfg(test)]
 mod treasury_compliance;
-#[cfg(test)]
-mod full_lifecycle;
