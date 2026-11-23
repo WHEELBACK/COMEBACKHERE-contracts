@@ -88,6 +88,7 @@ impl InvoiceContract {
             env.storage()
                 .persistent()
                 .set(&DataKey::Invoice(id), &invoice);
+            crate::bump_invoice_ttl(&env, id);
             env.storage().persistent().extend_ttl(
                 &DataKey::Invoice(id),
                 INVOICE_TTL_THRESHOLD,
@@ -96,10 +97,9 @@ impl InvoiceContract {
             env.storage().instance().set(&DataKey::InvoiceCount, &id);
 
             if p.merchant_nonce != 0 {
-                env.storage().persistent().set(
-                    &DataKey::MerchantNonce(merchant.clone(), p.merchant_nonce),
-                    &true,
-                );
+                let nonce_key = DataKey::MerchantNonce(merchant.clone(), p.merchant_nonce);
+                env.storage().persistent().set(&nonce_key, &true);
+                crate::bump_persistent(&env, &nonce_key);
             }
 
             let merchant_count_key = DataKey::MerchantInvoiceCount(merchant.clone());
@@ -108,13 +108,14 @@ impl InvoiceContract {
                 .persistent()
                 .get(&merchant_count_key)
                 .unwrap_or(0);
-            env.storage().persistent().set(
-                &DataKey::MerchantInvoiceIndex(merchant.clone(), merchant_count),
-                &id,
-            );
+            let merchant_index_key =
+                DataKey::MerchantInvoiceIndex(merchant.clone(), merchant_count);
+            env.storage().persistent().set(&merchant_index_key, &id);
             env.storage()
                 .persistent()
                 .set(&merchant_count_key, &(merchant_count + 1));
+            crate::bump_persistent(&env, &merchant_index_key);
+            crate::bump_persistent(&env, &merchant_count_key);
 
             pending_index_add(&env, id);
             events::invoice_created(&env, id, &invoice);
@@ -201,6 +202,7 @@ impl InvoiceContract {
             env.storage()
                 .persistent()
                 .set(&DataKey::Invoice(invoice.id), &invoice);
+            crate::bump_invoice_ttl(&env, invoice.id);
             pending_index_remove(&env, invoice.id);
             append_history(
                 &env,
