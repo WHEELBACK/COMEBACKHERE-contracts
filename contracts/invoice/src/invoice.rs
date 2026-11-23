@@ -1,6 +1,6 @@
 use soroban_sdk::{contracttype, Address, Bytes};
 
-pub use invoice_errors::InvoiceError;
+pub use invoice_errors::{InvoiceError, InvoiceErrorCategory};
 
 /// USDC on Stellar uses 7 decimal places: 1 USDC = 10_000_000 stroops.
 pub const USDC_FACTOR: i128 = 10_000_000;
@@ -186,7 +186,15 @@ fn outstanding_usdc(invoice: &Invoice) -> i128 {
     match invoice.status {
         // An expired or cancelled invoice can no longer be paid, so nothing is owed.
         InvoiceStatus::Expired | InvoiceStatus::Cancelled => 0,
-        _ => (invoice.gross_usdc - collected_usdc(invoice)).max(0),
+        // #878: checked, never a raw `-`. An invoice record whose gross was
+        // corrupted to an extreme (or a future partial-collection figure that
+        // exceeds the gross) must report `0` outstanding, not trap the
+        // read-only summary with an overflow/underflow panic.
+        _ => invoice
+            .gross_usdc
+            .checked_sub(collected_usdc(invoice))
+            .unwrap_or(0)
+            .max(0),
     }
 }
 
@@ -355,4 +363,22 @@ pub enum DataKey {
     /// Positions are assigned in `mark_paid` order and never reused; see
     /// [`MAX_PAYER_INDEX_ENTRIES`] for the growth cap.
     PayerIndexEntry(Address, u64),
+    /// Membership of `Address` in an [`InvoiceRole`] (#879). Present means
+    /// granted; removed on revoke.
+    RoleMember(InvoiceRole, Address),
+}
+
+/// Granular roles that may modify a subset of the contract's parameters
+/// without holding the full admin key (#879). The admin implicitly holds
+/// every role; only the admin can grant or revoke them.
+#[contracttype]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum InvoiceRole {
+    /// Operational limits: grace window, open-invoice caps, refund window,
+    /// invoice expiry extension.
+    ConfigManager,
+    /// Fee parameters: late fee, refund network fee.
+    FeeManager,
+    /// May `pause` in an incident. `unpause` stays admin-only.
+    PauseGuardian,
 }

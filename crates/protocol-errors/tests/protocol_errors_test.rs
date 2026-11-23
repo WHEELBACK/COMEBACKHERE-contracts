@@ -1,6 +1,4 @@
-use protocol_errors::{
-    ComplianceError, InvoiceError, ProtocolError, SettlementError, TreasuryError, WorkflowError,
-};
+use protocol_errors::{ComplianceError, InvoiceError, ProtocolError, TreasuryError, WorkflowError};
 
 /// Guards against silent ABI drift in `ProtocolError` itself, the same way
 /// `contracts/treasury/tests/multisig_version_lock_test.rs` guards multisig's
@@ -23,7 +21,6 @@ fn assert_protocol_error_exhaustive(err: ProtocolError) {
         ProtocolError::Treasury(_) => {}
         ProtocolError::Compliance(_) => {}
         ProtocolError::Workflow(_) => {}
-        ProtocolError::Settlement(_) => {}
     }
 }
 
@@ -35,7 +32,6 @@ fn protocol_error_variants_are_exhaustive() {
         ComplianceError::AlreadyInitialized,
     ));
     assert_protocol_error_exhaustive(ProtocolError::Workflow(WorkflowError::NotConfigured));
-    assert_protocol_error_exhaustive(ProtocolError::Settlement(SettlementError::NotFound));
 }
 
 #[test]
@@ -45,10 +41,9 @@ fn all_contract_names_are_distinct() {
         ProtocolError::Treasury(TreasuryError::SettlementNotFound).contract_name(),
         ProtocolError::Compliance(ComplianceError::AlreadyInitialized).contract_name(),
         ProtocolError::Workflow(WorkflowError::NotConfigured).contract_name(),
-        ProtocolError::Settlement(SettlementError::NotFound).contract_name(),
     ];
     let unique: std::collections::HashSet<_> = names.iter().collect();
-    assert_eq!(unique.len(), 5, "contract_name() values must be unique");
+    assert_eq!(unique.len(), 4, "contract_name() values must be unique");
 }
 
 #[test]
@@ -58,7 +53,6 @@ fn round_trip_from_impls() {
         (TreasuryError::ZeroThreshold.into(), "treasury"),
         (ComplianceError::AlreadyInitialized.into(), "compliance"),
         (WorkflowError::Unauthorized.into(), "settlement-workflow"),
-        (SettlementError::NotFound.into(), "settlement"),
     ];
     for (err, expected_name) in pairs {
         assert_eq!(err.contract_name(), *expected_name);
@@ -79,9 +73,6 @@ fn question_mark_propagation() {
     fn try_workflow() -> Result<(), ProtocolError> {
         Err(WorkflowError::NotConfigured)?
     }
-    fn try_settlement() -> Result<(), ProtocolError> {
-        Err(SettlementError::NotFound)?
-    }
 
     assert_eq!(
         try_invoice().unwrap_err(),
@@ -98,10 +89,6 @@ fn question_mark_propagation() {
     assert_eq!(
         try_workflow().unwrap_err(),
         ProtocolError::Workflow(WorkflowError::NotConfigured)
-    );
-    assert_eq!(
-        try_settlement().unwrap_err(),
-        ProtocolError::Settlement(SettlementError::NotFound)
     );
 }
 
@@ -127,52 +114,4 @@ fn every_error_has_description() {
     assert_eq!(check::<TreasuryError>(), 47);
     assert_eq!(check::<ComplianceError>(), 1);
     assert_eq!(check::<WorkflowError>(), 10);
-    assert_eq!(check::<SettlementError>(), 12);
-}
-
-/// Pins the numeric discriminants of `SettlementError` so that reordering or
-/// inserting variants cannot silently change the error codes observed by
-/// off-chain clients decoding `Error::from_contract_error` values.
-#[test]
-fn settlement_error_discriminants_are_stable() {
-    use soroban_sdk::Error;
-
-    let expected: &[(u32, SettlementError)] = &[
-        (1, SettlementError::NotFound),
-        (2, SettlementError::AlreadyExists),
-        (3, SettlementError::InvalidAmount),
-        (4, SettlementError::InvalidState),
-        (5, SettlementError::Unauthorized),
-        (6, SettlementError::NotInitialized),
-        (7, SettlementError::AlreadyInitialized),
-        (8, SettlementError::DeadlinePassed),
-        (9, SettlementError::InsufficientFunds),
-        (10, SettlementError::Overflow),
-        (11, SettlementError::InvalidOracle),
-        (12, SettlementError::StalePrice),
-    ];
-
-    for (code, expected_err) in expected {
-        let decoded = SettlementError::try_from(Error::from_contract_error(*code))
-            .unwrap_or_else(|_| panic!("code {code} must decode to a SettlementError"));
-        assert_eq!(decoded, *expected_err, "code {code} discriminant drifted");
-    }
-
-    // The next code past the last variant must not decode.
-    assert!(SettlementError::try_from(Error::from_contract_error(13)).is_err());
-}
-
-/// Every `SettlementError` variant must carry a non-empty, human-readable
-/// message so clients can surface actionable diagnostics.
-#[test]
-fn settlement_error_messages_are_non_empty() {
-    use soroban_sdk::Error;
-
-    let mut code = 1;
-    while let Ok(e) = SettlementError::try_from(Error::from_contract_error(code)) {
-        let description = ProtocolError::Settlement(e).description();
-        assert!(!description.is_empty(), "code {code} has empty description");
-        code += 1;
-    }
-    assert!(code > 1, "SettlementError must expose at least one variant");
 }

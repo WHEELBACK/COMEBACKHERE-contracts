@@ -35,6 +35,13 @@
 # block starter, and the doc comment is expected inside the braces, directly
 # above the `pub enum` line the macro forwards it to.
 #
+# #955/#964/#973: the modularized error crates (event-emitter-errors,
+# storage-layout-errors, access-control-errors) declare their enums through
+# `declare_contract_error!`. Those invocations are already picked up by the
+# `find contracts crates` scan below; in addition, every variant inside such an
+# invocation must carry its own `///` doc comment so the enums stay documented
+# for clients.
+#
 # USAGE
 #   ./scripts/check-enum-doc-comments.sh
 #
@@ -52,10 +59,9 @@ trap 'rm -f "$status_file"' EXIT
 # Macro invocations that stand in for `#[contracterror] pub enum <Name> { ... }`.
 ERROR_ENUM_MACROS='declare_contract_error'
 
-# #928: the oracle-adapter contract declares its settlement error enum through
-# this macro, so it must be covered by the same enum-level doc-comment check.
-ORACLE_ADAPTER_ERROR_ENUM_MACROS='declare_settlement_error'
-ERROR_ENUM_MACROS="$ERROR_ENUM_MACROS|$ORACLE_ADAPTER_ERROR_ENUM_MACROS"
+# Error crates whose `declare_contract_error!` variants must each be documented.
+ERROR_CRATE_DIRS='crates/event-emitter-errors crates/storage-layout-errors crates/access-control-errors'
+=======
 
 find contracts crates -name '*.rs' -type f | sort | while read -r file; do
     # Skip test files
@@ -157,14 +163,71 @@ find contracts crates -name '*.rs' -type f | sort | while read -r file; do
             has_doc=0
         fi
     done < "$file"
+
+    # #955/#964/#973: variant-level doc-comment regression check for the
+    # modularized error crates. Every variant declared inside a
+    # `declare_contract_error!` invocation must be preceded by a `///` line.
+    for crate_dir in $ERROR_CRATE_DIRS; do
+        case "$file" in
+            "$crate_dir"/*) ;;
+            *) continue ;;
+        esac
+
+        in_macro=0
+        depth=0
+        pending_doc=0
+        vlineno=0
+        while IFS= read -r line; do
+            vlineno=$((vlineno + 1))
+            vtrimmed="${line#"${line%%[![:space:]]*}"}"
+
+            if [[ $in_macro -eq 0 ]]; then
+                if [[ "$vtrimmed" =~ ^declare_contract_error! ]]; then
+                    in_macro=1
+                    depth=0
+                    pending_doc=0
+                fi
+                continue
+            fi
+
+            # Track brace depth so we know when the invocation ends.
+            opens="${vtrimmed//[^\{]/}"
+            closes="${vtrimmed//[^\}]/}"
+            depth=$((depth + ${#opens} - ${#closes}))
+
+            if [[ "$vtrimmed" =~ ^/// ]]; then
+                pending_doc=1
+                continue
+            fi
+
+            # A variant line: `Name = N,` or `Name,` (optionally with a value).
+            if [[ "$vtrimmed" =~ ^([A-Za-z_][A-Za-z0-9_]*)[[:space:]]*(=.*)?,?$ ]]; then
+                variant="${BASH_REMATCH[1]}"
+                if [[ $pending_doc -eq 0 ]]; then
+                    echo "ERROR: $file:$vlineno: variant $variant in declare_contract_error! is missing a /// doc comment"
+                    echo "1" >> "$status_file"
+                fi
+                pending_doc=0
+            elif [[ -n "$vtrimmed" && "$vtrimmed" != "{" && "$vtrimmed" != "}" ]]; then
+                # Any other non-blank line (e.g. `pub enum Foo {`) resets the doc.
+                pending_doc=0
+            fi
+
+            if [[ $depth -le 0 ]]; then
+                in_macro=0
+            fi
+        done < "$file"
+    done
 done
 
 if [[ -s "$status_file" ]]; then
     echo ""
-    echo "✗ One or more #[contracterror]/#[contracttype] enums are missing an enum-level doc comment."
-    echo "  Add a /// comment immediately before the attribute block of each flagged enum."
+    echo "✗ One or more #[contracterror]/#[contracttype] enums are missing a doc comment."
+    echo "  Add a /// comment immediately before the attribute block of each flagged enum,"
+    echo "  and a /// comment above every variant in the modularized error crates."
     exit 1
 fi
 
 echo "✓ All #[contracterror]/#[contracttype] enums have an enum-level doc comment."
+echo "✓ All variants in the modularized error crates are documented."
 exit 0

@@ -2,7 +2,6 @@
 
 pub use compliance_errors::ComplianceError;
 pub use invoice_errors::InvoiceError;
-pub use oracle_adapter_errors::OracleAdapterError;
 pub use treasury::TreasuryError;
 pub use workflow_errors::WorkflowError;
 
@@ -23,7 +22,6 @@ pub enum ProtocolError {
     Treasury(TreasuryError),
     Compliance(ComplianceError),
     Workflow(WorkflowError),
-    OracleAdapter(OracleAdapterError),
 }
 
 impl From<InvoiceError> for ProtocolError {
@@ -50,12 +48,6 @@ impl From<WorkflowError> for ProtocolError {
     }
 }
 
-impl From<OracleAdapterError> for ProtocolError {
-    fn from(e: OracleAdapterError) -> Self {
-        ProtocolError::OracleAdapter(e)
-    }
-}
-
 impl ProtocolError {
     /// Returns the originating contract name as a static string slice.
     pub fn contract_name(&self) -> &'static str {
@@ -64,7 +56,6 @@ impl ProtocolError {
             ProtocolError::Treasury(_) => "treasury",
             ProtocolError::Compliance(_) => "compliance",
             ProtocolError::Workflow(_) => "settlement-workflow",
-            ProtocolError::OracleAdapter(_) => "oracle-adapter",
         }
     }
 
@@ -75,51 +66,15 @@ impl ProtocolError {
             ProtocolError::Treasury(e) => treasury_description(*e),
             ProtocolError::Compliance(e) => compliance_description(*e),
             ProtocolError::Workflow(e) => workflow_description(*e),
-            ProtocolError::OracleAdapter(e) => e.message(),
         }
     }
 }
 
 // Exhaustive matches: adding a variant without a description fails to compile.
+// Invoice messages are owned by `invoice-errors` itself (#883), so they are
+// defined once next to the enum rather than duplicated here.
 fn invoice_description(e: InvoiceError) -> &'static str {
-    use InvoiceError::*;
-    match e {
-        Unauthorized => "Caller is not authorized for this action.",
-        ContractPaused => "The invoice contract is paused.",
-        InvalidAmount => "The invoice amount is invalid.",
-        NotPending => "The invoice is not pending.",
-        Expired => "The invoice has expired.",
-        NotFound => "Invoice not found.",
-        AlreadyInitialized => "The invoice contract is already initialized.",
-        ZeroDuration => "The invoice duration must be greater than zero.",
-        ExpiryOverflow => "The invoice expiry time is out of range.",
-        NotPaid => "The invoice has not been paid.",
-        NotReleased => "The invoice escrow has not been released.",
-        AmountPrecision => "The amount has too many decimal places.",
-        DuplicateNonce => "This invoice nonce has already been used.",
-        ExpiryTooLong => "The invoice expiry is too far in the future.",
-        MetadataMismatch => "The invoice metadata does not match.",
-        NoPendingAdmin => "There is no pending admin transfer.",
-        InvalidPaymentLinkHash => "The payment link hash is invalid.",
-        NotRefundRequested => "No refund has been requested for this invoice.",
-        TokenMismatch => "The payment token does not match the invoice.",
-        BatchTooLarge => "Too many items in one batch.",
-        CooldownActive => "Please wait before trying this action again.",
-        InvoiceCountOverflow => "The invoice limit has been reached.",
-        HashTooLong => "The provided hash is too long.",
-        PaymentStateInconsistent => "The invoice does not describe a completed payment.",
-        RefundTransferFailed => "The refund transfer failed.",
-        RefundTokenNotSet => "The invoice has no token to refund through.",
-        RefundFeeTooHigh => "The refund fee is too high.",
-        ArithmeticOverflow => "The calculation overflowed.",
-        DiscountExceedsAmount => "The discount amount exceeds the invoice amount.",
-        DiscountDeadlineAfterExpiry => "The discount deadline is after the invoice expiry.",
-        MemoTooLong => "The memo field is too long.",
-        RefundWindowClosed => "The refund window for this invoice has closed.",
-        SelfPayNotAllowed => "A merchant cannot pay its own invoice.",
-        TemplateDisabled => "The invoice template is disabled.",
-        InvalidLateFee => "The late fee exceeds 100%.",
-    }
+    e.message()
 }
 
 fn treasury_description(e: TreasuryError) -> &'static str {
@@ -179,121 +134,25 @@ fn treasury_description(e: TreasuryError) -> &'static str {
 }
 
 fn compliance_description(e: ComplianceError) -> &'static str {
+    use ComplianceError::*;
     match e {
-        ComplianceError::AlreadyInitialized => "The compliance contract is already initialized.",
+        AlreadyInitialized => "The compliance contract is already initialized.",
+        Unauthorized => "Caller is not authorized for this compliance action.",
+        ContractPaused => "The compliance contract is paused.",
+        BatchTooLarge => "Too many addresses in one compliance batch.",
+        AddressIndexFull => "The compliance address index is full.",
+        BulkOperationCooldown => "Bulk compliance operation cooldown has not elapsed.",
+        UnexpectedSchemaVersion => "Unexpected compliance storage schema version.",
+        OperatorCannotClearAdminBlock => "Operators cannot clear admin-placed blocks.",
+        OperatorSetFull => "The compliance operator set is full.",
+        InvalidJurisdictionCode => "The jurisdiction code is invalid.",
+        NoPendingAdmin => "There is no pending admin transfer.",
+        InvalidTierLimit => "The tier transaction limit is invalid.",
     }
 }
 
 fn workflow_description(e: WorkflowError) -> &'static str {
-    use WorkflowError::*;
-    match e {
-        Unauthorized => "Caller is not the emergency-pause admin.",
-        NotConfigured => "Emergency pause has not been configured.",
-        PauseTargetFailed => "A target refused to pause; no targets were paused.",
-        UnpauseTargetFailed => "A target refused to unpause; no targets were resumed.",
-        NoPauseTargets => "An empty pause target set was supplied.",
-        TooManyPauseTargets => "Too many pause targets supplied.",
-        DuplicatePauseTarget => "The pause target list contains a duplicate address.",
-        SelfPauseTarget => "The workflow contract cannot be its own pause target.",
-        EmergencyPauseActive => "Cannot reconfigure targets while an emergency pause is active.",
-        NotEmergencyPaused => "No emergency pause is currently active.",
-    }
-}
-
-/// Errors raised by the `oracle-adapter` contract.
-///
-/// Discriminants are documented and stable so off-chain clients can map a
-/// numeric `u32` returned by the contract back to a specific failure without
-/// depending on the contract crate itself.
-#[derive(Copy, Clone, Debug, PartialEq)]
-pub enum OracleAdapterError {
-    /// 0 - The contract has already been initialized.
-    AlreadyInitialized = 0,
-    /// 1 - The contract has not been initialized yet.
-    NotInitialized = 1,
-    /// 2 - Caller is not authorized for this action.
-    Unauthorized = 2,
-    /// 3 - The contract is paused.
-    ContractPaused = 3,
-    /// 4 - The supplied oracle address is invalid.
-    InvalidOracle = 4,
-    /// 5 - The supplied feed id is invalid.
-    InvalidFeedId = 5,
-    /// 6 - The feed id is not registered.
-    FeedNotFound = 6,
-    /// 7 - The feed has already been registered.
-    FeedAlreadyRegistered = 7,
-    /// 8 - The reported price is invalid (zero or out of bounds).
-    InvalidPrice = 8,
-    /// 9 - The reported timestamp is in the future or otherwise invalid.
-    InvalidTimestamp = 9,
-    /// 10 - The price data is stale.
-    StalePrice = 10,
-    /// 11 - The price data is older than the requested observation.
-    PriceTooOld = 11,
-    /// 12 - The price deviation exceeds the configured tolerance.
-    PriceDeviationTooHigh = 12,
-    /// 13 - The configured deviation tolerance is invalid.
-    InvalidDeviation = 13,
-    /// 14 - The configured staleness threshold is invalid.
-    InvalidStalenessThreshold = 14,
-    /// 15 - The feed has no recorded price yet.
-    NoPriceAvailable = 15,
-    /// 16 - The number of decimals is out of the supported range.
-    InvalidDecimals = 16,
-    /// 17 - The calculation overflowed.
-    ArithmeticOverflow = 17,
-    /// 18 - The requested operation is not supported.
-    UnsupportedOperation = 18,
-    /// 19 - The oracle reported a failure.
-    OracleFailure = 19,
-    /// 20 - The supplied configuration is invalid.
-    InvalidConfiguration = 20,
-    /// 21 - Too many items in one batch.
-    BatchTooLarge = 21,
-    /// 22 - The feed is disabled.
-    FeedDisabled = 22,
-    /// 23 - The observation window is invalid.
-    InvalidObservationWindow = 23,
-    /// 24 - The price has not changed since the last update.
-    PriceUnchanged = 24,
-}
-
-impl OracleAdapterError {
-    /// Returns a short, user-facing description of the error.
-    ///
-    /// Exhaustive match: adding a variant without a description fails to
-    /// compile, keeping client-facing messages in sync with the enum.
-    pub fn message(&self) -> &'static str {
-        use OracleAdapterError::*;
-        match self {
-            AlreadyInitialized => "The oracle adapter is already initialized.",
-            NotInitialized => "The oracle adapter has not been initialized.",
-            Unauthorized => "Caller is not authorized for this action.",
-            ContractPaused => "The oracle adapter is paused.",
-            InvalidOracle => "The oracle address is invalid.",
-            InvalidFeedId => "The feed id is invalid.",
-            FeedNotFound => "The feed is not registered.",
-            FeedAlreadyRegistered => "The feed is already registered.",
-            InvalidPrice => "The reported price is invalid.",
-            InvalidTimestamp => "The reported timestamp is invalid.",
-            StalePrice => "The price data is stale.",
-            PriceTooOld => "The price data is older than the requested observation.",
-            PriceDeviationTooHigh => "The price deviation exceeds the configured tolerance.",
-            InvalidDeviation => "The deviation tolerance is invalid.",
-            InvalidStalenessThreshold => "The staleness threshold is invalid.",
-            NoPriceAvailable => "No price is available for this feed yet.",
-            InvalidDecimals => "The number of decimals is out of range.",
-            ArithmeticOverflow => "The calculation overflowed.",
-            UnsupportedOperation => "The requested operation is not supported.",
-            OracleFailure => "The oracle reported a failure.",
-            InvalidConfiguration => "The supplied configuration is invalid.",
-            BatchTooLarge => "Too many items in one batch.",
-            FeedDisabled => "The feed is disabled.",
-            InvalidObservationWindow => "The observation window is invalid.",
-            PriceUnchanged => "The price has not changed since the last update.",
-        }
-    }
+    e.message()
 }
 
 #[cfg(test)]
@@ -340,53 +199,6 @@ mod tests {
     fn into_coercion_from_treasury() {
         let e: ProtocolError = TreasuryError::ThresholdNotMet.into();
         assert_eq!(e, ProtocolError::Treasury(TreasuryError::ThresholdNotMet));
-    }
-
-    #[test]
-    fn from_oracle_adapter_error() {
-        let e = ProtocolError::from(OracleAdapterError::StalePrice);
-        assert_eq!(e, ProtocolError::OracleAdapter(OracleAdapterError::StalePrice));
-        assert_eq!(e.contract_name(), "oracle-adapter");
-        assert_eq!(e.description(), "The price data is stale.");
-    }
-
-    #[test]
-    fn oracle_adapter_messages_are_non_empty() {
-        use OracleAdapterError::*;
-        let all = [
-            AlreadyInitialized,
-            NotInitialized,
-            Unauthorized,
-            ContractPaused,
-            InvalidOracle,
-            InvalidFeedId,
-            FeedNotFound,
-            FeedAlreadyRegistered,
-            InvalidPrice,
-            InvalidTimestamp,
-            StalePrice,
-            PriceTooOld,
-            PriceDeviationTooHigh,
-            InvalidDeviation,
-            InvalidStalenessThreshold,
-            NoPriceAvailable,
-            InvalidDecimals,
-            ArithmeticOverflow,
-            UnsupportedOperation,
-            OracleFailure,
-            InvalidConfiguration,
-            BatchTooLarge,
-            FeedDisabled,
-            InvalidObservationWindow,
-            PriceUnchanged,
-        ];
-        for e in all {
-            assert!(!e.message().is_empty());
-            assert_eq!(
-                ProtocolError::OracleAdapter(e).description(),
-                e.message()
-            );
-        }
     }
 
     #[test]
