@@ -9,6 +9,8 @@ members = [
     "contracts/fee-manager",
     "contracts/event-emitter",
     "contracts/role-manager",
+    "contracts/access-control",
+    "contracts/recovery-manager",
     "tests",
     "crates/compliance-client",
     "crates/error-macros",

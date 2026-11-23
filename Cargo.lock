@@ -307,6 +307,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "comebackhere-access-control"
+version = "1.0.0"
+dependencies = [
+ "soroban-sdk",
+]
+
+[[package]]
 name = "comebackhere-compliance"
 version = "1.0.0"
 dependencies = [
@@ -394,6 +401,13 @@ dependencies = [
 [[package]]
 name = "comebackhere-protocol-math"
 version = "0.1.0"
+
+[[package]]
+name = "comebackhere-recovery-manager"
+version = "1.0.0"
+dependencies = [
+ "soroban-sdk",
+]
 
 [[package]]
 name = "comebackhere-role-manager"
