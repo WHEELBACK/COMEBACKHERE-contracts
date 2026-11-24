@@ -45,7 +45,7 @@ fn setup() -> Setup {
 
     let workflow_id = env.register_contract(None, SettlementWorkflowContract);
     let workflow = SettlementWorkflowContractClient::new(&env, &workflow_id);
-    workflow.initialize(&compliance_id, &treasury_id);
+    workflow.initialize(&admin, &compliance_id, &treasury_id);
     treasury.set_signer(&admin, &workflow_id, &1);
 
     let token_id = env.register_stellar_asset_contract(admin.clone());
@@ -70,7 +70,7 @@ fn simulation_reports_compliance_failure_and_execution_agrees() {
     // Merchant is not allowlisted.
     let settlement = s
         .treasury
-        .propose_settlement(&s.admin, &s.merchant, &10_000_000);
+        .propose_settlement(&s.admin, &s.merchant, &10_000_000, &0_u64);
 
     assert_eq!(
         s.workflow
@@ -118,7 +118,7 @@ fn simulation_reports_treasury_rejection_for_already_executed_settlement() {
     s.compliance.allow_address(&s.admin, &s.merchant);
     let settlement = s
         .treasury
-        .propose_settlement(&s.admin, &s.merchant, &10_000_000);
+        .propose_settlement(&s.admin, &s.merchant, &10_000_000, &0_u64);
     s.treasury.approve_settlement(&s.admin, &settlement);
     s.treasury.approve_settlement(&s.cosigner, &settlement);
     token::StellarAssetClient::new(&s.env, &s.token_id).mint(&s.treasury_id, &10_000_000);
@@ -140,7 +140,7 @@ fn simulation_reports_success_for_a_ready_settlement() {
     s.compliance.allow_address(&s.admin, &s.merchant);
     let settlement = s
         .treasury
-        .propose_settlement(&s.admin, &s.merchant, &10_000_000);
+        .propose_settlement(&s.admin, &s.merchant, &10_000_000, &0_u64);
     s.treasury.approve_settlement(&s.admin, &settlement);
     s.treasury.approve_settlement(&s.cosigner, &settlement);
     token::StellarAssetClient::new(&s.env, &s.token_id).mint(&s.treasury_id, &10_000_000);
@@ -167,7 +167,7 @@ fn simulation_makes_no_state_changes() {
     s.compliance.allow_address(&s.admin, &s.merchant);
     let settlement = s
         .treasury
-        .propose_settlement(&s.admin, &s.merchant, &10_000_000);
+        .propose_settlement(&s.admin, &s.merchant, &10_000_000, &0_u64);
     s.treasury.approve_settlement(&s.admin, &settlement);
     s.treasury.approve_settlement(&s.cosigner, &settlement);
     token::StellarAssetClient::new(&s.env, &s.token_id).mint(&s.treasury_id, &10_000_000);

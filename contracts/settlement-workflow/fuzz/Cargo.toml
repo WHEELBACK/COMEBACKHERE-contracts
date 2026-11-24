@@ -15,7 +15,7 @@ cargo-fuzz = true
 [dependencies]
 libfuzzer-sys = "0.4"
 arbitrary = { version = "1", features = ["derive"] }
-soroban-sdk = { version = "22.0.0", features = ["testutils"] }
+soroban-sdk = { version = "22.0.8", features = ["testutils"] }
 
 [dependencies.settlement_workflow]
 package = "comebackhere-settlement-workflow"
@@ -45,6 +45,13 @@ bench = false
 [[bin]]
 name = "execute_with_compliance_batch"
 path = "fuzz_targets/execute_with_compliance_batch.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "malicious_caller"
+path = "fuzz_targets/malicious_caller.rs"
 test = false
 doc = false
 bench = false

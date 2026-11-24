@@ -91,6 +91,29 @@ mod malicious_token {
 use malicious_token::{MaliciousToken, MaliciousTokenClient};
 use test_token::{TestToken, TestTokenClient};
 
+/// Helper: initialize the treasury with a single admin signer using explicit
+/// (non-mocked) auth so that authorization checks are actually enforced.
+fn init_with_admin<'a>(
+    env: &Env,
+    treasury_id: &Address,
+    admin: &Address,
+) -> TreasuryContractClient<'a> {
+    let client = TreasuryContractClient::new(env, treasury_id);
+    let signers: soroban_sdk::Vec<(Address, u32)> = soroban_sdk::Vec::new(env);
+    client
+        .mock_auths(&[MockAuth {
+            address: admin,
+            invoke: &MockAuthInvoke {
+                contract: treasury_id,
+                fn_name: "initialize",
+                args: (admin.clone(), 1u32, signers.clone()).into_val(env),
+                sub_invokes: &[],
+            },
+        }])
+        .initialize(admin, &1, &signers);
+    client
+}
+
 #[test]
 fn execute_settlement_uses_merchant_payout_override() {
     let env = Env::default();
@@ -102,7 +125,7 @@ fn execute_settlement_uses_merchant_payout_override() {
 
     let treasury_id = env.register_contract(None, TreasuryContract);
     let treasury_client = TreasuryContractClient::new(&env, &treasury_id);
-    treasury_client.initialize(&admin, &2, &soroban_sdk::Vec::new(&env));
+    treasury_client.initialize(&admin, &1, &soroban_sdk::Vec::new(&env));
 
     let token_id = env.register_contract(None, TestToken);
     let test_token_client = TestTokenClient::new(&env, &token_id);
@@ -114,11 +137,7 @@ fn execute_settlement_uses_merchant_payout_override() {
     treasury_client.update_merchant_payout_address(&merchant, &payout_override);
 
     // Propose and execute settlement
-    let settlement_id = treasury_client.propose_settlement(&admin, &merchant, &10_000_000);
-    // #622 weight cap: quorum of 2 needs a second signer.
-    let cosigner = Address::generate(&env);
-    treasury_client.set_signer(&admin, &cosigner, &1);
-    treasury_client.approve_settlement(&cosigner, &settlement_id);
+    let settlement_id = treasury_client.propose_settlement(&admin, &merchant, &10_000_000, &0_u64);
     treasury_client.execute_settlement(&admin, &settlement_id, &token_id);
 
     // Verify tokens were sent to payout override, not merchant
@@ -144,11 +163,11 @@ fn non_merchant_cannot_update_another_merchants_payout_address() {
             invoke: &MockAuthInvoke {
                 contract: &treasury_id,
                 fn_name: "initialize",
-                args: (admin.clone(), 2u32, signers.clone()).into_val(&env),
+                args: (admin.clone(), 1u32, signers.clone()).into_val(&env),
                 sub_invokes: &[],
             },
         }])
-        .initialize(&admin, &2, &signers);
+        .initialize(&admin, &1, &signers);
 
     // Attacker tries to update merchant's payout address — should fail because
     // no one (attacker included) has provided the merchant's authorization.
@@ -168,7 +187,7 @@ fn reentrant_payout_address_change_does_not_redirect_mid_settlement() {
 
     let treasury_id = env.register_contract(None, TreasuryContract);
     let treasury_client = TreasuryContractClient::new(&env, &treasury_id);
-    treasury_client.initialize(&admin, &2, &soroban_sdk::Vec::new(&env));
+    treasury_client.initialize(&admin, &1, &soroban_sdk::Vec::new(&env));
 
     // Register a malicious token contract
     let token_id = env.register_contract(None, MaliciousToken);
@@ -186,7 +205,7 @@ fn reentrant_payout_address_change_does_not_redirect_mid_settlement() {
     treasury_client.update_merchant_payout_address(&merchant, &original_payout);
 
     // Propose settlement
-    let settlement_id = treasury_client.propose_settlement(&admin, &merchant, &10_000_000);
+    let settlement_id = treasury_client.propose_settlement(&admin, &merchant, &10_000_000, &0_u64);
 
     // Execute settlement — the malicious token's transfer attempts to re-enter
     // the treasury to change the payout address mid-flight. Soroban's host
@@ -203,4 +222,142 @@ fn reentrant_payout_address_change_does_not_redirect_mid_settlement() {
     assert_eq!(malicious_client.balance(&original_payout), 0);
     assert_eq!(malicious_client.balance(&hijack_address), 0);
     assert_eq!(malicious_client.balance(&merchant), 0);
+}
+
+#[test]
+fn merchant_can_update_own_payout_address_with_authorization() {
+    let env = Env::default();
+    let admin = Address::generate(&env);
+    let merchant = Address::generate(&env);
+    let payout_override = Address::generate(&env);
+
+    let treasury_id = env.register_contract(None, TreasuryContract);
+    let treasury_client = init_with_admin(&env, &treasury_id, &admin);
+
+    // The merchant authorizes its own payout address change.
+    treasury_client
+        .mock_auths(&[MockAuth {
+            address: &merchant,
+            invoke: &MockAuthInvoke {
+                contract: &treasury_id,
+                fn_name: "update_merchant_payout_address",
+                args: (merchant.clone(), payout_override.clone()).into_val(&env),
+                sub_invokes: &[],
+            },
+        }])
+        .update_merchant_payout_address(&merchant, &payout_override);
+
+    // The override is persisted and used at settlement time.
+    let token_id = env.register_contract(None, TestToken);
+    let test_token_client = TestTokenClient::new(&env, &token_id);
+    test_token_client.mint(&treasury_id, &5_000_000);
+
+    let settlement_id = treasury_client.propose_settlement(&admin, &merchant, &5_000_000, &0_u64);
+    treasury_client.execute_settlement(&admin, &settlement_id, &token_id);
+
+    assert_eq!(test_token_client.balance(&payout_override), 5_000_000);
+    assert_eq!(test_token_client.balance(&merchant), 0);
+}
+
+#[test]
+fn unauthorized_payout_override_is_rejected_and_state_unchanged() {
+    let env = Env::default();
+    let admin = Address::generate(&env);
+    let merchant = Address::generate(&env);
+    let attacker = Address::generate(&env);
+    let legit_payout = Address::generate(&env);
+    let attacker_payout = Address::generate(&env);
+
+    let treasury_id = env.register_contract(None, TreasuryContract);
+    let treasury_client = init_with_admin(&env, &treasury_id, &admin);
+
+    // Establish a legitimate override first.
+    treasury_client
+        .mock_auths(&[MockAuth {
+            address: &merchant,
+            invoke: &MockAuthInvoke {
+                contract: &treasury_id,
+                fn_name: "update_merchant_payout_address",
+                args: (merchant.clone(), legit_payout.clone()).into_val(&env),
+                sub_invokes: &[],
+            },
+        }])
+        .update_merchant_payout_address(&merchant, &legit_payout);
+
+    // Attacker supplies only its own auth — the merchant's auth is missing, so
+    // the call must fail and leave the existing override intact.
+    let result = treasury_client
+        .mock_auths(&[MockAuth {
+            address: &attacker,
+            invoke: &MockAuthInvoke {
+                contract: &treasury_id,
+                fn_name: "update_merchant_payout_address",
+                args: (merchant.clone(), attacker_payout.clone()).into_val(&env),
+                sub_invokes: &[],
+            },
+        }])
+        .try_update_merchant_payout_address(&merchant, &attacker_payout);
+    assert!(
+        result.is_err(),
+        "attacker must not be able to modify another merchant's payout address"
+    );
+
+    // Invariant: the legitimate override still governs settlement routing.
+    let token_id = env.register_contract(None, TestToken);
+    let test_token_client = TestTokenClient::new(&env, &token_id);
+    test_token_client.mint(&treasury_id, &3_000_000);
+
+    let settlement_id = treasury_client.propose_settlement(&admin, &merchant, &3_000_000, &0_u64);
+    treasury_client.execute_settlement(&admin, &settlement_id, &token_id);
+
+    assert_eq!(test_token_client.balance(&legit_payout), 3_000_000);
+    assert_eq!(test_token_client.balance(&attacker_payout), 0);
+    assert_eq!(test_token_client.balance(&merchant), 0);
+}
+
+#[test]
+fn payout_override_rejects_invalid_parameters() {
+    let env = Env::default();
+    let admin = Address::generate(&env);
+    let merchant = Address::generate(&env);
+
+    let treasury_id = env.register_contract(None, TreasuryContract);
+    let treasury_client = init_with_admin(&env, &treasury_id, &admin);
+
+    // Setting the override to the merchant itself is a no-op/invalid state and
+    // must be rejected defensively rather than silently accepted.
+    let result = treasury_client
+        .mock_auths(&[MockAuth {
+            address: &merchant,
+            invoke: &MockAuthInvoke {
+                contract: &treasury_id,
+                fn_name: "update_merchant_payout_address",
+                args: (merchant.clone(), merchant.clone()).into_val(&env),
+                sub_invokes: &[],
+            },
+        }])
+        .try_update_merchant_payout_address(&merchant, &merchant);
+    assert!(
+        result.is_err(),
+        "payout override equal to the merchant address must be rejected"
+    );
+}
+
+#[test]
+fn payout_override_requires_initialized_contract() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let merchant = Address::generate(&env);
+    let payout_override = Address::generate(&env);
+
+    let treasury_id = env.register_contract(None, TreasuryContract);
+    let treasury_client = TreasuryContractClient::new(&env, &treasury_id);
+
+    // No initialize() call — the contract must reject state mutation.
+    let result = treasury_client.try_update_merchant_payout_address(&merchant, &payout_override);
+    assert!(
+        result.is_err(),
+        "payout override must not be settable before initialization"
+    );
 }

@@ -89,6 +89,8 @@ sequenceDiagram
 | `GraceWindow` | Instance | `u64` | Seconds added to `expires_at` during `mark_paid` |
 | `Invoice(u64)` | Persistent | `Invoice` | Full invoice record keyed by ID |
 | `MerchantNonce(Address, u64)` | Persistent | `bool` | Idempotency guard; rejects duplicate merchant nonces |
+| `PayerIndexCount(Address)` | Persistent | `u64` | Number of invoices recorded in a payer's index (#711) |
+| `PayerIndexEntry(Address, u64)` | Persistent | `u64` | Payer → invoice ID index, appended in `mark_paid` order; capped at `MAX_PAYER_INDEX_ENTRIES` per payer (#711) |
 
 ### Treasury (`contracts/treasury`)
 
@@ -126,7 +128,7 @@ sequenceDiagram
 
 Each contract defines error codes via a `#[contracterror]` enum. New variants **must** be appended at the end (highest numeric value) to preserve on-chain backwards compatibility — existing contracts and clients may depend on the current ordinal positions.
 
-### Invoice Contract (`InvoiceError` — range 1..=21)
+### Invoice Contract (`InvoiceError` — range 1..=28)
 
 | Code | Name | Description |
 |---|---|---|
@@ -151,8 +153,15 @@ Each contract defines error codes via a `#[contracterror]` enum. New variants **
 | 19 | `TokenMismatch` | Provided payment token does not match invoice's expected token |
 | 20 | `BatchTooLarge` | Batch input exceeds `MAX_BATCH_SIZE` |
 | 21 | `CooldownActive` | `create_invoice` called again before `CreationCooldown` elapsed |
+| 22 | `InvoiceCountOverflow` | `u64` invoice id counter would overflow |
+| 23 | `HashTooLong` | Optional hash field exceeds `MAX_HASH_BYTES` (64) |
+| 24 | `PaymentStateInconsistent` | Invoice does not describe a completed payment (no `paid_at`, no recorded payer, or `amount_usdc`/`gross_usdc` inconsistent) — refunds are refused (#70) |
+| 25 | `RefundTransferFailed` | The cross-contract token transfer executing a refund failed; the refund is abandoned with no state change (#70) |
+| 26 | `RefundTokenNotSet` | Refund payout attempted on an invoice created without a `token_address` (#70) |
+| 27 | `RefundFeeTooHigh` | `fee_bps` above `MAX_REFUND_FEE_BPS` (10_000 bps = 100%); rejected before the payout transfer is attempted (#71) |
+| 28 | `ArithmeticOverflow` | Refund fee arithmetic exceeded `i128`; unreachable for any in-range input, kept as a typed backstop so a bound change fails as an error rather than a trap (#71) |
 
-### Treasury Contract (`TreasuryError` — range 1..=17)
+### Treasury Contract (`TreasuryError` — range 1..=47)
 
 | Code | Name | Description |
 |---|---|---|
@@ -173,8 +182,42 @@ Each contract defines error codes via a `#[contracterror]` enum. New variants **
 | 15 | `SettlementOnHold` | Settlement is on hold and cannot be executed |
 | 16 | `DisputeNotExpired` | Dispute expiry timestamp has not been reached |
 | 17 | `AlreadyOnHold` | Settlement is already on hold |
+| 18 | `ThresholdUnreachable` | The threshold exceeds the available signer weight |
+| 19 | `ComplianceCheckFailed` | The address failed the compliance check |
+| 20 | `ArithmeticOverflow` | The calculation overflowed |
+| 21 | `DisputeNotFound` | Dispute not found |
+| 22 | `DisputeAlreadyResolved` | The dispute has already been resolved |
+| 23 | `ResolutionDirectionMismatch` | The dispute resolution direction is invalid |
+| 24 | `BatchTooLarge` | Too many items in one batch |
+| 25 | `WeightOverflow` | The total signer weight is too large |
+| 26 | `SettlementNotCancellable` | The settlement cannot be cancelled |
+| 27 | `TtlNotElapsed` | The settlement has not expired yet |
+| 28 | `AllowlistFull` | The allowlist is full |
+| 29 | `NotOnHold` | The settlement is not on hold |
+| 30 | `DestinationNotAllowed` | The destination address is not allowed |
+| 31 | `InsufficientBalance` | Insufficient treasury balance |
+| 32 | `NotPaused` | The treasury contract is not paused |
+| 33 | `RotationProposalCooldown` | Please wait before proposing another signer rotation |
+| 34 | `WorkflowNotRegisteredSigner` | The settlement workflow is not a registered signer |
+| 35 | `WithdrawalLimitExceeded` | The withdrawal limit has been exceeded |
+| 36 | `InvalidSplitRatio` | The dispute split ratio is invalid |
+| 37 | `ForceCancelNotAllowed` | The settlement cannot be force-cancelled |
+| 38 | `SignerChangeTooEarly` | The signer change delay has not elapsed yet |
+| 39 | `SignerChangeNotFound` | Signer change not found |
+| 40 | `SignerChangeAlreadyFinalised` | The signer change has already been finalised |
+| 41 | `ExecutionDeadlineExceeded` | The settlement execution deadline has passed |
+| 42 | `QuorumBreak` | Removing this signer would make the threshold unreachable |
+| 43 | `TokenHasPendingSettlements` | The token still has pending settlements |
+| 44 | `ApprovalNotFound` | The signer has not approved this settlement |
+| 45 | `DuplicateVote` | The signer has already voted on this dispute |
+| 46 | `NoPendingAdmin` | There is no pending admin transfer |
+| 47 | `LabelTooLong` | The signer label is too long |
 
-### Compliance Contract (`ComplianceError` / `ContractError` — range 1..=4)
+> **Note:** 42–47 were each first merged at a discriminant another PR had already
+> taken (38 or 41). `main` never compiled with those numbers, so they were
+> re-appended in merge order in multisig 0.6.0; see `crates/multisig/CHANGELOG.md`.
+
+### Compliance Contract (`ComplianceError` / `ContractError` — range 1..=11)
 
 | Code | Name | Description |
 |---|---|---|
@@ -182,19 +225,56 @@ Each contract defines error codes via a `#[contracterror]` enum. New variants **
 | 2 | `ContractPaused` (ContractError) | Contract is paused and the operation is blocked |
 | 3 | `AlreadyInitialized` (ContractError) | `initialize` has already been called |
 | 4 | `BatchTooLarge` (ContractError) | Batch input exceeds `MAX_BATCH_SIZE` |
+| 5 | `AddressIndexFull` (ContractError) | Tracking a new address would exceed `MAX_TRACKED_ADDRESSES` |
+| 6 | `BulkOperationCooldown` (ContractError) | Bulk allow/block called before `BULK_OP_COOLDOWN_SECS` elapsed |
+| 7 | `UnexpectedSchemaVersion` (ContractError) | `migrate` has no path from the stored schema version |
+| 8 | `OperatorCannotClearAdminBlock` (ContractError) | An operator tried to clear or override an admin-placed block |
+| 9 | `OperatorSetFull` (ContractError) | `add_operator` called with `MAX_OPERATORS` operators already set |
+| 10 | `InvalidJurisdictionCode` (ContractError) | `set_jurisdiction` code is not 2–3 uppercase ASCII letters or digits |
+| 11 | `NoPendingAdmin` (ContractError) | `accept_admin` / `cancel_admin_transfer` called with no pending transfer |
 
 > **Note:** `ComplianceError` enum exists separately with code `AlreadyInitialized = 1` for historical compatibility. New error variants should be added to `ContractError`.
+
+### Settlement Workflow Contract (`WorkflowError` — range 1..=10)
+
+Coordination errors raised by the workflow contract itself, distinct from the
+`TreasuryError` values its settlement path returns (borrowed from `multisig`
+because that crate was already a dependency).
+
+| Code | Name | Description |
+|---|---|---|
+| 1 | `Unauthorized` | Caller is not the configured emergency-pause admin |
+| 2 | `NotConfigured` | `initialize_emergency_pause` has not been called, so there is no target set |
+| 3 | `PauseTargetFailed` | A target refused to pause; the whole sweep is rolled back, so nothing is left paused (#73) |
+| 4 | `UnpauseTargetFailed` | A target refused to unpause; the whole sweep is rolled back, so nothing is left resumed (#73) |
+| 5 | `NoPauseTargets` | An empty target set was supplied |
+| 6 | `TooManyPauseTargets` | More than `MAX_PAUSE_TARGETS` (8) targets |
+| 7 | `DuplicatePauseTarget` | The same address appears twice in the target set |
+| 8 | `SelfPauseTarget` | The workflow contract itself was supplied as a target |
+| 9 | `EmergencyPauseActive` | The target set cannot be repointed while an emergency pause is open |
+| 10 | `NotEmergencyPaused` | `resume_all` was called with no emergency pause active |
 
 ---
 
 ## Shared Crates — Types, Not Storage
 
-The two shared crates (`crates/multisig` and `crates/protocol-errors`) provide types and error definitions that are imported by the contracts. They are **not deployed contracts** and have **no DataKeys or on-chain storage of their own**.
+The shared crates (`crates/multisig`, `crates/protocol-errors`, `crates/error-macros` and `crates/protocol-math`) provide types, math constants and error definitions that are imported by the contracts. They are **not deployed contracts** and have **no DataKeys or on-chain storage of their own**.
 
 | Crate | What it provides | Storage |
 |---|---|---|
-| `crates/multisig` | `SettlementHoldReason` enum, multisig helper types | None |
+| `crates/multisig` | `SettlementHoldReason` enum, multisig helper types, `TreasuryError` | None |
 | `crates/protocol-errors` | Shared error type utilities | None |
+| `crates/error-macros` | `declare_contract_error!` macro used by every `#[contracterror]` enum | None |
+| `crates/protocol-math` | Protocol-wide math constants (`BPS_DENOMINATOR`) and typed basis-point helpers | None |
+
+`crates/protocol-math` exists so a ratio means exactly one thing protocol-wide:
+`BPS_DENOMINATOR` (10 000 bps = 100.00%) is defined once, and
+`apply_bps_i128` / `split_bps_i128` perform the multiply-divide on `i128`
+amounts, returning `Option` so overflow surfaces as the caller's own error
+instead of a wrap. A contract that needs basis-point math (today: the treasury
+dispute split in `contracts/treasury/src/disputes.rs`) takes the denominator and
+the helpers from this crate rather than re-declaring its own copy of `10_000`
+(#707).
 
 If you are looking for where a type like `SettlementHoldReason` is stored on-chain, look at the **Treasury** DataKey table above (`Settlement(u64)` embeds it). The crates themselves are compile-time dependencies only.
 
@@ -202,7 +282,17 @@ If you are looking for where a type like `SettlementHoldReason` is stored on-cha
 
 ## Cross-Contract Call Map
 
+```mermaid
+flowchart LR
+    Merchant[Merchant dashboard] --> Invoice[Invoice contract]
+    Invoice --> Proposal[Settlement proposal workflow]
+    Proposal --> Treasury[Treasury contract]
+    SettlementWorkflow[SettlementWorkflow contract] --> Compliance[Compliance contract]
+    SettlementWorkflow --> Treasury
+    Treasury --> Token[SEP-41 token]
 ```
+
+```text
 SettlementProposalWorkflow
   ├── Invoice::get_invoice(id)              → validates status == Pending
   └── Treasury::propose_settlement(...)     → creates Settlement record
@@ -211,12 +301,28 @@ SettlementWorkflow
   ├── Compliance::is_allowed(merchant)      → compliance gate; if false, returns Err(ComplianceCheckFailed)
   └── Treasury::execute_settlement(...)     → called ONLY if the gate passes; transfers tokens to merchant
 
+SettlementWorkflow (emergency pause coordination, #73)
+  └── {Invoice,Treasury,Compliance}::pause(admin)
+       → fanned out over the configured target set in order, passing this
+         contract's own address as `admin`. All-or-nothing: the first target that
+         does not return Ok aborts the whole call with PauseTargetFailed, and
+         returning Err reverts the targets already paused. The orchestrator's
+         only authority over the rest of the protocol is "stop it" — the client
+         trait declares pause/unpause and nothing else.
+
 Treasury::execute_settlement
   └── Token::transfer(treasury → merchant)  → SEP-41 token transfer
 
-Invoice (standalone — no outbound cross-contract calls)
+Invoice::process_refund                      → verify payment state, then
+  └── Token::transfer(escrow → payer)         Token::transfer(escrow → payer)  → SEP-41 token transfer; a failure reverts the whole
+                                               refund with RefundTransferFailed (#70)
+
+Invoice (cross-contract calls: Token only, on the refund payout path)
 Treasury (standalone — no outbound cross-contract calls except Token)
 Compliance (standalone — no outbound cross-contract calls)
+SettlementWorkflow (cross-contract calls: Compliance::is_allowed and
+  Treasury::execute_settlement on the settlement path, plus pause/unpause on the
+  emergency-pause path)
 ```
 
 ### Cross-Contract Compliance Call Failure Modes

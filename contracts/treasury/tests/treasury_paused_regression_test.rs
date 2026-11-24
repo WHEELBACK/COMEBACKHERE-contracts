@@ -6,7 +6,7 @@ fn paused_setup(env: &Env) -> (TreasuryContractClient, Address) {
     let admin = Address::generate(env);
     let id = env.register_contract(None, TreasuryContract);
     let client = TreasuryContractClient::new(env, &id);
-    client.initialize(&admin, &2, &soroban_sdk::Vec::new(env));
+    client.initialize(&admin, &1, &soroban_sdk::Vec::new(env));
     client.pause(&admin);
     (client, admin)
 }
@@ -17,7 +17,7 @@ fn paused_rejects_propose_settlement() {
     let env = Env::default();
     let (client, admin) = paused_setup(&env);
     let merchant = Address::generate(&env);
-    client.propose_settlement(&admin, &merchant, &1_000);
+    client.propose_settlement(&admin, &merchant, &1_000, &0_u64);
 }
 
 #[test]
@@ -43,7 +43,7 @@ fn paused_rejects_deposit() {
     let env = Env::default();
     let (client, admin) = paused_setup(&env);
     let token = Address::generate(&env);
-    client.deposit(&admin, &token, &1_000);
+    client.deposit(&admin, &token, &1_000, &None);
 }
 
 #[test]
@@ -54,7 +54,7 @@ fn paused_rejects_batch_deposit() {
     let token = Address::generate(&env);
     let mut deposits = Vec::new(&env);
     deposits.push_back((token, 1_000));
-    client.batch_deposit(&admin, &deposits);
+    client.batch_deposit(&admin, &deposits, &None);
 }
 
 #[test]
@@ -73,7 +73,7 @@ fn paused_rejects_raise_dispute() {
     let (client, _admin) = paused_setup(&env);
     let claimant = Address::generate(&env);
     let counterparty = Address::generate(&env);
-    client.raise_dispute(&claimant, &1, &counterparty, &1_000, &500);
+    client.raise_dispute(&claimant, &1, &counterparty, &1_000, &500, &None);
 }
 
 #[test]
@@ -81,5 +81,5 @@ fn paused_rejects_raise_dispute() {
 fn paused_rejects_resolve_dispute() {
     let env = Env::default();
     let (client, admin) = paused_setup(&env);
-    client.resolve_dispute(&admin, &1, &true);
+    client.resolve_dispute(&admin, &1, &true, &None);
 }

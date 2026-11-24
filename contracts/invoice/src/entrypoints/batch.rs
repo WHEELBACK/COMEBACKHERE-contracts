@@ -3,10 +3,11 @@ use crate::validation::{
     require_admin, require_expiry_not_too_long, require_hash_not_too_long, require_not_paused,
     require_positive_amount, require_usdc_precision, require_valid_payment_link_hash,
 };
-use crate::{append_history, pending_index_add, pending_index_remove};
+use crate::{append_history, pending_index_add_many, pending_index_remove_many};
 use crate::{
     BatchInvoiceParams, DataKey, Invoice, InvoiceContract, InvoiceContractArgs,
-    InvoiceContractClient, InvoiceError, InvoiceStatus, MaybeAddress, MAX_BATCH_EXPIRE,
+    InvoiceContractClient, InvoiceError, InvoiceStatus, MaybeAddress, MaybeBytes, INVOICE_TTL_EXTEND_TO, INVOICE_TTL_THRESHOLD,
+    MAX_BATCH_EXPIRE, MAX_BATCH_SIZE,
 };
 use soroban_sdk::{contractimpl, Address, Env, Vec};
 
@@ -46,7 +47,7 @@ impl InvoiceContract {
             }
         }
 
-        let count: u64 = env
+        let mut count: u64 = env
             .storage()
             .instance()
             .get(&DataKey::InvoiceCount)
@@ -55,16 +56,22 @@ impl InvoiceContract {
             .checked_add(params.len() as u64)
             .ok_or(InvoiceError::InvoiceCountOverflow)?;
 
+        // #880: the invoice counter, the merchant's index counter and the
+        // pending index are each read once and written once for the whole
+        // batch, instead of being deserialized and re-serialized per element.
+        let merchant_count_key = DataKey::MerchantInvoiceCount(merchant.clone());
+        let mut merchant_count: u64 = env
+            .storage()
+            .persistent()
+            .get(&merchant_count_key)
+            .unwrap_or(0);
+
         let mut ids = Vec::new(&env);
         for p in params.iter() {
-            let count: u64 = env
-                .storage()
-                .instance()
-                .get(&DataKey::InvoiceCount)
-                .unwrap_or(0);
             let id = count
                 .checked_add(1)
                 .ok_or(InvoiceError::InvoiceCountOverflow)?;
+            count = id;
             let expires_at = env
                 .ledger()
                 .timestamp()
@@ -84,35 +91,36 @@ impl InvoiceContract {
                 merchant_nonce: p.merchant_nonce,
                 token_address: p.token_address.clone(),
             };
-            env.storage()
-                .persistent()
-                .set(&DataKey::Invoice(id), &invoice);
-            env.storage().instance().set(&DataKey::InvoiceCount, &id);
+            crate::store_invoice(&env, &invoice)?;
+            env.storage().persistent().extend_ttl(
+                &DataKey::Invoice(id),
+                INVOICE_TTL_THRESHOLD,
+                INVOICE_TTL_EXTEND_TO,
+            );
 
             if p.merchant_nonce != 0 {
-                env.storage().persistent().set(
-                    &DataKey::MerchantNonce(merchant.clone(), p.merchant_nonce),
-                    &true,
-                );
+                let nonce_key = DataKey::MerchantNonce(merchant.clone(), p.merchant_nonce);
+                env.storage().persistent().set(&nonce_key, &true);
+                crate::bump_persistent(&env, &nonce_key);
             }
 
-            let merchant_count_key = DataKey::MerchantInvoiceCount(merchant.clone());
-            let merchant_count: u64 = env
-                .storage()
-                .persistent()
-                .get(&merchant_count_key)
-                .unwrap_or(0);
-            env.storage().persistent().set(
-                &DataKey::MerchantInvoiceIndex(merchant.clone(), merchant_count),
-                &id,
-            );
-            env.storage()
-                .persistent()
-                .set(&merchant_count_key, &(merchant_count + 1));
+            let merchant_index_key =
+                DataKey::MerchantInvoiceIndex(merchant.clone(), merchant_count);
+            env.storage().persistent().set(&merchant_index_key, &id);
+            crate::bump_persistent(&env, &merchant_index_key);
+            merchant_count += 1;
 
-            pending_index_add(&env, id);
             events::invoice_created(&env, id, &invoice);
             ids.push_back(id);
+        }
+
+        if !ids.is_empty() {
+            env.storage().instance().set(&DataKey::InvoiceCount, &count);
+            env.storage()
+                .persistent()
+                .set(&merchant_count_key, &merchant_count);
+            crate::bump_persistent(&env, &merchant_count_key);
+            pending_index_add_many(&env, &ids);
         }
         Ok(ids)
     }
@@ -132,19 +140,83 @@ impl InvoiceContract {
         }
         let now = env.ledger().timestamp();
         let mut expired_count: u32 = 0;
+        // #880: drop expired ids from the pending index in one pass.
+        let mut expired_ids: Vec<u64> = Vec::new(&env);
         for id in ids.iter() {
             let key = DataKey::Invoice(id);
             if let Some(mut invoice) = env.storage().persistent().get::<DataKey, Invoice>(&key) {
                 if invoice.status == InvoiceStatus::Pending && now >= invoice.expires_at {
                     invoice.status = InvoiceStatus::Expired;
-                    env.storage().persistent().set(&key, &invoice);
-                    pending_index_remove(&env, id);
+                    crate::store_invoice(&env, &invoice)?;
+                    env.storage().persistent().extend_ttl(
+                        &key,
+                        INVOICE_TTL_THRESHOLD,
+                        INVOICE_TTL_EXTEND_TO,
+                    );
+                    expired_ids.push_back(id);
                     append_history(&env, id, InvoiceStatus::Pending, InvoiceStatus::Expired);
                     events::invoice_expired(&env, id, &invoice);
                     expired_count += 1;
                 }
             }
         }
+        pending_index_remove_many(&env, &expired_ids);
         Ok(expired_count)
+    }
+
+    /// Cancel several pending invoices belonging to `merchant` in one call (#720).
+    ///
+    /// Atomic: every id must exist, belong to `merchant`, and be `Pending`, or
+    /// the whole batch fails with no storage writes. Capped at `MAX_BATCH_SIZE`.
+    /// Emits one `invoice_cancelled` event per cancelled id. `reason` is caller
+    /// context for off-chain consumers; it is not persisted on-chain.
+    #[allow(unused_variables)]
+    pub fn batch_cancel_invoices(
+        env: Env,
+        merchant: Address,
+        ids: Vec<u64>,
+        reason: MaybeBytes,
+    ) -> Result<(), InvoiceError> {
+        merchant.require_auth();
+        require_not_paused(&env)?;
+
+        if ids.len() > MAX_BATCH_SIZE {
+            return Err(InvoiceError::BatchTooLarge);
+        }
+
+        // Validate every id before writing anything (atomicity).
+        let mut invoices: Vec<Invoice> = Vec::new(&env);
+        for id in ids.iter() {
+            let invoice: Invoice = env
+                .storage()
+                .persistent()
+                .get(&DataKey::Invoice(id))
+                .ok_or(InvoiceError::NotFound)?;
+            if invoice.merchant != merchant {
+                return Err(InvoiceError::Unauthorized);
+            }
+            if invoice.status != InvoiceStatus::Pending {
+                return Err(InvoiceError::NotPending);
+            }
+            invoices.push_back(invoice);
+        }
+
+        let mut cancelled_ids: Vec<u64> = Vec::new(&env);
+        for mut invoice in invoices.iter() {
+            invoice.status = InvoiceStatus::Cancelled;
+            crate::store_invoice(&env, &invoice)?;
+            cancelled_ids.push_back(invoice.id);
+            append_history(
+                &env,
+                invoice.id,
+                InvoiceStatus::Pending,
+                InvoiceStatus::Cancelled,
+            );
+            events::invoice_cancelled(&env, invoice.id, &invoice);
+        }
+        // #880: one read and one write of the pending index for the batch.
+        pending_index_remove_many(&env, &cancelled_ids);
+
+        Ok(())
     }
 }

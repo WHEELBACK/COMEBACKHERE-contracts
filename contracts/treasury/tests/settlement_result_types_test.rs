@@ -46,10 +46,10 @@ fn propose_settlement_accepts_valid_amount() {
 
     let treasury_id = env.register_contract(None, TreasuryContract);
     let treasury_client = TreasuryContractClient::new(&env, &treasury_id);
-    treasury_client.initialize(&admin, &2, &soroban_sdk::Vec::new(&env));
+    treasury_client.initialize(&admin, &1, &soroban_sdk::Vec::new(&env));
 
     // Should succeed with valid amount
-    let settlement_id = treasury_client.propose_settlement(&admin, &merchant, &10_000_000);
+    let settlement_id = treasury_client.propose_settlement(&admin, &merchant, &10_000_000, &0_u64);
     assert!(settlement_id > 0);
 
     let settlement = treasury_client.get_settlement(&settlement_id);
@@ -67,9 +67,9 @@ fn approve_settlement_succeeds_with_valid_state() {
 
     let treasury_id = env.register_contract(None, TreasuryContract);
     let treasury_client = TreasuryContractClient::new(&env, &treasury_id);
-    treasury_client.initialize(&admin, &2, &soroban_sdk::Vec::new(&env));
+    treasury_client.initialize(&admin, &1, &soroban_sdk::Vec::new(&env));
 
-    let settlement_id = treasury_client.propose_settlement(&admin, &merchant, &10_000_000);
+    let settlement_id = treasury_client.propose_settlement(&admin, &merchant, &10_000_000, &0_u64);
     let settlement = treasury_client.approve_settlement(&admin, &settlement_id);
 
     assert_eq!(settlement.status, SettlementStatus::Pending);
@@ -86,7 +86,7 @@ fn execute_settlement_succeeds_with_valid_approval() {
 
     let treasury_id = env.register_contract(None, TreasuryContract);
     let treasury_client = TreasuryContractClient::new(&env, &treasury_id);
-    treasury_client.initialize(&admin, &2, &soroban_sdk::Vec::new(&env));
+    treasury_client.initialize(&admin, &1, &soroban_sdk::Vec::new(&env));
 
     let token_id = env.register_contract(None, TestToken);
     let test_token_client = TestTokenClient::new(&env, &token_id);
@@ -94,7 +94,7 @@ fn execute_settlement_succeeds_with_valid_approval() {
     // Mint tokens to treasury
     test_token_client.mint(&treasury_id, &10_000_000);
 
-    let settlement_id = treasury_client.propose_settlement(&admin, &merchant, &10_000_000);
+    let settlement_id = treasury_client.propose_settlement(&admin, &merchant, &10_000_000, &0_u64);
     treasury_client.execute_settlement(&admin, &settlement_id, &token_id);
 
     let settlement = treasury_client.get_settlement(&settlement_id);

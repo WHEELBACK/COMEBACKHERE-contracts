@@ -27,7 +27,7 @@ fn setup(env: &Env) -> (TreasuryContractClient, Address) {
     let admin = Address::generate(env);
     let id = env.register_contract(None, TreasuryContract);
     let client = TreasuryContractClient::new(env, &id);
-    client.initialize(&admin, &2, &soroban_sdk::Vec::new(env));
+    client.initialize(&admin, &1, &soroban_sdk::Vec::new(env));
     (client, admin)
 }
 

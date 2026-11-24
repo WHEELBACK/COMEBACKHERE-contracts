@@ -52,9 +52,15 @@ docs: expand CONTRIBUTING.md with branch, commit, and PR guidelines
 ### Before opening a PR
 
 - [ ] Pre-commit hooks pass locally (`pre-commit run --all-files`)
+- [ ] Full workspace check passes (`cargo check --workspace --all-targets`)
 - [ ] All tests pass (`cargo test`)
 - [ ] Clippy is clean (`cargo clippy -- -D warnings`)
 - [ ] ABI snapshots regenerated if contract interfaces changed
+
+> **Required CI check**: every PR to `main` must pass the `cargo-check` job in
+> `.github/workflows/check.yml`, which runs `cargo check --workspace --all-targets`.
+> This job catches declared-but-missing modules and test-only breakage before they
+> land on `main`. Branch protection must be configured to require this check.
 
 ### PR description template
 
@@ -80,6 +86,26 @@ Closes #<issue_id>
 
 The `Closes #<issue_id>` line is required. PRs without a linked issue will not be merged.
 
+## Required status checks
+
+The following CI checks are required to pass before any pull request can be merged into `main`. These are enforced as branch protection rules and cannot be bypassed:
+
+| Check | Command |
+|-------|---------|
+| Tests | `cargo test --workspace` |
+| Lints | `cargo clippy -- -D warnings` |
+| Formatting | `cargo fmt --all -- --check` |
+
+A PR that causes any of these checks to fail will be blocked from merging until the failures are resolved. Run all three locally before pushing to catch issues early:
+
+```sh
+cargo fmt --all -- --check
+cargo clippy -- -D warnings
+cargo test --workspace
+```
+
+You can also run the `just precommit` or `make precommit` target, which mirrors the exact command sequence the Pre-commit CI job runs.
+
 ## Code review
 
 - Reviewers aim to respond within **2 business days**.
@@ -97,12 +123,37 @@ pip install pre-commit
 pre-commit install
 ```
 
-Hooks run on each commit and enforce:
+The default hooks run on each commit and enforce:
 
 - `cargo fmt --all -- --check`
 - `cargo clippy -- -D warnings`
+- the enum-ordering check in `scripts/check-enum-ordering.sh`
 
-Run all hooks manually:
+There is also a separate, intentionally slower pre-push hook that mirrors the full local CI-equivalent pass before you push:
+
+```sh
+pre-commit install --hook-type pre-push
+```
+
+This pre-push hook runs:
+
+- `cargo test --all`
+- `cargo build --target wasm32-unknown-unknown --release`
+- a local WASM size gate for every compiled contract (`64 KiB` limit)
+
+This is intentionally not the default commit hook because `cargo test --all` takes longer than the fast commit checks and is meant to be a one-time, deliberate full verification step before pushing. If you need to bypass it for a temporary local push, set:
+
+```sh
+SKIP_SLOW_CHECKS=1 git push
+```
+
+You can also run the slow hook manually without a push:
+
+```sh
+SKIP_SLOW_CHECKS=1 pre-commit run --hook-stage pre-push
+```
+
+Run all commit hooks manually:
 
 ```sh
 pre-commit run --all-files

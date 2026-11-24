@@ -19,7 +19,7 @@ to close.
 
 | Constant | Value | Location | Rationale |
 |---|---|---|---|
-| `MAX_TRACKED_ADDRESSES` | `50_000` | `lib.rs:128` | Upper bound on `DataKey::AddressIndex` growth. Once reached, tracking a *new* address is rejected with `AddressIndexFull` rather than growing the index further, to cap unbounded storage-rent growth. Existing tracked addresses are unaffected by the cap. |
+| `MAX_TRACKED_ADDRESSES` | `2_000` | `compliance/src/lib.rs` | Upper bound on the paged address index's growth. Once reached, tracking a *new* address is rejected with `AddressIndexFull` rather than growing the index further, to cap unbounded storage-rent growth. Existing tracked addresses are unaffected by the cap. |
 | `MAX_BATCH_SIZE` | `50` | `lib.rs:132` | Cap on addresses accepted per admin batch call (`bulk_allow_addresses`, `bulk_block_addresses`). Chosen to match the identical `MAX_BATCH_SIZE = 50` used in `invoice` and `treasury` — see "Cross-contract interactions" below. |
 
 ## Invoice (`contracts/invoice/src`)
@@ -42,6 +42,20 @@ to close.
 | `MAX_BATCH_SIZE` | `50` | `settlements.rs:13` | Cap on settlement IDs accepted per batch call. Matches invoice's and compliance's `MAX_BATCH_SIZE = 50` — chosen as a single workspace-wide default for "how many items can one call safely touch" rather than independently derived per contract (see #8/#21/#29 in the inline doc comments). |
 | Signer rotation cooldown | `3_600` (1 hour) | `signers.rs:104` (`COOLDOWN_SECS`, local to `propose_signer_rotation`) | Minimum time between rotation proposals from the same proposer, to prevent rotation-proposal spam (e.g. from a compromised signer attempting to grind toward an unwanted rotation, or simple griefing). Not exposed as an admin-configurable value — changing it requires a code upgrade; see `docs/upgrade-guide.md`. |
 | `threshold` | Set at `initialize`/`update_threshold`, no compile-time default | `lib.rs` (`initialize`, `update_threshold`) | Not a constant — enforced invariant is `0 < threshold <= total_weight` of registered signers. See `docs/deployment-runbook.md` §3 for how the actual mainnet value should be chosen relative to the weighted-quorum model. |
+
+### `get_pending_metrics` budget (#743)
+
+`get_pending_metrics` aggregates over every pending settlement and token, so
+its cost scales with the size of the pending-work queue. The budget test in
+`contracts/treasury/tests/pending_metrics_budget_test.rs` measures the call
+with **100 pending settlements across 10 tokens** using `env.budget()`.
+
+| Scenario | CPU instructions | Memory (bytes) |
+|---|---|---|
+| 100 settlements / 10 tokens | _recorded from test run_ | _recorded from test run_ |
+
+Re-run `cargo test -p treasury --test pending_metrics_budget_test -- --nocapture`
+to refresh these numbers after changing the aggregation logic.
 
 ## Settlement-Workflow (`contracts/settlement-workflow/src`)
 

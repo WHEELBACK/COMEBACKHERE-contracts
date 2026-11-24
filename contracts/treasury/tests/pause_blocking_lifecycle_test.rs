@@ -83,8 +83,6 @@ impl PauseTestWorkflow {
 struct Fixture {
     env: Env,
     admin: Address,
-    /// Second signer so quorum is reachable (see the #622 weight cap).
-    cosigner: Address,
     merchant: Address,
     #[allow(dead_code)]
     invoice_id: Address,
@@ -114,15 +112,10 @@ fn setup() -> Fixture {
     let compliance = ComplianceContractClient::new(&env, &compliance_id);
     compliance.initialize(&admin);
 
-    // Treasury contract.
-    // #622 weight cap: quorum is 2 and no single signer may reach it, so a
-    // cosigner is registered to co-approve settlements.
-    let cosigner = Address::generate(&env);
+    // Treasury contract (threshold=1 so single admin approval is sufficient)
     let treasury_id = env.register_contract(None, TreasuryContract);
     let treasury = TreasuryContractClient::new(&env, &treasury_id);
-    let mut signers = soroban_sdk::Vec::new(&env);
-    signers.push_back((cosigner.clone(), 1u32));
-    treasury.initialize(&admin, &2, &signers);
+    treasury.initialize(&admin, &1, &soroban_sdk::Vec::new(&env));
 
     // Stub token
     let token_id = env.register_contract(None, StubToken);
@@ -134,7 +127,6 @@ fn setup() -> Fixture {
     Fixture {
         env,
         admin,
-        cosigner,
         merchant,
         invoice_id,
         invoice,
@@ -186,8 +178,7 @@ fn scenario_invoice_paused_blocks_mark_paid_cleanly() {
     // Step 3 – propose a treasury settlement (also unaffected by invoice state)
     let sid = f
         .treasury
-        .propose_settlement(&f.admin, &f.merchant, &10_000_000);
-    f.treasury.approve_settlement(&f.cosigner, &sid);
+        .propose_settlement(&f.admin, &f.merchant, &10_000_000, &0_u64);
     assert_eq!(
         f.treasury.get_settlement(&sid).status,
         SettlementStatus::Pending
@@ -304,8 +295,7 @@ fn scenario_invoice_pause_unpause_full_lifecycle_recovers() {
     // Compliance and treasury remain operational
     let sid = f
         .treasury
-        .propose_settlement(&f.admin, &f.merchant, &10_000_000);
-    f.treasury.approve_settlement(&f.cosigner, &sid);
+        .propose_settlement(&f.admin, &f.merchant, &10_000_000, &0_u64);
     assert_eq!(
         f.treasury.get_settlement(&sid).status,
         SettlementStatus::Pending
@@ -357,7 +347,7 @@ fn scenario_treasury_paused_blocks_propose_settlement() {
     f.treasury.pause(&f.admin);
     // This must panic with "ContractPaused"
     f.treasury
-        .propose_settlement(&f.admin, &f.merchant, &10_000_000);
+        .propose_settlement(&f.admin, &f.merchant, &10_000_000, &0_u64);
 }
 
 /// Pausing treasury *after* proposal panics with "ContractPaused" on execute.
@@ -368,8 +358,7 @@ fn scenario_treasury_paused_blocks_execute_settlement() {
     f.compliance.allow_address(&f.admin, &f.merchant);
     let sid = f
         .treasury
-        .propose_settlement(&f.admin, &f.merchant, &10_000_000);
-    f.treasury.approve_settlement(&f.cosigner, &sid);
+        .propose_settlement(&f.admin, &f.merchant, &10_000_000, &0_u64);
     // Pause AFTER proposal
     f.treasury.pause(&f.admin);
     // This must panic with "ContractPaused"
@@ -450,8 +439,7 @@ fn scenario_treasury_pause_unpause_full_lifecycle_recovers() {
     // Now propose and execute succeed
     let sid = f
         .treasury
-        .propose_settlement(&f.admin, &f.merchant, &10_000_000);
-    f.treasury.approve_settlement(&f.cosigner, &sid);
+        .propose_settlement(&f.admin, &f.merchant, &10_000_000, &0_u64);
     let workflow = PauseTestWorkflowClient::new(&f.env, &f.workflow_id);
     assert!(workflow
         .try_execute_if_compliant(
@@ -473,7 +461,7 @@ fn scenario_treasury_pause_unpause_full_lifecycle_recovers() {
 // ═══════════════════════════════════════════════════════════════════════════════
 
 /// Pausing compliance mid-flow freezes `allow_address` with
-/// `ContractError::ContractPaused`.  A merchant who was not pre-allowed is
+/// `ComplianceError::ContractPaused`.  A merchant who was not pre-allowed is
 /// therefore rejected by the compliance gate, leaving the treasury settlement
 /// Pending and the invoice in whatever state it was.
 #[test]
@@ -495,15 +483,15 @@ fn scenario_compliance_paused_blocks_new_allow_so_gate_rejects() {
     // Step 2 – propose treasury settlement (treasury doesn't consult compliance)
     let sid = f
         .treasury
-        .propose_settlement(&f.admin, &f.merchant, &10_000_000);
-    f.treasury.approve_settlement(&f.cosigner, &sid);
+        .propose_settlement(&f.admin, &f.merchant, &10_000_000, &0_u64);
     assert_eq!(
         f.treasury.get_settlement(&sid).status,
         SettlementStatus::Pending
     );
 
     // Step 3 – PAUSE compliance *before* allowing the merchant
-    f.compliance.pause(&f.admin);
+    f.compliance
+        .pause_with_reason(&f.admin, &soroban_sdk::symbol_short!("maint"));
 
     // Step 4 – allow_address must be blocked while paused
     let allow_err = f
@@ -513,7 +501,7 @@ fn scenario_compliance_paused_blocks_new_allow_so_gate_rejects() {
         .unwrap();
     assert_eq!(
         allow_err,
-        compliance::ContractError::ContractPaused,
+        compliance::ComplianceError::ContractPaused,
         "allow_address must return ContractPaused when compliance is paused"
     );
 
@@ -588,11 +576,11 @@ fn scenario_compliance_paused_pre_allowed_merchant_can_still_execute() {
 
     let sid = f
         .treasury
-        .propose_settlement(&f.admin, &f.merchant, &10_000_000);
-    f.treasury.approve_settlement(&f.cosigner, &sid);
+        .propose_settlement(&f.admin, &f.merchant, &10_000_000, &0_u64);
 
     // Pause compliance after allow
-    f.compliance.pause(&f.admin);
+    f.compliance
+        .pause_with_reason(&f.admin, &soroban_sdk::symbol_short!("maint"));
 
     // is_allowed is a read — it still works while paused
     assert!(
@@ -631,11 +619,11 @@ fn scenario_compliance_paused_block_address_is_permitted() {
 
     let sid = f
         .treasury
-        .propose_settlement(&f.admin, &f.merchant, &10_000_000);
-    f.treasury.approve_settlement(&f.cosigner, &sid);
+        .propose_settlement(&f.admin, &f.merchant, &10_000_000, &0_u64);
 
     // Pause compliance
-    f.compliance.pause(&f.admin);
+    f.compliance
+        .pause_with_reason(&f.admin, &soroban_sdk::symbol_short!("maint"));
 
     // block_address is allowed even while paused (emergency policy)
     let block_result = f.compliance.try_block_address(&f.admin, &f.merchant, &None);

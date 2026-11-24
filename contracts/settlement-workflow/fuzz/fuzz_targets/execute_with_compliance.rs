@@ -9,9 +9,10 @@
 // would miss.
 //
 // This contract sits at a trust boundary: `compliance_id` and `treasury_id` are
-// passed per-call, so the parameters that most matter are (a) pointing both
-// roles at the same contract instance (`compliance_id == treasury_id`), and (b)
-// extreme `settlement_id` values (0, u64::MAX). The harness forces those cases
+// pinned once at `initialize` (#364), so the parameters that most matter are
+// (a) pinning both roles to the same contract instance (`compliance_id ==
+// treasury_id`) or to unregistered addresses, and (b) extreme `settlement_id`
+// values (0, u64::MAX). The harness forces those cases
 // and otherwise fuzzes the address selection across a pool that mixes the real
 // registered contract IDs with unregistered generated addresses representing
 // entities that were never onboarded.
@@ -20,6 +21,7 @@
 // CI-runnable within a bounded time/iteration budget.
 
 use arbitrary::Arbitrary;
+use libfuzzer_sys::fuzz_target;
 use compliance::{ComplianceContract, ComplianceContractClient};
 use settlement_workflow::{SettlementWorkflowContract, SettlementWorkflowContractClient};
 use soroban_sdk::{testutils::Address as _, Address, Env, Vec};
@@ -48,20 +50,14 @@ fuzz_target!(|input: Input| {
     // Real, registered contract instances for compliance and treasury, plus a
     // handful of unregistered generated addresses standing in for adversarially
     // chosen contract IDs / merchant entities.
-    let compliance_id = env.register_contract(None, ComplianceContract);
-    let treasury_id = env.register_contract(None, TreasuryContract);
-    let workflow_id = env.register_contract(None, SettlementWorkflowContract);
+    let compliance_id = env.register(ComplianceContract, ());
+    let treasury_id = env.register(TreasuryContract, ());
 
     let compliance = ComplianceContractClient::new(&env, &compliance_id);
     compliance.initialize(&admin);
 
     let treasury = TreasuryContractClient::new(&env, &treasury_id);
     treasury.initialize(&admin, &1, &Vec::new(&env));
-
-    let workflow = SettlementWorkflowContractClient::new(&env, &workflow_id);
-    // The workflow executes settlements as itself, so it must be an authorized
-    // Treasury signer (mirrors the production setup in settlement_workflow_test.rs).
-    treasury.set_signer(&admin, &workflow_id, &1);
 
     // Pool: index 0 = real compliance, index 1 = real treasury, rest unregistered.
     let mut pool: Vec<Address> = Vec::new(&env);
@@ -71,12 +67,9 @@ fuzz_target!(|input: Input| {
         pool.push_back(Address::generate(&env));
     }
 
-    let pick = |idx: u8| -> Address {
-        let i = (idx as usize) % pool.len();
-        pool.get(i).unwrap()
-    };
+    let pick = |idx: u8| -> Address { pool.get_unchecked(u32::from(idx) % pool.len()) };
 
-    let mut compliance_arg = pick(input.compliance_idx);
+    let compliance_arg = pick(input.compliance_idx);
     let mut treasury_arg = pick(input.treasury_idx);
     if input.force_compliance_eq_treasury {
         treasury_arg = compliance_arg.clone();
@@ -92,12 +85,15 @@ fuzz_target!(|input: Input| {
         input.settlement_id
     };
 
-    // Only the Result matters here: any Ok/Err is acceptable, a panic is not.
-    let _ = workflow.try_execute_with_compliance(
-        &compliance_arg,
-        &treasury_arg,
-        &settlement_id,
-        &token_contract,
-        &merchant,
+    let workflow_id = env.register(
+        SettlementWorkflowContract,
+        (admin.clone(), compliance_arg.clone(), treasury_arg.clone()),
     );
+    let workflow = SettlementWorkflowContractClient::new(&env, &workflow_id);
+    // The workflow executes settlements as itself, so it must be an authorized
+    // Treasury signer (mirrors the production setup in settlement_workflow_test.rs).
+    treasury.set_signer(&admin, &workflow_id, &1);
+
+    // Only the Result matters here: any Ok/Err is acceptable, a panic is not.
+    let _ = workflow.try_execute_with_compliance(&settlement_id, &token_contract, &merchant);
 });

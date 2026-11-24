@@ -68,9 +68,6 @@ impl ComplianceGatedWorkflow {
 struct Fixture {
     env: Env,
     admin: Address,
-    /// Second signer so quorum is reachable without any one signer exceeding
-    /// the threshold (see the #622 weight cap).
-    cosigner: Address,
     merchant: Address,
     compliance_id: Address,
     compliance: ComplianceContractClient<'static>,
@@ -92,17 +89,10 @@ fn setup() -> Fixture {
     let compliance = ComplianceContractClient::new(&env, &compliance_id);
     compliance.initialize(&admin);
 
-    // Deploy treasury contract.
-    // #622 weight cap: no single signer may hold weight >= the threshold, so
-    // quorum is 2 and is reached by the admin proposing (weight 1) plus a
-    // second signer co-approving. The workflow itself (weight 1) cannot reach
-    // quorum alone.
-    let cosigner = Address::generate(&env);
+    // Deploy treasury contract; threshold=1 so the proposer's single vote is enough
     let treasury_id = env.register_contract(None, TreasuryContract);
     let treasury = TreasuryContractClient::new(&env, &treasury_id);
-    let mut signers = soroban_sdk::Vec::new(&env);
-    signers.push_back((cosigner.clone(), 1u32));
-    treasury.initialize(&admin, &2, &signers);
+    treasury.initialize(&admin, &1, &soroban_sdk::Vec::new(&env));
 
     // Deploy stub token
     let token_id = env.register_contract(None, StubToken);
@@ -114,7 +104,6 @@ fn setup() -> Fixture {
     Fixture {
         env,
         admin,
-        cosigner,
         merchant,
         compliance_id,
         compliance,
@@ -139,10 +128,7 @@ fn execution_succeeds_when_merchant_allowed_throughout() {
     // Propose settlement while compliant
     let sid = f
         .treasury
-        .propose_settlement(&f.admin, &f.merchant, &10_000_000);
-    // #622 weight cap: the admin's single vote is below quorum, so the
-    // cosigner co-approves before the workflow executes.
-    f.treasury.approve_settlement(&f.cosigner, &sid);
+        .propose_settlement(&f.admin, &f.merchant, &10_000_000, &0_u64);
 
     // Execute via the compliance-gated workflow — merchant still allowed
     let workflow = ComplianceGatedWorkflowClient::new(&f.env, &f.workflow_id);
@@ -179,10 +165,7 @@ fn execution_blocked_when_merchant_blocked_after_proposal() {
     // Propose the settlement while merchant is compliant
     let sid = f
         .treasury
-        .propose_settlement(&f.admin, &f.merchant, &10_000_000);
-    // #622 weight cap: the admin's single vote is below quorum, so the
-    // cosigner co-approves before the workflow executes.
-    f.treasury.approve_settlement(&f.cosigner, &sid);
+        .propose_settlement(&f.admin, &f.merchant, &10_000_000, &0_u64);
 
     // Simulate a compliance event: merchant is blocked *after* proposal
     f.compliance.block_address(&f.admin, &f.merchant, &None);
@@ -227,7 +210,7 @@ fn execution_blocked_when_merchant_never_allowed() {
     // merchant is NOT allowed — propose anyway (treasury doesn't gate on compliance)
     let sid = f
         .treasury
-        .propose_settlement(&f.admin, &f.merchant, &5_000_000);
+        .propose_settlement(&f.admin, &f.merchant, &5_000_000, &0_u64);
 
     let workflow = ComplianceGatedWorkflowClient::new(&f.env, &f.workflow_id);
     let err = workflow
@@ -257,10 +240,7 @@ fn execution_succeeds_after_block_is_cleared() {
     f.compliance.allow_address(&f.admin, &f.merchant);
     let sid = f
         .treasury
-        .propose_settlement(&f.admin, &f.merchant, &10_000_000);
-    // #622 weight cap: the admin's single vote is below quorum, so the
-    // cosigner co-approves before the workflow executes.
-    f.treasury.approve_settlement(&f.cosigner, &sid);
+        .propose_settlement(&f.admin, &f.merchant, &10_000_000, &0_u64);
 
     // Block mid-flight
     f.compliance.block_address(&f.admin, &f.merchant, &None);
@@ -313,13 +293,10 @@ fn compliance_gate_is_per_merchant() {
 
     let sid_a = f
         .treasury
-        .propose_settlement(&f.admin, &f.merchant, &10_000_000);
+        .propose_settlement(&f.admin, &f.merchant, &10_000_000, &0_u64);
     let sid_b = f
         .treasury
-        .propose_settlement(&f.admin, &merchant_b, &10_000_000);
-    // #622 weight cap: the admin's single vote is below quorum.
-    f.treasury.approve_settlement(&f.cosigner, &sid_a);
-    f.treasury.approve_settlement(&f.cosigner, &sid_b);
+        .propose_settlement(&f.admin, &merchant_b, &10_000_000, &0_u64);
 
     let workflow = ComplianceGatedWorkflowClient::new(&f.env, &f.workflow_id);
 

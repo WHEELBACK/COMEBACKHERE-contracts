@@ -1,7 +1,7 @@
 use invoice::{
     InvoiceContract, InvoiceContractClient, InvoiceError, InvoiceStatus, MaybeAddress, MaybeBytes,
 };
-use soroban_sdk::{contract, contractimpl, testutils::Address as _, Address, Env};
+use soroban_sdk::{testutils::Address as _, Address, Env};
 use treasury::{TreasuryContract, TreasuryContractClient};
 
 mod test_token {
@@ -79,7 +79,7 @@ fn setup() -> (
 
 #[test]
 fn invoice_created_paid_released() {
-    let (env, admin, merchant, payer, invoice, _treasury_id, _treasury, _token_id) = setup();
+    let (_env, admin, merchant, payer, invoice, _treasury_id, _treasury, _token_id) = setup();
 
     let id = invoice.create_invoice(
         &merchant,
@@ -108,7 +108,7 @@ fn invoice_created_paid_released() {
 fn treasury_settlement_after_invoice_release() {
     let (env, admin, merchant, _payer, _invoice, treasury_id, treasury, token_id) = setup();
 
-    let settlement_id = treasury.propose_settlement(&admin, &merchant, &10_000_000);
+    let settlement_id = treasury.propose_settlement(&admin, &merchant, &10_000_000, &0_u64);
     let settlement = treasury.get_settlement(&settlement_id);
     assert_eq!(settlement.merchant_address, merchant);
     assert_eq!(settlement.amount, 10_000_000);
@@ -155,7 +155,7 @@ fn end_to_end_invoice_to_settlement() {
     assert_eq!(token.balance(&treasury_id), 10_000_000);
     assert_eq!(token.balance(&merchant), 0);
 
-    let settlement_id = treasury.propose_settlement(&admin, &merchant, &10_000_000);
+    let settlement_id = treasury.propose_settlement(&admin, &merchant, &10_000_000, &0_u64);
     treasury.execute_settlement(&admin, &settlement_id, &token_id);
 
     assert_eq!(token.balance(&treasury_id), 0);
@@ -198,7 +198,7 @@ fn approved_refund_does_not_adjust_treasury_balance_or_settlement() {
     // Treasury settles the invoice: merchant is paid out on-chain.
     let token = TestTokenClient::new(&env, &token_id);
     token.mint(&treasury_id, &10_000_000);
-    let settlement_id = treasury.propose_settlement(&admin, &merchant, &10_000_000);
+    let settlement_id = treasury.propose_settlement(&admin, &merchant, &10_000_000, &0_u64);
     treasury.execute_settlement(&admin, &settlement_id, &token_id);
     assert_eq!(token.balance(&merchant), 10_000_000);
     assert_eq!(token.balance(&treasury_id), 0);

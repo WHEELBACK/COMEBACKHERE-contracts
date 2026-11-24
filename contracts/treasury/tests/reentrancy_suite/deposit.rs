@@ -29,7 +29,7 @@ fn deposit_baseline_no_reentry_credits_internal_balance_once() {
     token.set_callback_target(&CallbackTarget::None, &treasury_id);
     token.mint(&depositor, &5_000_000);
 
-    client.deposit(&depositor, &token_id, &5_000_000);
+    client.deposit(&depositor, &token_id, &5_000_000, &None);
 
     assert_eq!(client.get_balance(&depositor, &token_id), 5_000_000);
     assert_eq!(token.balance(&depositor), 0);
@@ -63,7 +63,7 @@ fn deposit_reentrancy_demonstrates_cei_violation_double_credit() {
     token.set_depositor(&depositor);
     token.mint(&depositor, &10_000_000);
 
-    let result = client.try_deposit(&depositor, &token_id, &10_000_000);
+    let result = client.try_deposit(&depositor, &token_id, &10_000_000, &None);
     assert!(result.is_err(), "reentrant deposit should abort");
 
     assert_eq!(client.get_balance(&depositor, &token_id), 0);
@@ -93,7 +93,7 @@ fn deposit_reentrancy_withdraw_callback_panics_aborts_deposit() {
     // we still drive the call through `try_deposit` so the test exercises
     // the rollback path. The withdraw re-entry inside the callback has no
     // recorded `Balance(depositor)` to consume, so it panics.
-    let result = client.try_deposit(&depositor, &token_id, &10_000_000);
+    let result = client.try_deposit(&depositor, &token_id, &10_000_000, &None);
     assert!(result.is_err(), "deposit must roll back via withdraw panic");
 
     // Internal bookkeeping rolled back: deposit never credited the user.

@@ -18,13 +18,14 @@
 use soroban_sdk::{testutils::Address as _, Address, Env, Vec};
 use treasury::{
     Dispute, DisputeStatus, RotationStatus, Settlement, SettlementHoldReason, SettlementStatus,
-    SignerRotationProposal, TreasuryContract, TreasuryContractClient, TreasuryError,
+    SignerChangeKind, SignerChangeProposal, SignerChangeStatus, SignerRotationProposal,
+    TreasuryContract, TreasuryContractClient, TreasuryError,
 };
 
 /// Expected version of `crates/multisig` (see its `Cargo.toml`). Bump this only
 /// alongside a review of every exhaustive match below - if they still compile,
 /// the ABI-relevant shape of multisig's types is unchanged.
-const EXPECTED_MULTISIG_VERSION: &str = "0.3.0";
+const EXPECTED_MULTISIG_VERSION: &str = "0.6.0";
 
 const MULTISIG_CARGO_TOML: &str = include_str!("../../../crates/multisig/Cargo.toml");
 
@@ -45,7 +46,7 @@ fn setup(env: &Env) -> (TreasuryContractClient, Address) {
     let admin = Address::generate(env);
     let id = env.register_contract(None, TreasuryContract);
     let client = TreasuryContractClient::new(env, &id);
-    client.initialize(&admin, &2, &Vec::new(env));
+    client.initialize(&admin, &1, &Vec::new(env));
     (client, admin)
 }
 
@@ -99,10 +100,25 @@ fn treasury_error_shape_is_unchanged() {
     assert_eq!(TreasuryError::NotPaused as u32, 32);
     assert_eq!(TreasuryError::RotationProposalCooldown as u32, 33);
     assert_eq!(TreasuryError::WorkflowNotRegisteredSigner as u32, 34);
-    assert_eq!(TreasuryError::SignerWeightExceedsThreshold as u32, 35);
+    assert_eq!(TreasuryError::WithdrawalLimitExceeded as u32, 35);
     assert_eq!(TreasuryError::InvalidSplitRatio as u32, 36);
     assert_eq!(TreasuryError::ForceCancelNotAllowed as u32, 37);
-    assert_eq!(TreasuryError::WithdrawalLimitExceeded as u32, 38);
+    // Appended for #447: timelocked signer/threshold-change errors.
+    assert_eq!(TreasuryError::SignerChangeTooEarly as u32, 38);
+    assert_eq!(TreasuryError::SignerChangeNotFound as u32, 39);
+    assert_eq!(TreasuryError::SignerChangeAlreadyFinalised as u32, 40);
+    // Appended for #590: execution deadline exceeded.
+    assert_eq!(TreasuryError::ExecutionDeadlineExceeded as u32, 41);
+    // Appended in multisig 0.6.0: variants whose original PRs collided on 38/41.
+    assert_eq!(TreasuryError::QuorumBreak as u32, 42);
+    assert_eq!(TreasuryError::TokenHasPendingSettlements as u32, 43);
+    assert_eq!(TreasuryError::ApprovalNotFound as u32, 44);
+    assert_eq!(TreasuryError::DuplicateVote as u32, 45);
+    assert_eq!(TreasuryError::NoPendingAdmin as u32, 46);
+    assert_eq!(TreasuryError::LabelTooLong as u32, 47);
+    assert_eq!(TreasuryError::InvalidTimelockDelay as u32, 48);
+    assert_eq!(TreasuryError::DuplicateReferenceId as u32, 49);
+    assert_eq!(TreasuryError::TokenHasBalance as u32, 50);
 
     // No wildcard arm: adding, removing, or renaming a variant fails this compile.
     fn assert_exhaustive(err: TreasuryError) {
@@ -141,10 +157,22 @@ fn treasury_error_shape_is_unchanged() {
             | TreasuryError::NotPaused
             | TreasuryError::RotationProposalCooldown
             | TreasuryError::WorkflowNotRegisteredSigner
-            | TreasuryError::SignerWeightExceedsThreshold
+            | TreasuryError::WithdrawalLimitExceeded
             | TreasuryError::InvalidSplitRatio
             | TreasuryError::ForceCancelNotAllowed
-            | TreasuryError::WithdrawalLimitExceeded => {}
+            | TreasuryError::SignerChangeTooEarly
+            | TreasuryError::SignerChangeNotFound
+            | TreasuryError::SignerChangeAlreadyFinalised
+            | TreasuryError::ExecutionDeadlineExceeded
+            | TreasuryError::QuorumBreak
+            | TreasuryError::TokenHasPendingSettlements
+            | TreasuryError::ApprovalNotFound
+            | TreasuryError::DuplicateVote
+            | TreasuryError::NoPendingAdmin
+            | TreasuryError::LabelTooLong
+            | TreasuryError::InvalidTimelockDelay
+            | TreasuryError::DuplicateReferenceId
+            | TreasuryError::TokenHasBalance => {}
         }
     }
     assert_exhaustive(TreasuryError::AlreadyOnHold);
@@ -249,7 +277,7 @@ fn settlement_struct_shape_is_unchanged() {
     let (client, admin) = setup(&env);
     let merchant = Address::generate(&env);
 
-    let sid = client.propose_settlement(&admin, &merchant, &10_000_000);
+    let sid = client.propose_settlement(&admin, &merchant, &10_000_000, &0_u64);
     let settlement: Settlement = client.approve_settlement(&admin, &sid);
 
     let Settlement {
@@ -261,6 +289,8 @@ fn settlement_struct_shape_is_unchanged() {
         status,
         hold_reason,
         proposed_at,
+        execution_deadline,
+        token,
     } = settlement;
 
     assert_eq!(id, sid);
@@ -271,6 +301,8 @@ fn settlement_struct_shape_is_unchanged() {
     assert_settlement_status_exhaustive(status);
     assert_hold_reason_exhaustive(hold_reason);
     assert_eq!(proposed_at, env.ledger().timestamp());
+    assert_eq!(execution_deadline, 0);
+    assert_eq!(token, treasury::MaybeAddress::None);
 }
 
 /// Builds a real `Dispute` through the deployed contract and destructures it with no
@@ -283,8 +315,8 @@ fn dispute_struct_shape_is_unchanged() {
     let merchant = Address::generate(&env);
     let counterparty = Address::generate(&env);
 
-    let sid = client.propose_settlement(&admin, &merchant, &10_000_000);
-    let did = client.raise_dispute(&admin, &sid, &counterparty, &5_000_000, &1_000);
+    let sid = client.propose_settlement(&admin, &merchant, &10_000_000, &0_u64);
+    let did = client.raise_dispute(&admin, &sid, &counterparty, &5_000_000, &1_000, &None);
     let dispute: Dispute = client.get_dispute(&did);
 
     let Dispute {
@@ -299,6 +331,8 @@ fn dispute_struct_shape_is_unchanged() {
         resolution_for_claimant,
         dispute_expires_at,
         claimant_share_bps,
+        evidence_hash,
+        resolution_memo,
     } = dispute;
 
     assert_eq!(id, did);
@@ -312,6 +346,8 @@ fn dispute_struct_shape_is_unchanged() {
     assert!(!resolution_for_claimant);
     assert_eq!(dispute_expires_at, 1_000);
     assert_eq!(claimant_share_bps, 0);
+    assert!(evidence_hash.is_none());
+    assert!(resolution_memo.is_none());
 }
 
 /// Builds a real `SignerRotationProposal` through the deployed contract and
@@ -343,4 +379,48 @@ fn signer_rotation_proposal_struct_shape_is_unchanged() {
     assert!(approval_weight > 0);
     assert_rotation_status_exhaustive(status);
     assert!(captured_old_weight > 0);
+}
+
+fn assert_signer_change_status_exhaustive(status: SignerChangeStatus) {
+    match status {
+        SignerChangeStatus::Pending => {}
+        SignerChangeStatus::Executed => {}
+        SignerChangeStatus::Cancelled => {}
+    }
+}
+
+fn assert_signer_change_kind_exhaustive(kind: SignerChangeKind) {
+    match kind {
+        SignerChangeKind::SetSigner(_, _) => {}
+        SignerChangeKind::RemoveSigner(_) => {}
+        SignerChangeKind::UpdateThreshold(_) => {}
+        SignerChangeKind::UpdateTimelockDelay(_) => {}
+    }
+}
+
+/// Builds a real `SignerChangeProposal` through the deployed contract and
+/// destructures it with no `..` — any field or variant change in multisig's
+/// timelock types causes a compile failure here, forcing deliberate review.
+#[test]
+fn signer_change_proposal_struct_shape_is_unchanged() {
+    let env = Env::default();
+    let (client, admin) = setup(&env);
+    let target = Address::generate(&env);
+
+    let cid = client.propose_signer_change(&admin, &SignerChangeKind::SetSigner(target, 2));
+    let proposal: SignerChangeProposal =
+        client.get_signer_change(&cid).expect("proposal must exist");
+
+    let SignerChangeProposal {
+        id,
+        kind,
+        proposed_at,
+        executable_at,
+        status,
+    } = proposal;
+
+    assert_eq!(id, cid);
+    assert_signer_change_kind_exhaustive(kind);
+    assert!(executable_at > proposed_at);
+    assert_signer_change_status_exhaustive(status);
 }

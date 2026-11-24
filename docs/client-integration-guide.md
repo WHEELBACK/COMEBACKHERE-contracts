@@ -35,14 +35,52 @@ single call.
 ## Error handling: `ProtocolError`
 
 `crates/protocol-errors` exposes `ProtocolError`, a single enum
-(`ProtocolError::Invoice`, `::Treasury`, `::Compliance`) wrapping each
-contract's own error type, with `From` conversions from each. A client that
-wants to handle errors from any of the three contracts with one `match` can
-depend on this crate instead of matching on each contract's error type
-separately. Note this crate currently depends on the contract implementation
-crates for their error types (see the related error-unification issues); once
-that lands, `ProtocolError` should be resolvable from a deployed contract's
-returned error code without depending on the implementation crate at all.
+(`ProtocolError::Invoice`, `::Treasury`, `::Compliance`,
+`::EventEmitter`) wrapping each contract's own error type, with `From`
+conversions from each. A client that wants to handle errors from any of
+these contracts with one `match` can depend on this crate instead of
+matching on each contract's error type separately. Note this crate currently
+depends on the contract implementation crates for their error types (see the
+related error-unification issues); once that lands, `ProtocolError` should be
+resolvable from a deployed contract's returned error code without depending
+on the implementation crate at all.
+
+### Event-emitter error codes
+
+`event-emitter` returns its own error enum, surfaced through
+`ProtocolError::EventEmitter`. Each variant carries a stable numeric code so
+clients can branch on the code without depending on the enum's Rust layout.
+The variants cover the failure modes you are most likely to hit when
+publishing events:
+
+- **Unauthorized** — the caller is not the configured admin/emitter.
+- **NotInitialized** — the contract has not been initialized yet.
+- **AlreadyInitialized** — `initialize` was called more than once.
+- **InvalidTopic** / **InvalidPayload** — the topic or payload failed
+  validation (e.g. empty topic, oversized payload).
+- **TopicNotFound** — the requested subscription/topic does not exist.
+- **Paused** — event emission is currently paused by an admin.
+
+Treat any unrecognized code as a generic failure and log the raw code; new
+variants may be added, so match exhaustively only against the codes you
+handle and fall through for the rest.
+
+### Storage-layout TTL bumps
+
+`storage-layout` stores its configuration and registry entries under
+persistent storage keys. To avoid silent ledger eviction, the contract bumps
+the TTL of every persistent key it touches:
+
+- On **read**, the key's TTL is extended if it has fallen below the
+  documented threshold.
+- On **write**, the key's TTL is extended to the documented extend-to value.
+
+The threshold and extend-to values are exposed as documented constants in
+the contract source. In practice this means integrators do not need to
+schedule their own `extend_ttl` calls for keys the contract reads or writes;
+entries will not silently archive as long as the contract is exercised
+within the bump window. If you read storage directly (outside the contract),
+you are responsible for bumping TTLs yourself.
 
 ## Watching for state changes
 
@@ -66,3 +104,6 @@ position, and deduplicate replayed events — the same requirement documented
 for Invoice's audit trail in `ARCHITECTURE.md`. Current state can always be
 reconciled by calling read entrypoints directly (e.g. `Invoice::get_invoice`,
 `Treasury::get_settlement`) rather than trusting the event log alone.
+
+For concrete TypeScript snippets, see
+[`docs/typescript-integration-examples.md`](typescript-integration-examples.md).

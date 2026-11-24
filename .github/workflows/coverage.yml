@@ -21,8 +21,12 @@ jobs:
       - name: Install cargo-tarpaulin
         run: cargo install cargo-tarpaulin
 
+      # --timeout: tarpaulin's default 60s per-test timeout is shorter than the
+      # instrumented runtime of the compliance/treasury scaling tests (which
+      # drive thousands of contract calls through the test host), so it
+      # aborted the whole run with "Timed out waiting for test response".
       - name: Generate coverage report
-        run: cargo tarpaulin --workspace --out xml
+        run: cargo tarpaulin --workspace --out xml --timeout 1800
 
       # ── Aggregate upload ────────────────────────────────────────────────
       # Uploads the full workspace coverage report so the project-level and
