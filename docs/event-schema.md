@@ -38,19 +38,25 @@ all entrypoints in `contracts/invoice/src/entrypoints/` call through these helpe
 
 | Event | Topics | Data type | Emitted by |
 |---|---|---|---|
-| `invoice_created` | `(Symbol, id: u64)` | `Invoice` | `create_invoice`, `batch_create_invoice` |
+| `invoice_created` | `(Symbol, id: u64)` | `InvoiceCreatedEvent` (v2: `id, merchant, amount_usdc, gross_usdc, expires_at, merchant_nonce, token_address`; v1 was the full `Invoice`) | `create_invoice`, `batch_create_invoice` |
 | `invoice_paid` | `(Symbol, id: u64)` | `Invoice` | `mark_paid` |
 | `invoice_expired` | `(Symbol, id: u64)` | `Invoice` | `batch_expire` |
 | `invoice_cancelled` | `(Symbol, id: u64)` | `Invoice` | `cancel_invoice` |
 | `invoice_refund_requested` | `(Symbol, id: u64)` | `Invoice` | `request_refund` |
 | `refund_approved` | `(Symbol, id: u64)` | `Invoice` | `approve_refund` |
 | `refund_rejected` | `(Symbol, id: u64)` | `Invoice` | `reject_refund` |
+| `template_created` | `(Symbol, template_id: u64)` | `InvoiceTemplate` | `create_template` |
+| `template_activated` | `(Symbol, template_id: u64)` | `bool` (new `active` flag) | `set_template_active` |
+| `template_generated` | `(Symbol, template_id: u64, invoice_id: u64)` | `()` | `generate_due_invoices` |
+| `late_fee_updated` | `(Symbol,)` | `(old_bps: u32, new_bps: u32)` | `set_late_fee_bps` |
 | `escrow_released` | `(Symbol, id: u64)` | `EscrowReleasedEvent` | `release_escrow` |
 | `contract_paused` | `(Symbol,)` | `Address` (admin) | `pause` |
 | `contract_unpaused` | `(Symbol,)` | `Address` (admin) | `unpause` |
 | `invoice_amended` | `(Symbol, id: u64)` | `InvoiceAmountUpdatedEvent` | `amend_invoice` |
 | `invoice_expiry_extended` | `(Symbol, id: u64)` | `InvoiceExpiryExtendedEvent` | `extend_expiry` |
 | `refund_processed` | `(Symbol, id: u64)` | `RefundProcessedEvent` | `process_refund` |
+| `grace_window_updated` | `(Symbol,)` | `GraceWindowUpdatedEvent` | `set_grace_window` |
+| `max_open_invoices_updated` | `(Symbol,)` | `MaxOpenInvoicesUpdatedEvent` | `set_max_open_invoices` |
 
 **`Invoice`** (`contracts/invoice/src/invoice.rs`):
 `id: u64`, `merchant: Address`, `amount_usdc: i128`, `gross_usdc: i128`,
@@ -79,6 +85,19 @@ so an indexer can show a customer exactly what was deducted from their refund
 without re-deriving the fee arithmetic: `gross_amount` is what was paid,
 `processing_fee` is the merchant gateway's `fee_bps` share, `network_fee` is the
 flat payout cost, and `net_amount` is the amount actually transferred.
+
+**`GraceWindowUpdatedEvent`**: `old_seconds: u64`, `new_seconds: u64`.
+
+Emitted by `set_grace_window` each time the admin changes the grace window config.
+Carries both old and new values so off-chain indexers can reconstruct the full
+history of the parameter without reading on-chain state at every past ledger.
+
+**`MaxOpenInvoicesUpdatedEvent`**: `old_limit: u32`, `new_limit: u32`.
+
+Emitted by `set_max_open_invoices` each time the admin changes the per-merchant
+open-invoice cap. A `new_limit` of `0` means the limit is disabled (default). Like
+`GraceWindowUpdatedEvent`, both old and new values are included so indexers can
+track parameter history without a separate state read.
 
 ### Reconstructing invoice status history
 
@@ -115,6 +134,23 @@ Source: `contracts/compliance/src/lib.rs` (single-file contract; no submodules).
 
 None of these events carry the address in a second topic — indexers must decode the
 data payload (or, for the tuple-payload events, its first element) to key by address.
+
+### Tier and jurisdiction audit trail (#750)
+
+`set_tier_limit` and `set_jurisdiction` mutate compliance-relevant configuration, so
+each emits an event on every successful call to keep the audit trail complete:
+
+- `tier_limit_set` — data `(tier: u32, limit: i128)`. Emitted whenever an admin sets
+  or overwrites the per-tier transfer limit for `tier`. Indexers tracking limit
+  history should order by ledger sequence + event position and treat the latest
+  `tier_limit_set` for a given `tier` as the effective limit.
+- `jurisdiction_set` — data `(address: Address, code: Bytes)`. Emitted whenever an
+  admin assigns or overwrites the jurisdiction code for `address`. The `code` is the
+  raw jurisdiction bytes as stored; the latest `jurisdiction_set` for a given
+  `address` is the effective jurisdiction.
+
+Both events are contract-wide (no second topic), so indexers must decode the data
+payload to key by `tier` or `address` respectively.
 
 `AddressState` (returned by `export_snapshot`/`export_snapshot_page`, not itself
 published as an event): `Allowed | Blocked | Expired`.
@@ -170,6 +206,51 @@ contract's pair above and carry the same two-step meaning: an indexer must read
 conclude the admin role has moved until `admin_transferred` arrives. A nomination
 that is never accepted, or that is superseded by a later `transfer_admin`, emits
 no `admin_transferred` at all.
+
+---
+
+## Event Emitter contract
+
+Source: `contracts/event-emitter/src/lib.rs`.
+
+| Event | Topics | Data type | Emitted by |
+|---|---|---|---|
+| `initialized` | `(Symbol,)` | `Address` (admin) | `initialize` |
+| `emitter_paused` | `(Symbol,)` | `Address` (admin) | `pause` |
+| `emitter_unpaused` | `(Symbol,)` | `Address` (admin) | `unpause` |
+| `admin_transfer_initiated` | `(Symbol,)` | `Address` (new_admin) | `transfer_admin` |
+| `admin_transferred` | `(Symbol,)` | `Address` (new_admin) | `accept_admin` |
+| `event_emitted` | `(Symbol, event_id: u64)` | `EventRecord` | `emit_event` |
+| `event_revoked` | `(Symbol, event_id: u64)` | `Address` (revoker) | `revoke_event` |
+| `schema_registered` | `(Symbol, schema_id: u64)` | `EventSchema` | `register_schema` |
+| `schema_deprecated` | `(Symbol, schema_id: u64)` | `EventSchema` | `deprecate_schema` |
+
+### Error codes (#955)
+
+Every failing entrypoint returns an `EventEmitterError` variant. The variants are
+declared in `contracts/event-emitter/src/errors.rs` and re-exported from the crate
+root; the numeric discriminants below are the on-chain ABI that clients decode from
+a failed invocation's `ScError::Contract(u32)`, so they are **append-only**: a new
+variant must take the next free discriminant, and an existing variant must never be
+renumbered, reordered, or removed. Off-chain tooling should map the raw `u32` to a
+message using this table rather than matching on variant names.
+
+| Code | Variant | Meaning |
+|---|---|---|
+| `1` | `NotInitialized` | The contract has not been initialized yet; call `initialize` first. |
+| `2` | `AlreadyInitialized` | `initialize` was called on an already-initialized contract. |
+| `3` | `Unauthorized` | The caller is not the admin/owner required for this entrypoint. |
+| `4` | `Paused` | The contract is paused; the operation is rejected until `unpause`. |
+| `5` | `NotPaused` | `unpause` was called while the contract is not paused. |
+| `6` | `EventNotFound` | No event exists for the supplied `event_id`. |
+| `7` | `EventAlreadyRevoked` | The event was already revoked and cannot be revoked again. |
+| `8` | `SchemaNotFound` | No schema exists for the supplied `schema_id`. |
+| `9` | `SchemaAlreadyDeprecated` | The schema was already deprecated. |
+| `10` | `InvalidInput` | An argument failed validation (empty payload, zero ID, out-of-range value). |
+| `11` | `PayloadTooLarge` | The event payload exceeds the configured maximum size. |
+| `12` | `DuplicateEvent` | An event with the same idempotency key already exists. |
+| `13` | `AdminTransferPending` | An admin transfer is already outstanding; accept or cancel it first. |
+| `14` | `NoPendingAdminTransfer` | `accept_admin` was called with no outstanding nomination. |
 
 ---
 

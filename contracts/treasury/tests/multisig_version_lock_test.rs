@@ -116,6 +116,9 @@ fn treasury_error_shape_is_unchanged() {
     assert_eq!(TreasuryError::DuplicateVote as u32, 45);
     assert_eq!(TreasuryError::NoPendingAdmin as u32, 46);
     assert_eq!(TreasuryError::LabelTooLong as u32, 47);
+    assert_eq!(TreasuryError::InvalidTimelockDelay as u32, 48);
+    assert_eq!(TreasuryError::DuplicateReferenceId as u32, 49);
+    assert_eq!(TreasuryError::TokenHasBalance as u32, 50);
 
     // No wildcard arm: adding, removing, or renaming a variant fails this compile.
     fn assert_exhaustive(err: TreasuryError) {
@@ -166,7 +169,10 @@ fn treasury_error_shape_is_unchanged() {
             | TreasuryError::ApprovalNotFound
             | TreasuryError::DuplicateVote
             | TreasuryError::NoPendingAdmin
-            | TreasuryError::LabelTooLong => {}
+            | TreasuryError::LabelTooLong
+            | TreasuryError::InvalidTimelockDelay
+            | TreasuryError::DuplicateReferenceId
+            | TreasuryError::TokenHasBalance => {}
         }
     }
     assert_exhaustive(TreasuryError::AlreadyOnHold);
@@ -326,6 +332,7 @@ fn dispute_struct_shape_is_unchanged() {
         dispute_expires_at,
         claimant_share_bps,
         evidence_hash,
+        resolution_memo,
     } = dispute;
 
     assert_eq!(id, did);
@@ -340,6 +347,7 @@ fn dispute_struct_shape_is_unchanged() {
     assert_eq!(dispute_expires_at, 1_000);
     assert_eq!(claimant_share_bps, 0);
     assert!(evidence_hash.is_none());
+    assert!(resolution_memo.is_none());
 }
 
 /// Builds a real `SignerRotationProposal` through the deployed contract and
@@ -386,6 +394,7 @@ fn assert_signer_change_kind_exhaustive(kind: SignerChangeKind) {
         SignerChangeKind::SetSigner(_, _) => {}
         SignerChangeKind::RemoveSigner(_) => {}
         SignerChangeKind::UpdateThreshold(_) => {}
+        SignerChangeKind::UpdateTimelockDelay(_) => {}
     }
 }
 

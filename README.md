@@ -35,16 +35,27 @@ Built with **Rust** and **Soroban**, these contracts prioritize security, perfor
 
 ```text
 contracts/
-├── invoice/       # Invoice escrow state machine and payment lifecycle
-├── treasury/      # 2-of-3 multisignature treasury settlement workflow
-└── compliance/    # Admin-managed allowlist and blocklist controls
+├── invoice/              # Invoice escrow state machine and payment lifecycle
+├── treasury/             # 2-of-3 multisignature treasury settlement workflow
+├── compliance/           # Admin-managed allowlist and blocklist controls
+└── settlement-workflow/  # Compliance-gated settlement execution + emergency pause orchestration
+
+crates/
+├── multisig/             # Shared multisig types and threshold helpers
+├── compliance-client/    # Cross-contract client for Compliance::is_allowed
+├── compliance-errors/    # ComplianceError enum
+├── invoice-errors/       # InvoiceError enum
+├── error-macros/         # declare_contract_error! proc-macro
+└── protocol-errors/      # ProtocolError unifying all contract error enums
 ```
 
-| Contract     | Purpose                                                                 |
-| ------------ | ----------------------------------------------------------------------- |
-| `invoice`    | Manages invoice creation, escrow state, and payment confirmation        |
-| `treasury`   | Handles secure multi-signature settlement approvals (2-of-3)            |
-| `compliance` | Maintains protocol allowlists and blocklists for compliance enforcement |
+| Contract / Crate    | Purpose                                                                                      |
+| ------------------- | -------------------------------------------------------------------------------------------- |
+| `invoice`           | Manages invoice creation, escrow state, and payment confirmation                             |
+| `treasury`          | Handles secure multi-signature settlement approvals (2-of-3)                                 |
+| `compliance`        | Maintains protocol allowlists, blocklists, and Merkle-root bulk imports                      |
+| `settlement-workflow` | Gates `execute_settlement` behind compliance checks; orchestrates emergency pause/resume   |
+| `multisig`          | Shared types (`Settlement`, `Dispute`, `TreasuryError`) and helpers (`record_approval`, `meets_threshold`, `approval_expiry`) — see [`crates/multisig/README.md`](crates/multisig/README.md) |
 
 ---
 
@@ -205,3 +216,18 @@ Before submitting a pull request, make sure to:
 # License
 
 This project is licensed under the **MIT License**.
+
+## Handsoff notes
+
+<!-- handsoff-issue-751 -->
+- #751: Validate jurisdiction codes as ISO 3166-1 alpha-2
+
+<!-- handsoff-issue-752 -->
+- #752: Add `get_addresses_by_jurisdiction` paginated read
+<!-- handsoff-issue-760 -->
+- #760: Emit event on `set_blocklist_root`
+<!-- handsoff-issue-748 -->
+- #748: Split `contracts/compliance/src/lib.rs` (1,677 lines) into submodules
+
+<!-- handsoff-issue-806 -->
+- #806: Update error-code tables in ARCHITECTURE.md after multisig renumber

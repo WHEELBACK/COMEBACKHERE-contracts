@@ -18,7 +18,8 @@
 
 use compliance::{ComplianceContract, ComplianceContractClient, DataKey as ComplianceDataKey};
 use invoice::{
-    DataKey as InvoiceDataKey, Invoice, InvoiceContract, InvoiceContractClient, MaybeAddress,
+    DataKey as InvoiceDataKey, Invoice, InvoiceContract, InvoiceContractClient, InvoiceCreatedEvent,
+    MaybeAddress,
     MaybeBytes,
 };
 use soroban_sdk::{
@@ -161,7 +162,7 @@ fn invoice_created_event_data_matches_storage_at_emission() {
         last_event_symbol(&env),
         Symbol::new(&env, "invoice_created")
     );
-    let event_invoice = Invoice::try_from_val(&env, &last_event_data(&env)).unwrap();
+    let event = InvoiceCreatedEvent::try_from_val(&env, &last_event_data(&env)).unwrap();
 
     let env2 = env.clone();
     let stored_invoice: Invoice = env.as_contract(&invoice_id, || {
@@ -171,8 +172,14 @@ fn invoice_created_event_data_matches_storage_at_emission() {
             .unwrap()
     });
 
-    assert_eq!(event_invoice, stored_invoice);
-    assert_eq!(event_invoice.id, id);
+    assert_eq!(event.id, id);
+    assert_eq!(event.id, stored_invoice.id);
+    assert_eq!(event.merchant, stored_invoice.merchant);
+    assert_eq!(event.amount_usdc, stored_invoice.amount_usdc);
+    assert_eq!(event.gross_usdc, stored_invoice.gross_usdc);
+    assert_eq!(event.expires_at, stored_invoice.expires_at);
+    assert_eq!(event.merchant_nonce, stored_invoice.merchant_nonce);
+    assert_eq!(event.token_address, stored_invoice.token_address);
 }
 
 // ── address_blocked round-trip ──────────────────────────────────────────────
@@ -209,4 +216,140 @@ fn address_blocked_event_data_matches_storage_at_emission() {
         "storage must show Blocked=true for the address named in the event, \
          read at the same point the event fired"
     );
+}
+
+// ── invariant verification precedes event emission ──────────────────────────
+//
+// The tests above prove that, for a *successful* call, the event data matches
+// storage. They do not prove the converse: that when the post-mutation state
+// would violate an invariant, the call fails *before* publishing an event.
+// If an entrypoint mutated storage, emitted an event, and only then tripped an
+// invariant check, an indexer would observe a state transition that the
+// contract itself considers invalid. These tests assert that no event is
+// published for the failing call, i.e. the invariant is enforced strictly and
+// ahead of emission.
+
+#[test]
+fn no_settlement_executed_event_when_invariant_violated() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let admin = Address::generate(&env);
+    let merchant = Address::generate(&env);
+    let treasury_id = env.register_contract(None, TreasuryContract);
+    let client = TreasuryContractClient::new(&env, &treasury_id);
+    client.initialize(&admin, &1, &soroban_sdk::Vec::new(&env));
+    let token_id = env.register_contract(None, FakeToken);
+
+    let sid = client.propose_settlement(&admin, &merchant, &10_000_000, &0_u64);
+    client.execute_settlement(&admin, &sid, &token_id);
+
+    // Re-executing an already-executed settlement must be rejected by the
+    // status invariant. Capture the event count before the failing call and
+    // assert it is unchanged afterwards: a rejected transition must not be
+    // observable off-chain.
+    let events_before = env.events().all().len();
+    let result = client.try_execute_settlement(&admin, &sid, &token_id);
+    assert!(result.is_err(), "re-executing a settlement must fail");
+    assert_eq!(
+        env.events().all().len(),
+        events_before,
+        "a rejected settlement transition must not emit settlement_executed"
+    );
+
+    // Storage must still reflect the single successful execution.
+    let env2 = env.clone();
+    let stored: Settlement = env.as_contract(&treasury_id, || {
+        env2.storage()
+            .persistent()
+            .get(&TreasuryDataKey::Settlement(sid))
+            .unwrap()
+    });
+    assert_eq!(stored.status, treasury::SettlementStatus::Executed);
+}
+
+#[test]
+fn no_address_blocked_event_when_invariant_violated() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let admin = Address::generate(&env);
+    let subject = Address::generate(&env);
+    let compliance_id = env.register_contract(None, ComplianceContract);
+    let client = ComplianceContractClient::new(&env, &compliance_id);
+    client.initialize(&admin);
+
+    client.block_address(&admin, &subject, &None);
+
+    // Blocking an already-blocked address must be rejected by the invariant
+    // check ahead of emission; no duplicate address_blocked event may escape.
+    let events_before = env.events().all().len();
+    let result = client.try_block_address(&admin, &subject, &None);
+    assert!(result.is_err(), "re-blocking an address must fail");
+    assert_eq!(
+        env.events().all().len(),
+        events_before,
+        "a rejected block transition must not emit address_blocked"
+    );
+
+    let env2 = env.clone();
+    let stored_blocked: bool = env.as_contract(&compliance_id, || {
+        env2.storage()
+            .persistent()
+            .get(&ComplianceDataKey::Blocked(subject.clone()))
+            .unwrap_or(false)
+    });
+    assert!(stored_blocked);
+}
+
+#[test]
+fn no_invoice_created_event_when_invariant_violated() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let admin = Address::generate(&env);
+    let merchant = Address::generate(&env);
+    let invoice_id = env.register_contract(None, InvoiceContract);
+    let client = InvoiceContractClient::new(&env, &invoice_id);
+    client.initialize(&admin);
+
+    let id = client.create_invoice(
+        &merchant,
+        &10_000_000,
+        &10_250_000,
+        &3600,
+        &MaybeBytes::None,
+        &MaybeBytes::None,
+        &0,
+        &MaybeAddress::None,
+    );
+
+    // Reusing the same merchant nonce must be rejected by the uniqueness
+    // invariant before any invoice_created event is published, so an indexer
+    // never sees two creations for the same (merchant, nonce) pair.
+    let events_before = env.events().all().len();
+    let result = client.try_create_invoice(
+        &merchant,
+        &10_000_000,
+        &10_250_000,
+        &3600,
+        &MaybeBytes::None,
+        &MaybeBytes::None,
+        &0,
+        &MaybeAddress::None,
+    );
+    assert!(result.is_err(), "reusing a merchant nonce must fail");
+    assert_eq!(
+        env.events().all().len(),
+        events_before,
+        "a rejected invoice creation must not emit invoice_created"
+    );
+
+    // The original invoice must be untouched and still match its event data.
+    let env2 = env.clone();
+    let stored_invoice: Invoice = env.as_contract(&invoice_id, || {
+        env2.storage()
+            .persistent()
+            .get(&InvoiceDataKey::Invoice(id))
+            .unwrap()
+    });
+    assert_eq!(stored_invoice.id, id);
+    assert_eq!(stored_invoice.merchant, merchant);
 }

@@ -1,4 +1,4 @@
-use protocol_errors::{ComplianceError, InvoiceError, ProtocolError, TreasuryError};
+use protocol_errors::{ComplianceError, InvoiceError, ProtocolError, TreasuryError, WorkflowError};
 
 /// Guards against silent ABI drift in `ProtocolError` itself, the same way
 /// `contracts/treasury/tests/multisig_version_lock_test.rs` guards multisig's
@@ -6,11 +6,11 @@ use protocol_errors::{ComplianceError, InvoiceError, ProtocolError, TreasuryErro
 ///
 /// `protocol-errors`' own doc comment describes `ProtocolError` as the type
 /// off-chain integration clients are meant to use to handle errors from any
-/// of this protocol's contracts. That makes its three-variant shape
-/// (`Invoice`, `Treasury`, `Compliance`) part of the protocol's ABI surface,
-/// but until now nothing in the workspace failed to compile if a variant
-/// were removed, renamed, or a fourth contract's error type were added here
-/// without review.
+/// of this protocol's contracts. That makes its four-variant shape
+/// (`Invoice`, `Treasury`, `Compliance`, `Workflow`) part of the protocol's
+/// ABI surface, but until now nothing in the workspace failed to compile if a
+/// variant were removed, renamed, or a new contract's error type were added
+/// here without review.
 ///
 /// This match has no wildcard arm: adding, removing, or renaming a
 /// `ProtocolError` variant fails this file to *compile*, forcing a
@@ -20,6 +20,7 @@ fn assert_protocol_error_exhaustive(err: ProtocolError) {
         ProtocolError::Invoice(_) => {}
         ProtocolError::Treasury(_) => {}
         ProtocolError::Compliance(_) => {}
+        ProtocolError::Workflow(_) => {}
     }
 }
 
@@ -30,6 +31,7 @@ fn protocol_error_variants_are_exhaustive() {
     assert_protocol_error_exhaustive(ProtocolError::Compliance(
         ComplianceError::AlreadyInitialized,
     ));
+    assert_protocol_error_exhaustive(ProtocolError::Workflow(WorkflowError::NotConfigured));
 }
 
 #[test]
@@ -38,9 +40,10 @@ fn all_contract_names_are_distinct() {
         ProtocolError::Invoice(InvoiceError::NotFound).contract_name(),
         ProtocolError::Treasury(TreasuryError::SettlementNotFound).contract_name(),
         ProtocolError::Compliance(ComplianceError::AlreadyInitialized).contract_name(),
+        ProtocolError::Workflow(WorkflowError::NotConfigured).contract_name(),
     ];
     let unique: std::collections::HashSet<_> = names.iter().collect();
-    assert_eq!(unique.len(), 3, "contract_name() values must be unique");
+    assert_eq!(unique.len(), 4, "contract_name() values must be unique");
 }
 
 #[test]
@@ -49,6 +52,7 @@ fn round_trip_from_impls() {
         (InvoiceError::InvalidAmount.into(), "invoice"),
         (TreasuryError::ZeroThreshold.into(), "treasury"),
         (ComplianceError::AlreadyInitialized.into(), "compliance"),
+        (WorkflowError::Unauthorized.into(), "settlement-workflow"),
     ];
     for (err, expected_name) in pairs {
         assert_eq!(err.contract_name(), *expected_name);
@@ -66,6 +70,9 @@ fn question_mark_propagation() {
     fn try_compliance() -> Result<(), ProtocolError> {
         Err(ComplianceError::AlreadyInitialized)?
     }
+    fn try_workflow() -> Result<(), ProtocolError> {
+        Err(WorkflowError::NotConfigured)?
+    }
 
     assert_eq!(
         try_invoice().unwrap_err(),
@@ -78,6 +85,10 @@ fn question_mark_propagation() {
     assert_eq!(
         try_compliance().unwrap_err(),
         ProtocolError::Compliance(ComplianceError::AlreadyInitialized)
+    );
+    assert_eq!(
+        try_workflow().unwrap_err(),
+        ProtocolError::Workflow(WorkflowError::NotConfigured)
     );
 }
 
@@ -102,4 +113,5 @@ fn every_error_has_description() {
     assert_eq!(check::<InvoiceError>(), 28);
     assert_eq!(check::<TreasuryError>(), 47);
     assert_eq!(check::<ComplianceError>(), 1);
+    assert_eq!(check::<WorkflowError>(), 10);
 }

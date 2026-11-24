@@ -52,18 +52,12 @@ fuzz_target!(|input: Input| {
     // chosen contract IDs / merchant entities.
     let compliance_id = env.register(ComplianceContract, ());
     let treasury_id = env.register(TreasuryContract, ());
-    let workflow_id = env.register(SettlementWorkflowContract, ());
 
     let compliance = ComplianceContractClient::new(&env, &compliance_id);
     compliance.initialize(&admin);
 
     let treasury = TreasuryContractClient::new(&env, &treasury_id);
     treasury.initialize(&admin, &1, &Vec::new(&env));
-
-    let workflow = SettlementWorkflowContractClient::new(&env, &workflow_id);
-    // The workflow executes settlements as itself, so it must be an authorized
-    // Treasury signer (mirrors the production setup in settlement_workflow_test.rs).
-    treasury.set_signer(&admin, &workflow_id, &1);
 
     // Pool: index 0 = real compliance, index 1 = real treasury, rest unregistered.
     let mut pool: Vec<Address> = Vec::new(&env);
@@ -91,7 +85,14 @@ fuzz_target!(|input: Input| {
         input.settlement_id
     };
 
-    workflow.initialize(&admin, &compliance_arg, &treasury_arg);
+    let workflow_id = env.register(
+        SettlementWorkflowContract,
+        (admin.clone(), compliance_arg.clone(), treasury_arg.clone()),
+    );
+    let workflow = SettlementWorkflowContractClient::new(&env, &workflow_id);
+    // The workflow executes settlements as itself, so it must be an authorized
+    // Treasury signer (mirrors the production setup in settlement_workflow_test.rs).
+    treasury.set_signer(&admin, &workflow_id, &1);
 
     // Only the Result matters here: any Ok/Err is acceptable, a panic is not.
     let _ = workflow.try_execute_with_compliance(&settlement_id, &token_contract, &merchant);

@@ -4,9 +4,6 @@ version = "1.0.0"
 edition = "2021"
 license.workspace = true
 publish = false
-description = "Role and permission registry for the COMEBACKHERE protocol"
-keywords = ["soroban", "stellar", "access-control"]
-categories = ["cryptography::cryptocurrencies"]
 
 [lib]
 crate-type = ["cdylib", "rlib"]
@@ -20,4 +17,3 @@ soroban-sdk.workspace = true
 
 [dev-dependencies]
 soroban-sdk = { workspace = true, features = ["testutils"] }
-proptest = "1"

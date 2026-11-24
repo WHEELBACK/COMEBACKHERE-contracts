@@ -71,9 +71,34 @@ uniqueness tests are per-contract and why no global key registry is needed.
 | Contract | Key enum | Location | Variants |
 |---|---|---|---|
 | Invoice (escrow + refund records) | `invoice::DataKey` | `contracts/invoice/src/invoice.rs` | 14 |
-| Treasury (escrow, settlements, signers) | `multisig::DataKey` (re-exported as `treasury::DataKey`) | `crates/multisig/src/lib.rs` | 24 |
+| Treasury (escrow, settlements, signers, roles) | `multisig::DataKey` (re-exported as `treasury::DataKey`) | `crates/multisig/src/lib.rs` | 26 |
 | Compliance (allowlist/blocklist) | `compliance::DataKey` | `contracts/compliance/src/lib.rs` | 22 |
 | Settlement workflow (orchestrator) | `settlement_workflow::DataKey` | `contracts/settlement-workflow/src/lib.rs` | 3 |
+| Storage layout (slot metadata, layout registry) | `storage_layout::DataKey` | `contracts/storage-layout/src/lib.rs` | 6 |
+
+### Storage-layout invariants (#961, #963, #966)
+
+The `storage-layout` contract follows the same append-only, one-concept-per-
+variant conventions as the contracts above. Three hardening changes landed on
+it and are worth knowing about when touching its key space:
+
+- **Streamlined deserialization (#961).** Stored records are decoded once per
+  entrypoint into a single validated value rather than re-read and re-decoded
+  per field, which cuts host memory and CPU instruction allocation. Any decode
+  failure is surfaced as a typed error, never a panic.
+- **Strict invariant verification (#963).** Every read path re-checks the
+  invariants that the write path established (slot bounds, layout/registry
+  consistency, monotonic version counters) and returns a typed error on
+  violation instead of trusting stored state. A violated invariant is treated
+  as state inconsistency, not as a recoverable miss.
+- **Zero-balance edge cases (#966).** Zero and absent balances are handled
+  explicitly: a zero balance is a valid state that is returned as `0` rather
+  than triggering a division, subtraction or unwrap panic, and an absent
+  balance is distinguished from a stored zero where the entrypoint's contract
+  requires it.
+
+The contract's `storage_key_uniqueness_test.rs` lists its variants
+exhaustively, so a new variant must be appended there in the same change.
 
 ### Issue #86 audit targets and where they live
 
@@ -105,6 +130,33 @@ The corresponding structural findings and fixes:
 - Every contract exposes its enum publicly (`invoice::DataKey`,
   `treasury::DataKey`, `compliance::DataKey`, `settlement_workflow::DataKey`)
   so the audit is executable rather than a review comment.
+
+### Role storage keys (issues #960, #970)
+
+Role-based authorization state lives in the treasury key space under two
+appended variants:
+
+- `DataKey::Role(Address, Role)` — the per-address, per-role grant. The
+  composite key carries both the holder and the role so that granting one role
+  never overwrites another; a single-address form would have merged them.
+- `DataKey::RoleList` — the enumerable index of role holders, so role
+  enumeration is O(page) rather than a full storage scan.
+
+Both are append-only additions: no existing variant was renumbered, reordered
+or repurposed, so previously stored data keeps its meaning.
+
+Role lookups read exactly one key. `has_role`/`require_role` deserialize only
+`DataKey::Role(addr, role)` and never load or deserialize the full signer list
+or `RoleList`; the list is touched only by enumeration entrypoints. This keeps
+the ledger footprint of an authorization check to a single key and avoids
+paying host memory and CPU instructions for records the check does not need.
+The same targeted-key read pattern is used by the `access-control` contract
+when resolving a caller's role, replacing the previous whole-list
+deserialization.
+
+This is a non-breaking, storage-compatible update: the on-chain key
+representation and the stored value shapes are unchanged, only the set of keys
+read per call is narrowed. No migration is required.
 
 ## Change procedure
 

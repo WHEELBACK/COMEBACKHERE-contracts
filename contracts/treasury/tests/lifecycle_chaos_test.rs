@@ -542,3 +542,466 @@ fn every_boundary_failure_leaves_state_consistent() {
         }
     }
 }
+
+// ---------------------------------------------------------------------------
+// Lifecycle chaos: long operation sequences with per-step invariant checks.
+// ---------------------------------------------------------------------------
+
+/// A single inconsistency detected by [`check_invariants`]. Returned (rather
+/// than panicking) so a chaos run can report exactly which step and which
+/// invariant broke, instead of aborting at the first `assert!`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct InvariantViolation {
+    /// Index of the operation in the chaos sequence that produced the state.
+    step: usize,
+    /// Human-readable name of the operation that produced the state.
+    operation: &'static str,
+    /// Which invariant failed and the observed values.
+    detail: String,
+}
+
+impl InvariantViolation {
+    fn new(step: usize, operation: &'static str, detail: impl Into<String>) -> Self {
+        Self {
+            step,
+            operation,
+            detail: detail.into(),
+        }
+    }
+}
+
+/// Snapshot of the cross-contract state used for invariant verification.
+#[derive(Clone, Debug)]
+struct Snapshot {
+    settlement_status: SettlementStatus,
+    invoice_status: InvoiceStatus,
+    treasury_balance: i128,
+    merchant_balance: i128,
+    minted_total: i128,
+    /// Whether the merchant is currently on the compliance allowlist.
+    merchant_allowed: bool,
+    /// Whether the invoice contract is paused.
+    invoice_paused: bool,
+}
+
+/// Strict invariant verification. Returns the first violation found, or `Ok`
+/// when the snapshot is fully consistent. This is the defensive check the
+/// chaos runner applies after *every* operation.
+fn check_invariants(
+    step: usize,
+    operation: &'static str,
+    s: &Snapshot,
+) -> Result<(), InvariantViolation> {
+    // 1. Token conservation - nothing minted or burned by a partial failure.
+    if s.treasury_balance + s.merchant_balance != s.minted_total {
+        return Err(InvariantViolation::new(
+            step,
+            operation,
+            format!(
+                "token conservation violated: treasury {} + merchant {} != minted {}",
+                s.treasury_balance, s.merchant_balance, s.minted_total
+            ),
+        ));
+    }
+
+    // 2. All-or-nothing payout - never a partially applied transfer.
+    if s.merchant_balance != 0 && s.merchant_balance != s.minted_total {
+        return Err(InvariantViolation::new(
+            step,
+            operation,
+            format!(
+                "partial payout: merchant holds {} (expected 0 or {})",
+                s.merchant_balance, s.minted_total
+            ),
+        ));
+    }
+
+    // 3. Merchant is paid iff the settlement executed.
+    let merchant_paid = s.merchant_balance == s.minted_total;
+    if merchant_paid != (s.settlement_status == SettlementStatus::Executed) {
+        return Err(InvariantViolation::new(
+            step,
+            operation,
+            format!(
+                "merchant-paid ({merchant_paid}) disagrees with settlement status {:?}",
+                s.settlement_status
+            ),
+        ));
+    }
+
+    // 4. Settlement never lands in a partial/limbo status.
+    if !matches!(
+        s.settlement_status,
+        SettlementStatus::Pending | SettlementStatus::OnHold | SettlementStatus::Executed
+    ) {
+        return Err(InvariantViolation::new(
+            step,
+            operation,
+            format!("settlement in unexpected status {:?}", s.settlement_status),
+        ));
+    }
+
+    // 5. Invoice never wedges - always Paid (retryable) or Released.
+    if !matches!(
+        s.invoice_status,
+        InvoiceStatus::Paid | InvoiceStatus::Released
+    ) {
+        return Err(InvariantViolation::new(
+            step,
+            operation,
+            format!("invoice in unexpected status {:?}", s.invoice_status),
+        ));
+    }
+
+    // 6. Escrow is only released once the settlement has actually executed.
+    if s.invoice_status == InvoiceStatus::Released
+        && s.settlement_status != SettlementStatus::Executed
+    {
+        return Err(InvariantViolation::new(
+            step,
+            operation,
+            format!(
+                "invoice Released while settlement is {:?}",
+                s.settlement_status
+            ),
+        ));
+    }
+
+    // 7. A paused invoice can never have released its escrow.
+    if s.invoice_paused && s.invoice_status == InvoiceStatus::Released {
+        return Err(InvariantViolation::new(
+            step,
+            operation,
+            "invoice Released while the contract is paused",
+        ));
+    }
+
+    // 8. A disallowed merchant can never have been paid.
+    if !s.merchant_allowed && merchant_paid {
+        return Err(InvariantViolation::new(
+            step,
+            operation,
+            "merchant paid while not on the compliance allowlist",
+        ));
+    }
+
+    Ok(())
+}
+
+/// One step in a chaos sequence. Each variant is applied to the live context;
+/// the runner snapshots and verifies invariants after every step.
+#[derive(Clone, Copy, Debug)]
+enum ChaosOp {
+    /// Mint `AMOUNT` to the treasury (a deposit).
+    Deposit,
+    /// Propose a settlement for the merchant.
+    Propose,
+    /// Approve the most recent settlement with the second signer.
+    Approve,
+    /// Raise a dispute, moving the settlement `OnHold`.
+    RaiseDispute,
+    /// Resolve the dispute, returning the settlement to `Pending`.
+    ResolveDispute,
+    /// Allow the merchant through the compliance gate.
+    AllowMerchant,
+    /// Revoke the merchant from the compliance allowlist.
+    RevokeMerchant,
+    /// Pause the invoice contract.
+    PauseInvoice,
+    /// Unpause the invoice contract.
+    UnpauseInvoice,
+    /// Attempt to execute the most recent settlement.
+    Execute,
+    /// Attempt to release the invoice escrow.
+    ReleaseEscrow,
+}
+
+impl ChaosOp {
+    fn name(self) -> &'static str {
+        match self {
+            ChaosOp::Deposit => "deposit",
+            ChaosOp::Propose => "propose",
+            ChaosOp::Approve => "approve",
+            ChaosOp::RaiseDispute => "raise_dispute",
+            ChaosOp::ResolveDispute => "resolve_dispute",
+            ChaosOp::AllowMerchant => "allow_merchant",
+            ChaosOp::RevokeMerchant => "revoke_merchant",
+            ChaosOp::PauseInvoice => "pause_invoice",
+            ChaosOp::UnpauseInvoice => "unpause_invoice",
+            ChaosOp::Execute => "execute",
+            ChaosOp::ReleaseEscrow => "release_escrow",
+        }
+    }
+}
+
+/// Mutable state threaded through a chaos run.
+struct ChaosCtx {
+    ctx: Ctx,
+    inv_id: u64,
+    settlement_id: Option<u64>,
+    minted_total: i128,
+    merchant_allowed: bool,
+    invoice_paused: bool,
+}
+
+impl ChaosCtx {
+    fn new() -> Self {
+        let ctx = setup();
+        let inv_id = ctx.invoice.create_invoice(
+            &ctx.merchant,
+            &AMOUNT,
+            &(AMOUNT + 250_000),
+            &3600,
+            &MaybeBytes::None,
+            &MaybeBytes::None,
+            &0,
+            &MaybeAddress::None,
+        );
+        ctx.invoice.mark_paid(
+            &ctx.admin,
+            &inv_id,
+            &ctx.payer,
+            &MaybeBytes::None,
+            &MaybeAddress::None,
+        );
+        Self {
+            ctx,
+            inv_id,
+            settlement_id: None,
+            minted_total: 0,
+            merchant_allowed: false,
+            invoice_paused: false,
+        }
+    }
+
+    fn snapshot(&self) -> Snapshot {
+        let settlement_status = match self.settlement_id {
+            Some(id) => self.ctx.treasury.get_settlement(&id).status,
+            // No settlement proposed yet: the invoice is still cleanly Paid and
+            // nothing has moved, which is consistent with a `Pending` view.
+            None => SettlementStatus::Pending,
+        };
+        Snapshot {
+            settlement_status,
+            invoice_status: self.ctx.invoice.get_invoice(&self.inv_id).status,
+            treasury_balance: self.ctx.token.balance(&self.ctx.treasury_id),
+            merchant_balance: self.ctx.token.balance(&self.ctx.merchant),
+            minted_total: self.minted_total,
+            merchant_allowed: self.merchant_allowed,
+            invoice_paused: self.invoice_paused,
+        }
+    }
+
+    /// Applies one operation. Cross-contract calls that are *expected* to fail
+    /// (e.g. executing an on-hold settlement) are caught so the sequence keeps
+    /// running; the invariant check afterwards is what matters.
+    fn apply(&mut self, op: ChaosOp) {
+        match op {
+            ChaosOp::Deposit => {
+                self.ctx.token.mint(&self.ctx.treasury_id, &AMOUNT);
+                self.minted_total += AMOUNT;
+            }
+            ChaosOp::Propose => {
+                let id = self.ctx.treasury.propose_settlement(
+                    &self.ctx.admin,
+                    &self.ctx.merchant,
+                    &AMOUNT,
+                    &0_u64,
+                );
+                self.settlement_id = Some(id);
+            }
+            ChaosOp::Approve => {
+                if let Some(id) = self.settlement_id {
+                    let _ = catch_unwind(AssertUnwindSafe(|| {
+                        self.ctx.treasury.approve_settlement(&self.ctx.signer2, &id);
+                    }));
+                }
+            }
+            ChaosOp::RaiseDispute => {
+                if let Some(id) = self.settlement_id {
+                    let claimant = Address::generate(&self.ctx.env);
+                    let _ = catch_unwind(AssertUnwindSafe(|| {
+                        self.ctx.treasury.raise_dispute(
+                            &claimant,
+                            &id,
+                            &self.ctx.merchant,
+                            &1,
+                            &u64::MAX,
+                            &None,
+                        );
+                    }));
+                }
+            }
+            ChaosOp::ResolveDispute => {
+                if let Some(id) = self.settlement_id {
+                    let _ = catch_unwind(AssertUnwindSafe(|| {
+                        self.ctx.treasury.resolve_dispute(&self.ctx.admin, &id);
+                    }));
+                }
+            }
+            ChaosOp::AllowMerchant => {
+                self.ctx
+                    .compliance_client()
+                    .allow_address(&self.ctx.admin, &self.ctx.merchant);
+                self.merchant_allowed = true;
+            }
+            ChaosOp::RevokeMerchant => {
+                let _ = catch_unwind(AssertUnwindSafe(|| {
+                    self.ctx
+                        .compliance_client()
+                        .revoke_address(&self.ctx.admin, &self.ctx.merchant);
+                }));
+                self.merchant_allowed = false;
+            }
+            ChaosOp::PauseInvoice => {
+                self.ctx.invoice.pause(&self.ctx.admin);
+                self.invoice_paused = true;
+            }
+            ChaosOp::UnpauseInvoice => {
+                self.ctx.invoice.unpause(&self.ctx.admin);
+                self.invoice_paused = false;
+            }
+            ChaosOp::Execute => {
+                if let Some(id) = self.settlement_id {
+                    let _ = catch_unwind(AssertUnwindSafe(|| {
+                        ChaosWorkflowClient::new(&self.ctx.env, &self.ctx.wf_id).execute(
+                            &self.ctx.compliance_id,
+                            &self.ctx.treasury_id,
+                            &id,
+                            &self.ctx.token_id,
+                            &self.ctx.merchant,
+                        );
+                    }));
+                }
+            }
+            ChaosOp::ReleaseEscrow => {
+                let _ = catch_unwind(AssertUnwindSafe(|| {
+                    self.ctx.invoice.release_escrow(&self.ctx.admin, &self.inv_id);
+                }));
+            }
+        }
+    }
+}
+
+impl Ctx {
+    fn compliance_client(&self) -> ComplianceContractClient<'_> {
+        ComplianceContractClient::new(&self.env, &self.compliance_id)
+    }
+}
+
+/// Runs `ops` against a fresh context, verifying invariants after every step.
+/// Returns the first violation, if any.
+fn run_chaos(ops: &[ChaosOp]) -> Result<(), InvariantViolation> {
+    let mut state = ChaosCtx::new();
+    for (step, op) in ops.iter().enumerate() {
+        state.apply(*op);
+        check_invariants(step, op.name(), &state.snapshot())?;
+    }
+    Ok(())
+}
+
+#[test]
+fn chaos_deposit_and_settle_sequence_holds_invariants() {
+    let ops = [
+        ChaosOp::Deposit,
+        ChaosOp::AllowMerchant,
+        ChaosOp::Propose,
+        ChaosOp::Approve,
+        ChaosOp::Execute,
+        ChaosOp::ReleaseEscrow,
+    ];
+    assert_eq!(run_chaos(&ops), Ok(()));
+}
+
+#[test]
+fn chaos_hold_and_resume_sequence_holds_invariants() {
+    let ops = [
+        ChaosOp::Deposit,
+        ChaosOp::AllowMerchant,
+        ChaosOp::Propose,
+        ChaosOp::Approve,
+        ChaosOp::RaiseDispute,
+        ChaosOp::Execute, // rejected: settlement OnHold
+        ChaosOp::ResolveDispute,
+        ChaosOp::Execute,
+        ChaosOp::ReleaseEscrow,
+    ];
+    assert_eq!(run_chaos(&ops), Ok(()));
+}
+
+#[test]
+fn chaos_role_change_sequence_holds_invariants() {
+    let ops = [
+        ChaosOp::Deposit,
+        ChaosOp::AllowMerchant,
+        ChaosOp::Propose,
+        ChaosOp::Approve,
+        ChaosOp::RevokeMerchant,
+        ChaosOp::Execute, // rejected: merchant no longer allowed
+        ChaosOp::AllowMerchant,
+        ChaosOp::Execute,
+        ChaosOp::ReleaseEscrow,
+    ];
+    assert_eq!(run_chaos(&ops), Ok(()));
+}
+
+#[test]
+fn chaos_pause_interleaving_sequence_holds_invariants() {
+    let ops = [
+        ChaosOp::Deposit,
+        ChaosOp::AllowMerchant,
+        ChaosOp::Propose,
+        ChaosOp::Approve,
+        ChaosOp::PauseInvoice,
+        ChaosOp::Execute,
+        ChaosOp::ReleaseEscrow, // rejected: invoice paused
+        ChaosOp::UnpauseInvoice,
+        ChaosOp::ReleaseEscrow,
+    ];
+    assert_eq!(run_chaos(&ops), Ok(()));
+}
+
+#[test]
+fn chaos_repeated_deposits_and_holds_hold_invariants() {
+    let ops = [
+        ChaosOp::Deposit,
+        ChaosOp::Deposit,
+        ChaosOp::AllowMerchant,
+        ChaosOp::Propose,
+        ChaosOp::RaiseDispute,
+        ChaosOp::ResolveDispute,
+        ChaosOp::RaiseDispute,
+        ChaosOp::ResolveDispute,
+        ChaosOp::Approve,
+        ChaosOp::Execute,
+        ChaosOp::ReleaseEscrow,
+    ];
+    assert_eq!(run_chaos(&ops), Ok(()));
+}
+
+/// Fuzz-style sweep: every prefix of a long mixed sequence must leave the
+/// system consistent, so no intermediate state is ever corrupt.
+#[test]
+fn chaos_every_prefix_of_mixed_sequence_is_consistent() {
+    let full = [
+        ChaosOp::Deposit,
+        ChaosOp::Propose,
+        ChaosOp::AllowMerchant,
+        ChaosOp::Approve,
+        ChaosOp::RaiseDispute,
+        ChaosOp::Execute,
+        ChaosOp::ResolveDispute,
+        ChaosOp::PauseInvoice,
+        ChaosOp::Execute,
+        ChaosOp::ReleaseEscrow,
+        ChaosOp::UnpauseInvoice,
+        ChaosOp::ReleaseEscrow,
+    ];
+    for len in 0..=full.len() {
+        assert_eq!(
+            run_chaos(&full[..len]),
+            Ok(()),
+            "prefix of length {len} left an inconsistent state"
+        );
+    }
+}

@@ -1,6 +1,16 @@
 # ── Build artifacts ──────────────────────────────────────────────────────────
 target/
 *.wasm
+Cargo.lock.bak
+
+# ── IDE and editor artifacts ─────────────────────────────────────────────────
+.vscode/
+.idea/
+*.iml
+
+# ── OS artifacts ─────────────────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
 
 # ── Coverage ─────────────────────────────────────────────────────────────────
 coverage/
@@ -11,9 +21,14 @@ lcov.info
 # ── Test snapshots ───────────────────────────────────────────────────────────
 **/test_snapshots/
 contracts/invoice/tests/snapshots/
+contracts/treasury/tests/snapshots/
 **/*.snap.new
-.DS_Store
-**/__pycache__/
+**/*.snap
+
+# ── Local draft and notes files ───────────────────────────────────────────────
+pr.md
+TODO.md
+docs/pr-notes/
 
 # ── cargo-fuzz ───────────────────────────────────────────────────────────────
 # Per-target seed corpora and crash artifacts are local iteration state: they are
@@ -21,3 +36,14 @@ contracts/invoice/tests/snapshots/
 # are the exception worth keeping — a crash reproducer is valuable, so those are
 # intentionally NOT ignored; the ignore below is scoped to corpus/ only.
 contracts/*/fuzz/corpus/
+
+testsnapshot/
+**/testsnapshot
+*.testsnapshot
+
+# ── Misc ─────────────────────────────────────────────────────────────────────
+**/wip/
+**/__pycache__/
+
+# ── Rust incremental ─────────────────────────────────────────────────────────
+**/*.rs.bk

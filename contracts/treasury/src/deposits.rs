@@ -1,4 +1,7 @@
-use crate::{require_admin, require_not_paused, DataKey, TreasuryContract, TreasuryError};
+use crate::{
+    record_deposit_reference, require_admin, require_not_paused, DataKey, TreasuryContract,
+    TreasuryError,
+};
 #[allow(unused_imports)]
 use crate::{TreasuryContractArgs, TreasuryContractClient};
 use multisig::signer_weight;
@@ -10,7 +13,9 @@ impl TreasuryContract {
     /// An optional `reference` string can be supplied for off-chain reconciliation;
     /// it is included in the `deposit` event so finance systems can match deposits
     /// to invoices or external transfers automatically.
-    /// Errors: `ContractPaused`, `InvalidAmount`.
+    /// Reference ids must be unique within `DEPOSIT_REF_TTL_LEDGERS` ledgers; reusing
+    /// a still-live reference id is rejected with `DuplicateReferenceId`.
+    /// Errors: `ContractPaused`, `InvalidAmount`, `DuplicateReferenceId`.
     /// Emits: `deposit`.
     pub fn deposit(
         env: Env,
@@ -21,13 +26,18 @@ impl TreasuryContract {
     ) -> Result<(), TreasuryError> {
         require_not_paused(&env);
         from.require_auth();
+        if let Some(ref_id) = reference.as_ref() {
+            record_deposit_reference(&env, ref_id)?;
+        }
         deposit_one(&env, &from, &token_contract, amount, reference)
     }
 
     /// Deposits multiple `(token_contract, amount)` pairs from `from` into the treasury.
     /// An optional `reference` string is forwarded to every `deposit` event emitted
     /// by the batch, allowing the whole batch to be tagged with a single reconciliation id.
-    /// Errors: `ContractPaused`, `InvalidAmount`.
+    /// The reference id is recorded once for the batch; reusing a still-live reference
+    /// id is rejected with `DuplicateReferenceId`.
+    /// Errors: `ContractPaused`, `InvalidAmount`, `DuplicateReferenceId`.
     /// Emits: `deposit` for each deposited token.
     pub fn batch_deposit(
         env: Env,
@@ -37,6 +47,9 @@ impl TreasuryContract {
     ) -> Result<(), TreasuryError> {
         require_not_paused(&env);
         from.require_auth();
+        if let Some(ref_id) = reference.clone() {
+            record_deposit_reference(&env, &ref_id)?;
+        }
         for (token_contract, amount) in deposits.iter() {
             deposit_one(&env, &from, &token_contract, amount, reference.clone())?;
         }
@@ -66,10 +79,18 @@ impl TreasuryContract {
         if !allowlist.is_empty() && !allowlist.contains(&to) {
             return Err(TreasuryError::DestinationNotAllowed);
         }
+        // Explicit zero-balance guard (#867): if no balance entry exists for
+        // this (depositor, token) pair the depositor has never deposited, so
+        // any positive `amount` is immediately insufficient.  This short-
+        // circuits before the `unwrap_or(0)` path so the intent is explicit.
+        let balance_key = DataKey::Balance(to.clone(), token_contract.clone());
+        if !env.storage().persistent().has(&balance_key) {
+            return Err(TreasuryError::InsufficientBalance);
+        }
         let mut balance: i128 = env
             .storage()
             .persistent()
-            .get(&DataKey::Balance(to.clone(), token_contract.clone()))
+            .get(&balance_key)
             .unwrap_or(0);
         if balance < amount {
             return Err(TreasuryError::InsufficientBalance);
@@ -79,9 +100,21 @@ impl TreasuryContract {
             .checked_sub(amount)
             .ok_or(TreasuryError::ArithmeticOverflow)?;
         env.storage().persistent().set(
-            &DataKey::Balance(to.clone(), token_contract.clone()),
+            &balance_key,
             &balance,
         );
+        // Decrement the aggregate per-token total (#742).
+        let total: i128 = env
+            .storage()
+            .persistent()
+            .get(&DataKey::TokenTotal(token_contract.clone()))
+            .unwrap_or(0);
+        let new_total = total
+            .checked_sub(amount)
+            .ok_or(TreasuryError::ArithmeticOverflow)?;
+        env.storage()
+            .persistent()
+            .set(&DataKey::TokenTotal(token_contract.clone()), &new_total);
         let treasury = env.current_contract_address();
         let token_client = token::Client::new(&env, &token_contract);
         token_client.transfer(&treasury, &to, &amount);
@@ -93,6 +126,11 @@ impl TreasuryContract {
     /// Returns the recorded deposit balance for `address` under `token_contract`, or 0 if never
     /// deposited. Balances are segregated per token contract (#448); this never mixes holdings
     /// across different allowlisted tokens.
+    ///
+    /// **Zero-balance contract (#867):** a missing storage entry is treated as a balance of
+    /// exactly `0`. Callers must not distinguish between "never deposited" and "deposited then
+    /// fully withdrawn" — both return `0`. To check whether funds were ever deposited, use
+    /// the deposit event log rather than relying on the presence of the storage key.
     /// Read-only, no authentication required.
     pub fn get_balance(env: Env, address: Address, token_contract: Address) -> i128 {
         env.storage()
@@ -259,6 +297,19 @@ fn deposit_one(
         &DataKey::Balance(from.clone(), token_contract.clone()),
         &balance,
     );
+    // Track the aggregate per-token depositor total so `remove_allowed_token`
+    // can refuse to strand balances (#742).
+    let total: i128 = env
+        .storage()
+        .persistent()
+        .get(&DataKey::TokenTotal(token_contract.clone()))
+        .unwrap_or(0);
+    let new_total = total
+        .checked_add(amount)
+        .ok_or(TreasuryError::ArithmeticOverflow)?;
+    env.storage()
+        .persistent()
+        .set(&DataKey::TokenTotal(token_contract.clone()), &new_total);
     // Include the optional reference in the event data so off-chain systems can
     // match deposits to invoices or external transfers without manual look-up.
     env.events().publish(

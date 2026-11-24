@@ -10,7 +10,7 @@
 //! procedure. When a variant is appended, add it to the exhaustive list in
 //! `every_variant_serializes_uniquely` in the same change.
 
-use invoice::DataKey;
+use invoice::{DataKey, InvoiceRole};
 use soroban_sdk::{testutils::Address as _, xdr::ToXdr, Address, Env};
 
 /// The byte sequence Soroban uses to address the slot for `key`.
@@ -94,6 +94,31 @@ fn every_variant_serializes_uniquely() {
         ),
         ("RefundBreakdown(1)", xdr(&env, DataKey::RefundBreakdown(1))),
         ("RefundBreakdown(2)", xdr(&env, DataKey::RefundBreakdown(2))),
+        ("RefundWindow", xdr(&env, DataKey::RefundWindow)),
+        (
+            "RefundRequestedAt(1)",
+            xdr(&env, DataKey::RefundRequestedAt(1)),
+        ),
+        (
+            "RefundRequestedAt(2)",
+            xdr(&env, DataKey::RefundRequestedAt(2)),
+        ),
+        (
+            "RoleMember(ConfigManager, a)",
+            xdr(&env, DataKey::RoleMember(InvoiceRole::ConfigManager, addr_a.clone())),
+        ),
+        (
+            "RoleMember(ConfigManager, b)",
+            xdr(&env, DataKey::RoleMember(InvoiceRole::ConfigManager, addr_b.clone())),
+        ),
+        (
+            "RoleMember(FeeManager, a)",
+            xdr(&env, DataKey::RoleMember(InvoiceRole::FeeManager, addr_a.clone())),
+        ),
+        (
+            "RoleMember(PauseGuardian, a)",
+            xdr(&env, DataKey::RoleMember(InvoiceRole::PauseGuardian, addr_a.clone())),
+        ),
     ]);
 }
 
@@ -107,6 +132,10 @@ fn same_id_keyed_collections_stay_separate() {
         ("Invoice(7)", xdr(&env, DataKey::Invoice(7))),
         ("InvoiceHistory(7)", xdr(&env, DataKey::InvoiceHistory(7))),
         ("RefundBreakdown(7)", xdr(&env, DataKey::RefundBreakdown(7))),
+        (
+            "RefundRequestedAt(7)",
+            xdr(&env, DataKey::RefundRequestedAt(7)),
+        ),
     ]);
 }
 
@@ -123,5 +152,6 @@ fn unit_variants_are_distinct() {
         ("GraceWindow", xdr(&env, DataKey::GraceWindow)),
         ("PendingIndex", xdr(&env, DataKey::PendingIndex)),
         ("CreationCooldown", xdr(&env, DataKey::CreationCooldown)),
+        ("RefundWindow", xdr(&env, DataKey::RefundWindow)),
     ]);
 }

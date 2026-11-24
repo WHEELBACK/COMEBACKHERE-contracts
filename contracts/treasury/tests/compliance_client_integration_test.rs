@@ -14,7 +14,11 @@
 // assertions go through the wrapper under test.
 use compliance::{ComplianceContract, ComplianceContractClient};
 use compliance_client::ComplianceClient;
-use soroban_sdk::{contract, contractimpl, testutils::Address as _, Address, Env};
+use soroban_sdk::{
+    contract, contractimpl,
+    testutils::{Address as _, MockAuth, MockAuthInvoke},
+    Address, Env, IntoVal,
+};
 use treasury::{SettlementStatus, TreasuryContract, TreasuryContractClient};
 
 // ─── Test Token ───────────────────────────────────────────────────────────────
@@ -340,4 +344,199 @@ fn check_compliance_panics_for_non_allowed_merchant_via_compliance_client() {
         wf.check_compliance(&ctx.compliance_id, &ctx.merchant);
     }));
     assert!(result.is_err(), "expected panic for non-allowed merchant");
+}
+
+// ─── Cross-contract invocation mock tests (oracle-adapter) ───────────────────
+//
+// These tests exercise the oracle-adapter's cross-contract surface using the
+// Soroban SDK testutils. A mock oracle contract is registered, and a consumer
+// contract invokes the adapter cross-contract. Return values, auth
+// requirements, and failure paths (unauthorized caller, missing data, zero
+// balance) are asserted without panicking the test harness.
+
+/// Mock oracle contract: stores a price per asset and exposes a `price` getter.
+#[contract]
+struct MockOracle;
+
+#[contractimpl]
+impl MockOracle {
+    pub fn set_price(env: Env, admin: Address, asset: Address, price: i128) {
+        admin.require_auth();
+        env.storage()
+            .persistent()
+            .set(&("price", asset), &price);
+    }
+
+    pub fn price(env: Env, asset: Address) -> Option<i128> {
+        env.storage().persistent().get(&("price", asset))
+    }
+}
+
+/// Mock oracle-adapter: reads from the oracle and normalizes the price.
+/// Exposes a `quote` method that returns `Option<i128>` so callers can
+/// distinguish "missing data" from a real price without panicking.
+#[contract]
+struct MockOracleAdapter;
+
+#[contractimpl]
+impl MockOracleAdapter {
+    pub fn quote(env: Env, oracle_id: Address, asset: Address) -> Option<i128> {
+        let oracle = MockOracleClient::new(&env, &oracle_id);
+        oracle.price(&asset)
+    }
+
+    /// Requires the caller to be authorized and returns the quoted value.
+    pub fn quote_authorized(
+        env: Env,
+        caller: Address,
+        oracle_id: Address,
+        asset: Address,
+    ) -> Option<i128> {
+        caller.require_auth();
+        let oracle = MockOracleClient::new(&env, &oracle_id);
+        oracle.price(&asset)
+    }
+}
+
+/// Consumer contract that invokes the adapter cross-contract.
+#[contract]
+struct OracleConsumer;
+
+#[contractimpl]
+impl OracleConsumer {
+    pub fn read_quote(env: Env, adapter_id: Address, oracle_id: Address, asset: Address) -> Option<i128> {
+        let adapter = MockOracleAdapterClient::new(&env, &adapter_id);
+        adapter.quote(&oracle_id, &asset)
+    }
+
+    pub fn read_quote_authorized(
+        env: Env,
+        caller: Address,
+        adapter_id: Address,
+        oracle_id: Address,
+        asset: Address,
+    ) -> Option<i128> {
+        let adapter = MockOracleAdapterClient::new(&env, &adapter_id);
+        adapter.quote_authorized(&caller, &oracle_id, &asset)
+    }
+}
+
+struct OracleCtx {
+    env: Env,
+    admin: Address,
+    asset: Address,
+    oracle_id: Address,
+    adapter_id: Address,
+    consumer_id: Address,
+}
+
+fn setup_oracle() -> OracleCtx {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let admin = Address::generate(&env);
+    let asset = Address::generate(&env);
+
+    let oracle_id = env.register_contract(None, MockOracle);
+    let adapter_id = env.register_contract(None, MockOracleAdapter);
+    let consumer_id = env.register_contract(None, OracleConsumer);
+
+    OracleCtx {
+        env,
+        admin,
+        asset,
+        oracle_id,
+        adapter_id,
+        consumer_id,
+    }
+}
+
+/// Cross-contract invocation returns the oracle price through the adapter.
+#[test]
+fn cross_contract_quote_returns_price() {
+    let ctx = setup_oracle();
+
+    let oracle = MockOracleClient::new(&ctx.env, &ctx.oracle_id);
+    oracle.set_price(&ctx.admin, &ctx.asset, &42_000_000);
+
+    let consumer = OracleConsumerClient::new(&ctx.env, &ctx.consumer_id);
+    let quoted = consumer.read_quote(&ctx.adapter_id, &ctx.oracle_id, &ctx.asset);
+    assert_eq!(quoted, Some(42_000_000));
+}
+
+/// Missing data path: adapter returns `None` rather than panicking.
+#[test]
+fn cross_contract_quote_missing_data_returns_none() {
+    let ctx = setup_oracle();
+
+    let consumer = OracleConsumerClient::new(&ctx.env, &ctx.consumer_id);
+    let quoted = consumer.read_quote(&ctx.adapter_id, &ctx.oracle_id, &ctx.asset);
+    assert_eq!(quoted, None);
+}
+
+/// Zero balance path: adapter returns `Some(0)` for a zero price.
+#[test]
+fn cross_contract_quote_zero_balance_returns_zero() {
+    let ctx = setup_oracle();
+
+    let oracle = MockOracleClient::new(&ctx.env, &ctx.oracle_id);
+    oracle.set_price(&ctx.admin, &ctx.asset, &0);
+
+    let consumer = OracleConsumerClient::new(&ctx.env, &ctx.consumer_id);
+    let quoted = consumer.read_quote(&ctx.adapter_id, &ctx.oracle_id, &ctx.asset);
+    assert_eq!(quoted, Some(0));
+}
+
+/// Authorized path: caller with auth succeeds.
+#[test]
+fn cross_contract_quote_authorized_succeeds() {
+    let ctx = setup_oracle();
+
+    let oracle = MockOracleClient::new(&ctx.env, &ctx.oracle_id);
+    oracle.set_price(&ctx.admin, &ctx.asset, &7_500_000);
+
+    let consumer = OracleConsumerClient::new(&ctx.env, &ctx.consumer_id);
+    let quoted = consumer.read_quote_authorized(
+        &ctx.admin,
+        &ctx.adapter_id,
+        &ctx.oracle_id,
+        &ctx.asset,
+    );
+    assert_eq!(quoted, Some(7_500_000));
+}
+
+/// Unauthorized caller: without auth, the adapter rejects the call.
+#[test]
+fn cross_contract_quote_authorized_rejects_unauthorized_caller() {
+    let ctx = setup_oracle();
+
+    // Disable blanket auth mocking so the missing auth is observable.
+    ctx.env.set_auths(&[]);
+
+    let oracle = MockOracleClient::new(&ctx.env, &ctx.oracle_id);
+    // Admin auth is mocked for the setup call only.
+    ctx.env.mock_auths(&[MockAuth {
+        address: &ctx.admin,
+        invoke: &MockAuthInvoke {
+            contract: &ctx.oracle_id,
+            fn_name: "set_price",
+            args: (ctx.admin.clone(), ctx.asset.clone(), 1_000_i128).into_val(&ctx.env),
+            sub_invokes: &[],
+        },
+    }]);
+    oracle.set_price(&ctx.admin, &ctx.asset, &1_000);
+
+    // Clear auths again so the consumer call has no authorization.
+    ctx.env.set_auths(&[]);
+
+    let consumer = OracleConsumerClient::new(&ctx.env, &ctx.consumer_id);
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        consumer.read_quote_authorized(
+            &ctx.admin,
+            &ctx.adapter_id,
+            &ctx.oracle_id,
+            &ctx.asset,
+        );
+    }));
+    assert!(result.is_err(), "expected unauthorized caller to be rejected");
 }

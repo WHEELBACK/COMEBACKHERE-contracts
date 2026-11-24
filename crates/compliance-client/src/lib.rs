@@ -13,6 +13,7 @@ use soroban_sdk::{contractclient, Address, Env, Vec};
 #[contractclient(name = "ComplianceOnlyClient")]
 pub trait ComplianceInterface {
     fn is_allowed(env: Env, address: Address) -> bool;
+    fn is_allowed_for_amount(env: Env, address: Address, amount: i128) -> bool;
     fn bulk_check_addresses(env: Env, addresses: Vec<Address>) -> Vec<bool>;
 }
 
@@ -38,6 +39,12 @@ impl<'a> ComplianceClient<'a> {
 
     pub fn is_allowed(&self, address: &Address) -> bool {
         self.inner.is_allowed(address)
+    }
+
+    /// Check an address and a transaction amount against its tier in one call.
+    /// A tier with no configured limit is treated as unlimited (allowed).
+    pub fn is_allowed_for_amount(&self, address: &Address, amount: i128) -> bool {
+        self.inner.is_allowed_for_amount(address, &amount)
     }
 
     /// Check many addresses in one cross-contract call. Results are in the same

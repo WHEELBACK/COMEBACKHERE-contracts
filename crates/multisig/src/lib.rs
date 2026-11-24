@@ -1,9 +1,32 @@
 #![no_std]
-use soroban_sdk::{contracterror, contracttype, Address, BytesN, Env, Vec};
+use soroban_sdk::{contracterror, contracttype, Address, Bytes, BytesN, Env, String, Vec};
 
-/// Error codes for all treasury contract operations. Variants are append-only
-/// and must never be renumbered, as discriminants are stored on-chain and
-/// matched by off-chain systems; see `scripts/check-enum-ordering.sh`.
+/// Error codes for all treasury contract operations.
+///
+/// # Crate ownership
+///
+/// `TreasuryError` is intentionally defined here in `crates/multisig` — **not**
+/// in `contracts/treasury` — because `crates/multisig` is the canonical shared
+/// error authority for all treasury operations. The multisig crate contains the
+/// quorum primitives (`record_approval`, `require_authorized_signer`, etc.) that
+/// every treasury entrypoint depends on, and centralising the error type here
+/// ensures those primitives can raise typed errors without a circular dependency
+/// on the full treasury contract crate.
+///
+/// `contracts/treasury` re-exports `TreasuryError` via `pub use` so external
+/// consumers can import it from either path:
+/// ```rust,ignore
+/// // from the multisig crate (canonical source):
+/// use comebackhere_multisig::TreasuryError;
+/// // or from the treasury contract crate (re-export):
+/// use comebackhere_treasury::TreasuryError;
+/// ```
+///
+/// # Stability
+///
+/// Variants are append-only and must never be renumbered, as discriminants are
+/// stored on-chain and matched by off-chain systems; see
+/// `scripts/check-enum-ordering.sh`.
 #[contracterror]
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 #[repr(u32)]
@@ -86,6 +109,19 @@ pub enum TreasuryError {
     NoPendingAdmin = 46,
     // Appended for signer labels: label exceeds the maximum length.
     LabelTooLong = 47,
+    // Appended for #732: a proposed timelock delay falls outside the admin-
+    // configurable [MIN_TIMELOCK_DELAY_SECS, MAX_TIMELOCK_DELAY_SECS] bounds.
+    InvalidTimelockDelay = 48,
+    // Appended for #747: a deposit reference id was reused within its TTL window.
+    DuplicateReferenceId = 49,
+    // Appended for #742: `remove_allowed_token` called while depositors still hold
+    // balances in that token.
+    //
+    // NOTE: Soroban caps a `#[contracterror]` enum at 50 cases, so this is the last
+    // free slot. New failure modes must reuse an existing variant (as #739, #741 and
+    // #744 do with `InvalidAmount`, `NoPendingAdmin` and `LabelTooLong`) or move to a
+    // second error type.
+    TokenHasBalance = 50,
 }
 
 // Issue #48: reason codes attached to a held settlement; None means not on hold
@@ -183,6 +219,8 @@ pub struct Dispute {
     /// none. Purely a verifiable pointer for signers/audits — never itself verified
     /// on-chain.
     pub evidence_hash: Option<BytesN<32>>,
+    /// Optional bounded rationale recorded when the dispute is resolved (#744).
+    pub resolution_memo: Option<String>,
 }
 
 /// Lifecycle state of a signer-rotation proposal.
@@ -233,6 +271,11 @@ pub enum SignerChangeKind {
     RemoveSigner(Address),
     /// Change the multisig approval threshold.
     UpdateThreshold(u32),
+    /// Change the signer/threshold-change timelock delay itself (#732), in seconds.
+    /// Must fall within [MIN_TIMELOCK_DELAY_SECS, MAX_TIMELOCK_DELAY_SECS]; enforced
+    /// again at execution time so the bound cannot be bypassed even if it changes
+    /// between proposal and execution.
+    UpdateTimelockDelay(u64),
 }
 
 /// Lifecycle state of a `SignerChangeProposal`.
@@ -320,6 +363,8 @@ pub enum DataKey {
     WithdrawalAllowlist,
     LastRotationProposal(Address),
     PartialApprovedTotal(u64),
+    /// Bounded per-merchant index of settlement IDs, newest last (#727).
+    MerchantSettlements(Address),
     /// Admin-configured max amount withdrawable per rolling window; `0` means uncapped (#455).
     WithdrawalLimitPerWindow,
     /// Window length (seconds) paired with `WithdrawalLimitPerWindow`.
@@ -332,10 +377,24 @@ pub enum DataKey {
     SignerChangeCount,
     /// Persistent storage for a timelocked signer/threshold-change proposal (#447).
     SignerChange(u64),
+    /// Cumulative executed amount across all `partially_execute_settlement` calls for a
+    /// given settlement id (#578). Used to guard against overflow when accumulating
+    /// partial execution amounts over multiple calls.
+    PartialExecutedTotal(u64),
+    /// Bounded history of merchant payout address changes for audit purposes (#579).
+    /// Stores a `Vec<(Address, u64)>` of `(new_address, timestamp)` pairs, capped at
+    /// `MAX_PAYOUT_HISTORY` entries (oldest entries are dropped when the cap is reached).
+    PayoutAddressHistory(Address),
     /// Optional UNIX timestamp after which a settlement hold automatically lapses (#592).
     /// Stored separately from `Settlement` to avoid breaking the ABI snapshot.
     /// Absent means the hold has no expiry.
     HoldExpiry(u64),
+    /// Pending two-step admin handover: `(new_admin, expires_at)` (#741).
+    PendingAdmin,
+    /// Aggregate of all depositor balances held in a token (#742).
+    TokenTotal(Address),
+    /// Marker for a deposit reference id seen within its TTL window (#747).
+    DepositRef(Bytes),
     /// Ledger timestamp of a signer's most recent approval (#587).
     SignerLastActive(Address),
     /// Compact index of settlement ids currently in `Pending` status (#572), kept in
@@ -350,6 +409,15 @@ pub enum DataKey {
     /// Optional human-readable label for a signer (#568), e.g. "ops-hot-key".
     /// Purely informational — never consulted for authorisation decisions.
     SignerLabel(Address),
+    /// Bounded list of dispute ids raised against a given settlement id (#729),
+    /// kept in sync by `raise_dispute` so `get_disputes_by_settlement` costs
+    /// proportional to the disputes on that settlement rather than total dispute history.
+    SettlementDisputes(u64),
+    /// Admin-configurable signer/threshold-change timelock delay in seconds (#732).
+    /// Absent means the hard-coded default (`SIGNER_CHANGE_TIMELOCK_SECS`) applies.
+    TimelockDelaySecs,
+    /// Granular role assignment per account (persistent storage, #969).
+    Role(Address),
 }
 
 /// Returns the approval weight assigned to `signer`, or `0` if not registered.
@@ -574,6 +642,7 @@ pub fn meets_threshold(weight: u32, threshold: u32) -> bool {
 mod tests {
     use super::*;
     use soroban_sdk::testutils::Address as _;
+    use soroban_sdk::testutils::Ledger as _;
     use soroban_sdk::{contract, contractimpl, Env};
 
     /// Test-only pass-through contract. Every entrypoint forwards to the
@@ -625,6 +694,17 @@ mod tests {
 
         pub fn meets_threshold(weight: u32, threshold: u32) -> bool {
             crate::meets_threshold(weight, threshold)
+        }
+
+        /// Forwards to `crate::approval_expiry`, returning the built metadata so
+        /// tests can inspect `approved_at`, `expires_at`, and `signer`.
+        pub fn approval_expiry(env: Env, signer: Address, ttl_seconds: u64) -> ApprovalExpiry {
+            crate::approval_expiry(&env, &signer, ttl_seconds)
+        }
+
+        /// Forwards to `crate::approval_is_active`.
+        pub fn approval_is_active(env: Env, approval: ApprovalExpiry) -> bool {
+            crate::approval_is_active(&env, &approval)
         }
     }
 
@@ -1203,5 +1283,170 @@ mod tests {
         client.set_signer_weight(&signer, &u32::MAX);
 
         client.require_authorized_signer(&signer);
+    }
+
+    // ---------------------------------------------------------------------
+    // approval_expiry (#781)
+    // ---------------------------------------------------------------------
+
+    /// A TTL of zero means "no expiry": `expires_at` must be `0` regardless of
+    /// the current ledger timestamp. This is the sentinel value that
+    /// `approval_is_active` treats as "never expires".
+    #[test]
+    fn approval_expiry_ttl_zero_produces_no_expiry() {
+        let (env, client) = setup();
+        let signer = Address::generate(&env);
+
+        let expiry = client.approval_expiry(&signer, &0u64);
+
+        assert_eq!(expiry.signer, signer);
+        assert_eq!(expiry.expires_at, 0, "TTL=0 must set expires_at to 0");
+    }
+
+    /// With a non-zero TTL the `expires_at` field must equal
+    /// `ledger_timestamp + ttl_seconds`. This pins the exact formula so a
+    /// future refactor cannot silently change it to, e.g., `timestamp * ttl`.
+    #[test]
+    fn approval_expiry_non_zero_ttl_sets_expires_at_to_timestamp_plus_ttl() {
+        let (env, client) = setup();
+        let signer = Address::generate(&env);
+
+        // Pin the ledger timestamp to a known value so the assertion is exact.
+        env.ledger().set_timestamp(1_000);
+        let ttl: u64 = 500;
+
+        let expiry = client.approval_expiry(&signer, &ttl);
+
+        assert_eq!(expiry.approved_at, 1_000);
+        assert_eq!(
+            expiry.expires_at, 1_500,
+            "expires_at must be approved_at + ttl_seconds"
+        );
+    }
+
+    /// `approved_at` must capture the ledger timestamp at the moment of the call,
+    /// not a cached value from earlier. Two calls at different timestamps produce
+    /// different `approved_at` values.
+    #[test]
+    fn approval_expiry_approved_at_reflects_current_ledger_timestamp() {
+        let (env, client) = setup();
+        let signer = Address::generate(&env);
+
+        env.ledger().set_timestamp(100);
+        let first = client.approval_expiry(&signer, &0u64);
+        assert_eq!(first.approved_at, 100);
+
+        env.ledger().set_timestamp(200);
+        let second = client.approval_expiry(&signer, &0u64);
+        assert_eq!(second.approved_at, 200);
+    }
+
+    /// The signer address embedded in the returned metadata must be the address
+    /// that was passed in, not a default or the contract address.
+    #[test]
+    fn approval_expiry_embeds_the_correct_signer_address() {
+        let (env, client) = setup();
+        let alice = Address::generate(&env);
+        let bob = Address::generate(&env);
+
+        let for_alice = client.approval_expiry(&alice, &100u64);
+        let for_bob = client.approval_expiry(&bob, &100u64);
+
+        assert_eq!(for_alice.signer, alice);
+        assert_eq!(for_bob.signer, bob);
+        assert_ne!(for_alice.signer, for_bob.signer);
+    }
+
+    // ---------------------------------------------------------------------
+    // approval_is_active (#781)
+    // ---------------------------------------------------------------------
+
+    /// An approval with `expires_at == 0` is always active regardless of how
+    /// far the ledger has advanced — `0` is the "no expiry" sentinel.
+    #[test]
+    fn approval_is_active_with_zero_expires_at_is_always_true() {
+        let (env, client) = setup();
+        let signer = Address::generate(&env);
+
+        // Build a zero-TTL approval manually so the sentinel is explicit.
+        let approval = ApprovalExpiry {
+            signer: signer.clone(),
+            approved_at: 0,
+            expires_at: 0,
+        };
+
+        // Active at timestamp 0.
+        env.ledger().set_timestamp(0);
+        assert!(client.approval_is_active(&approval));
+
+        // Still active far in the future.
+        env.ledger().set_timestamp(u64::MAX / 2);
+        assert!(client.approval_is_active(&approval));
+    }
+
+    /// An approval is active when the current timestamp is exactly equal to
+    /// `expires_at` (boundary: inclusive on expiry).
+    #[test]
+    fn approval_is_active_at_exact_expiry_boundary_is_true() {
+        let (env, client) = setup();
+        let signer = Address::generate(&env);
+
+        let approval = ApprovalExpiry {
+            signer,
+            approved_at: 1_000,
+            expires_at: 1_500,
+        };
+
+        env.ledger().set_timestamp(1_500);
+        assert!(
+            client.approval_is_active(&approval),
+            "approval must still be active at exactly expires_at"
+        );
+    }
+
+    /// One second after `expires_at` the approval is no longer active.
+    #[test]
+    fn approval_is_active_one_second_past_expiry_is_false() {
+        let (env, client) = setup();
+        let signer = Address::generate(&env);
+
+        let approval = ApprovalExpiry {
+            signer,
+            approved_at: 1_000,
+            expires_at: 1_500,
+        };
+
+        env.ledger().set_timestamp(1_501);
+        assert!(
+            !client.approval_is_active(&approval),
+            "approval must be inactive one second after expires_at"
+        );
+    }
+
+    /// Combines `approval_expiry` and `approval_is_active`: an approval built
+    /// with a non-zero TTL must be active immediately and inactive after the TTL
+    /// has elapsed.
+    #[test]
+    fn approval_expiry_and_is_active_round_trip() {
+        let (env, client) = setup();
+        let signer = Address::generate(&env);
+        let ttl: u64 = 3_600; // 1 hour
+
+        env.ledger().set_timestamp(10_000);
+        let expiry = client.approval_expiry(&signer, &ttl);
+
+        // Active immediately after the approval is recorded.
+        assert!(
+            client.approval_is_active(&expiry),
+            "approval must be active at its own approved_at timestamp"
+        );
+
+        // Active at the boundary.
+        env.ledger().set_timestamp(13_600); // approved_at + ttl
+        assert!(client.approval_is_active(&expiry));
+
+        // Inactive one tick past the boundary.
+        env.ledger().set_timestamp(13_601);
+        assert!(!client.approval_is_active(&expiry));
     }
 }

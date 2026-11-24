@@ -17,7 +17,7 @@
 //! * a completed handover being replayable.
 
 use compliance::{ComplianceContract, ComplianceContractClient};
-use settlement_workflow::{DataKey, SettlementWorkflowContract, SettlementWorkflowContractClient};
+use settlement_workflow::{DataKey, SettlementWorkflowContract, SettlementWorkflowContractClient, WorkflowError};
 use soroban_sdk::{
     testutils::{Address as _, Events},
     token, Address, Env, FromVal, Symbol,
@@ -48,9 +48,11 @@ fn setup() -> Fixture {
     let treasury = TreasuryContractClient::new(&env, &treasury_id);
     treasury.initialize(&admin, &1, &soroban_sdk::Vec::new(&env));
 
-    let workflow_id = env.register_contract(None, SettlementWorkflowContract);
+    let workflow_id = env.register(
+        SettlementWorkflowContract,
+        (admin.clone(), compliance_id.clone(), treasury_id.clone()),
+    );
     let workflow = SettlementWorkflowContractClient::new(&env, &workflow_id);
-    workflow.initialize(&admin, &compliance_id, &treasury_id);
     treasury.set_signer(&admin, &workflow_id, &1);
 
     let token_id = env.register_stellar_asset_contract(admin.clone());
@@ -111,9 +113,11 @@ fn setup_bare() -> (Env, Address, SettlementWorkflowContractClient<'static>) {
     let admin = Address::generate(&env);
     let compliance_id = env.register_contract(None, ComplianceContract);
     let treasury_id = env.register_contract(None, TreasuryContract);
-    let workflow_id = env.register_contract(None, SettlementWorkflowContract);
+    let workflow_id = env.register(
+        SettlementWorkflowContract,
+        (admin.clone(), compliance_id.clone(), treasury_id.clone()),
+    );
     let workflow = SettlementWorkflowContractClient::new(&env, &workflow_id);
-    workflow.initialize(&admin, &compliance_id, &treasury_id);
     (env, workflow_id, workflow)
 }
 
@@ -161,7 +165,7 @@ fn rotation_transfers_authority_to_the_new_admin() {
         .try_transfer_admin(&f.admin, &f.admin)
         .unwrap_err()
         .unwrap();
-    assert_eq!(err, TreasuryError::Unauthorized.into());
+    assert_eq!(err, WorkflowError::Unauthorized.into());
 }
 
 /// A completed rotation leaves the workflow fully functional — the compliance
@@ -244,7 +248,7 @@ fn accept_admin_rejects_an_address_that_is_not_the_nominee() {
     f.workflow.transfer_admin(&f.admin, &new_admin);
 
     let err = f.workflow.try_accept_admin(&impostor).unwrap_err().unwrap();
-    assert_eq!(err, TreasuryError::Unauthorized.into());
+    assert_eq!(err, WorkflowError::Unauthorized.into());
     assert_eq!(
         stored_admin(&f),
         Some(f.admin.clone()),
@@ -273,7 +277,7 @@ fn unrelated_address_cannot_accept_an_outstanding_nomination() {
             .unwrap();
         assert_eq!(
             err,
-            TreasuryError::Unauthorized.into(),
+            WorkflowError::Unauthorized.into(),
             "{candidate:?} must not be able to accept"
         );
     }
@@ -296,7 +300,7 @@ fn accept_admin_without_a_nomination_errors() {
         .try_accept_admin(&candidate)
         .unwrap_err()
         .unwrap();
-    assert_eq!(err, TreasuryError::NoPendingAdmin.into());
+    assert_eq!(err, WorkflowError::NoPendingAdmin.into());
     assert_eq!(stored_admin(&f), Some(f.admin.clone()));
 }
 
@@ -316,7 +320,7 @@ fn completed_handover_cannot_be_replayed() {
         .try_accept_admin(&new_admin)
         .unwrap_err()
         .unwrap();
-    assert_eq!(err, TreasuryError::NoPendingAdmin.into());
+    assert_eq!(err, WorkflowError::NoPendingAdmin.into());
     assert_eq!(stored_admin(&f), Some(new_admin));
 }
 
@@ -331,7 +335,7 @@ fn non_admin_cannot_start_a_transfer() {
         .try_transfer_admin(&impostor, &impostor)
         .unwrap_err()
         .unwrap();
-    assert_eq!(err, TreasuryError::Unauthorized.into());
+    assert_eq!(err, WorkflowError::Unauthorized.into());
     assert_eq!(
         stored_pending_admin(&f),
         None,
@@ -352,10 +356,77 @@ fn re_nomination_supersedes_the_previous_one() {
     f.workflow.transfer_admin(&f.admin, &second);
 
     let err = f.workflow.try_accept_admin(&first).unwrap_err().unwrap();
-    assert_eq!(err, TreasuryError::Unauthorized.into());
+    assert_eq!(err, WorkflowError::Unauthorized.into());
 
     f.workflow.accept_admin(&second);
     assert_eq!(stored_admin(&f), Some(second));
+}
+
+// -------------------------------------------------------------------------
+// cancel_admin_transfer (#772)
+// -------------------------------------------------------------------------
+
+/// Cancelling a pending transfer leaves the original admin in control and the
+/// nominee can no longer accept.
+#[test]
+fn cancel_admin_transfer_then_accept_fails() {
+    let f = setup();
+    let new_admin = Address::generate(&f.env);
+
+    f.workflow.transfer_admin(&f.admin, &new_admin);
+    assert_eq!(stored_pending_admin(&f), Some(new_admin.clone()));
+
+    f.workflow.cancel_admin_transfer(&f.admin);
+    assert_eq!(stored_pending_admin(&f), None, "cancellation must clear the nomination");
+
+    let err = f
+        .workflow
+        .try_accept_admin(&new_admin)
+        .unwrap_err()
+        .unwrap();
+    assert_eq!(err, TreasuryError::NoPendingAdmin.into());
+    // The original admin keeps privileges.
+    assert_eq!(stored_admin(&f), Some(f.admin.clone()));
+}
+
+/// Only the current admin may cancel a pending transfer.
+#[test]
+fn cancel_admin_transfer_rejects_non_admin() {
+    let f = setup();
+    let new_admin = Address::generate(&f.env);
+    let impostor = Address::generate(&f.env);
+
+    f.workflow.transfer_admin(&f.admin, &new_admin);
+
+    let err = f
+        .workflow
+        .try_cancel_admin_transfer(&impostor)
+        .unwrap_err()
+        .unwrap();
+    assert_eq!(err, TreasuryError::Unauthorized.into());
+    assert_eq!(
+        stored_pending_admin(&f),
+        Some(new_admin.clone()),
+        "a rejected cancellation must not clear the nomination"
+    );
+
+    // The real admin can still cancel.
+    f.workflow.cancel_admin_transfer(&f.admin);
+    assert_eq!(stored_pending_admin(&f), None);
+}
+
+/// Cancelling with nothing outstanding is a typed error.
+#[test]
+fn cancel_admin_transfer_without_a_nomination_errors() {
+    let f = setup();
+
+    let err = f
+        .workflow
+        .try_cancel_admin_transfer(&f.admin)
+        .unwrap_err()
+        .unwrap();
+    assert_eq!(err, TreasuryError::NoPendingAdmin.into());
+    assert_eq!(stored_admin(&f), Some(f.admin.clone()));
 }
 
 // -------------------------------------------------------------------------

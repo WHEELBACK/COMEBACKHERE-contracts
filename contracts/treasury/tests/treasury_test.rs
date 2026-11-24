@@ -228,7 +228,7 @@ fn dispute_resolved_in_favor_of_claimant() {
         &None,
     );
 
-    client.resolve_dispute(&admin, &dispute_id, &true);
+    client.resolve_dispute(&admin, &dispute_id, &true, &None);
 }
 
 #[test]
@@ -254,7 +254,7 @@ fn dispute_resolved_in_favor_of_counterparty() {
         &None,
     );
 
-    client.resolve_dispute(&admin, &dispute_id, &false);
+    client.resolve_dispute(&admin, &dispute_id, &false, &None);
 }
 
 #[test]

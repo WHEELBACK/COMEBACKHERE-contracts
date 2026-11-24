@@ -461,7 +461,7 @@ fn scenario_treasury_pause_unpause_full_lifecycle_recovers() {
 // ═══════════════════════════════════════════════════════════════════════════════
 
 /// Pausing compliance mid-flow freezes `allow_address` with
-/// `ContractError::ContractPaused`.  A merchant who was not pre-allowed is
+/// `ComplianceError::ContractPaused`.  A merchant who was not pre-allowed is
 /// therefore rejected by the compliance gate, leaving the treasury settlement
 /// Pending and the invoice in whatever state it was.
 #[test]
@@ -501,7 +501,7 @@ fn scenario_compliance_paused_blocks_new_allow_so_gate_rejects() {
         .unwrap();
     assert_eq!(
         allow_err,
-        compliance::ContractError::ContractPaused,
+        compliance::ComplianceError::ContractPaused,
         "allow_address must return ContractPaused when compliance is paused"
     );
 

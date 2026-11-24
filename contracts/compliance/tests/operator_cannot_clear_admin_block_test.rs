@@ -5,7 +5,7 @@
 //! are placed by the admin for serious reasons such as sanctions. Recording who
 //! placed each block keeps that boundary explicit: an operator may undo its own
 //! action, and only the admin may reverse an admin-placed block.
-use compliance::{BlockReason, ComplianceContract, ComplianceContractClient, ContractError};
+use compliance::{BlockReason, ComplianceContract, ComplianceContractClient, ComplianceError};
 use soroban_sdk::{symbol_short, testutils::Address as _, Address, Env};
 
 fn setup() -> (Env, Address, Address, ComplianceContractClient<'static>) {
@@ -34,7 +34,7 @@ fn operator_cannot_clear_admin_block() {
 
     assert_eq!(
         client.try_clear_address(&operator, &subject),
-        Err(Ok(ContractError::OperatorCannotClearAdminBlock))
+        Err(Ok(ComplianceError::OperatorCannotClearAdminBlock))
     );
     // Nothing changed: still blocked, still not allowed.
     assert!(client.is_blocked(&subject));
@@ -54,7 +54,7 @@ fn operator_cannot_clear_admin_block_until() {
 
     assert_eq!(
         client.try_clear_address(&operator, &subject),
-        Err(Ok(ContractError::OperatorCannotClearAdminBlock))
+        Err(Ok(ComplianceError::OperatorCannotClearAdminBlock))
     );
     assert!(client.is_blocked(&subject));
     assert_eq!(client.get_allow_expiry(&subject), None);
@@ -73,7 +73,7 @@ fn operator_cannot_clear_bulk_admin_block() {
 
     assert_eq!(
         client.try_clear_address(&operator, &subject),
-        Err(Ok(ContractError::OperatorCannotClearAdminBlock))
+        Err(Ok(ComplianceError::OperatorCannotClearAdminBlock))
     );
     assert!(client.is_blocked(&subject));
 }
@@ -166,7 +166,7 @@ fn operator_cannot_clear_an_unblocked_address() {
 
     assert_eq!(
         client.try_clear_address(&operator, &subject),
-        Err(Ok(ContractError::Unauthorized))
+        Err(Ok(ComplianceError::Unauthorized))
     );
     assert!(client.is_allowed(&subject));
 }
@@ -182,7 +182,7 @@ fn outsider_cannot_clear_a_block() {
 
     assert_eq!(
         client.try_clear_address(&outsider, &subject),
-        Err(Ok(ContractError::Unauthorized))
+        Err(Ok(ComplianceError::Unauthorized))
     );
     assert!(client.is_blocked(&subject));
 }
@@ -228,7 +228,7 @@ fn clearing_drops_provenance_and_reblock_records_its_own_placer() {
     client.block_address(&admin, &subject, &None);
     assert_eq!(
         client.try_clear_address(&operator, &subject),
-        Err(Ok(ContractError::OperatorCannotClearAdminBlock))
+        Err(Ok(ComplianceError::OperatorCannotClearAdminBlock))
     );
 }
 
@@ -245,7 +245,7 @@ fn admin_block_stays_protected_while_paused() {
 
     assert_eq!(
         client.try_clear_address(&operator, &subject),
-        Err(Ok(ContractError::OperatorCannotClearAdminBlock))
+        Err(Ok(ComplianceError::OperatorCannotClearAdminBlock))
     );
     assert!(client.is_blocked(&subject));
 
@@ -269,7 +269,7 @@ fn provenance_survives_admin_transfer() {
     // The operator still cannot clear it, even though `admin` in storage changed.
     assert_eq!(
         client.try_clear_address(&operator, &subject),
-        Err(Ok(ContractError::OperatorCannotClearAdminBlock))
+        Err(Ok(ComplianceError::OperatorCannotClearAdminBlock))
     );
     assert!(client.is_blocked(&subject));
 

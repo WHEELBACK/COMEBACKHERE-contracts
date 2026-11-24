@@ -12,7 +12,7 @@
 //! ensuring the invariant: claimant_amount + counterparty_amount == dispute.amount
 
 use proptest::prelude::*;
-use soroban_sdk::{contract, contractimpl, testutils::Address as _, Address, Env};
+use soroban_sdk::{testutils::Address as _, Address, Env};
 use treasury::{TreasuryContract, TreasuryContractClient};
 
 /// Minimal SEP-41–shaped test token for dispute split testing
@@ -92,7 +92,7 @@ fn prop_split_payout_sum_equals_disputed_amount() {
         let counterparty_before = token_client.balance(&counterparty);
 
         // Resolve the dispute with a split
-        client.resolve_dispute_split(&admin, &did, &claimant_bps, &token_id);
+        client.resolve_dispute_split(&admin, &did, &claimant_bps, &token_id, &None);
 
         // Get final balances
         let claimant_after = token_client.balance(&claimant);
@@ -144,7 +144,7 @@ fn split_zero_percent_claimant() {
     let claimant_before = token_client.balance(&claimant);
     let counterparty_before = token_client.balance(&counterparty);
 
-    client.resolve_dispute_split(&admin, &did, &0, &token_id);
+    client.resolve_dispute_split(&admin, &did, &0, &token_id, &None);
 
     let claimant_after = token_client.balance(&claimant);
     let counterparty_after = token_client.balance(&counterparty);
@@ -169,7 +169,7 @@ fn split_hundred_percent_claimant() {
     let claimant_before = token_client.balance(&claimant);
     let counterparty_before = token_client.balance(&counterparty);
 
-    client.resolve_dispute_split(&admin, &did, &BPS_DENOMINATOR, &token_id);
+    client.resolve_dispute_split(&admin, &did, &BPS_DENOMINATOR, &token_id, &None);
 
     let claimant_after = token_client.balance(&claimant);
     let counterparty_after = token_client.balance(&counterparty);
@@ -194,7 +194,7 @@ fn split_fifty_percent_claimant() {
     let claimant_before = token_client.balance(&claimant);
     let counterparty_before = token_client.balance(&counterparty);
 
-    client.resolve_dispute_split(&admin, &did, &5_000, &token_id);
+    client.resolve_dispute_split(&admin, &did, &5_000, &token_id, &None);
 
     let claimant_after = token_client.balance(&claimant);
     let counterparty_after = token_client.balance(&counterparty);
@@ -228,7 +228,7 @@ fn split_odd_amounts_various_ratios() {
         let claimant_before = token_client.balance(&claimant);
         let counterparty_before = token_client.balance(&counterparty);
 
-        client.resolve_dispute_split(&admin, &did, &claimant_bps, &token_id);
+        client.resolve_dispute_split(&admin, &did, &claimant_bps, &token_id, &None);
 
         let claimant_after = token_client.balance(&claimant);
         let counterparty_after = token_client.balance(&counterparty);
@@ -266,7 +266,7 @@ fn split_extreme_ratios() {
         let claimant_before = token_client.balance(&claimant);
         let counterparty_before = token_client.balance(&counterparty);
 
-        client.resolve_dispute_split(&admin, &did, &claimant_bps, &token_id);
+        client.resolve_dispute_split(&admin, &did, &claimant_bps, &token_id, &None);
 
         let claimant_after = token_client.balance(&claimant);
         let counterparty_after = token_client.balance(&counterparty);
@@ -304,7 +304,7 @@ fn split_remainder_assigned_to_counterparty() {
         let claimant_before = token_client.balance(&claimant);
         let counterparty_before = token_client.balance(&counterparty);
 
-        client.resolve_dispute_split(&admin, &did, &claimant_bps, &token_id);
+        client.resolve_dispute_split(&admin, &did, &claimant_bps, &token_id, &None);
 
         let claimant_after = token_client.balance(&claimant);
         let counterparty_after = token_client.balance(&counterparty);
@@ -322,6 +322,82 @@ fn split_remainder_assigned_to_counterparty() {
         // Counterparty should get exactly the remainder
         let expected_counterparty = amount - expected_claimant;
         prop_assert_eq!(counterparty_payout, expected_counterparty);
+    });
+}
+
+/// Strict invariant test: for every basis-point value and amount, the split must
+/// (a) conserve the disputed amount exactly, (b) never produce negative payouts,
+/// and (c) never pay out more than the disputed amount in total.
+#[test]
+fn prop_split_invariants_hold_for_all_bps() {
+    proptest!(|(
+        amount in 1i128..=10_000_000i128,
+        claimant_bps in 0u32..=BPS_DENOMINATOR
+    )| {
+        let env = Env::default();
+        let (client, admin, token_client, token_id) = setup(&env);
+
+        let claimant = Address::generate(&env);
+        let counterparty = Address::generate(&env);
+
+        let sid = client.propose_settlement(&admin, &claimant, &amount, &0_u64);
+        let did = client.raise_dispute(&claimant, &sid, &counterparty, &amount, &500, &None);
+
+        let claimant_before = token_client.balance(&claimant);
+        let counterparty_before = token_client.balance(&counterparty);
+
+        client.resolve_dispute_split(&admin, &did, &claimant_bps, &token_id, &None);
+
+        let claimant_payout = token_client.balance(&claimant) - claimant_before;
+        let counterparty_payout = token_client.balance(&counterparty) - counterparty_before;
+
+        // (a) Conservation: no funds lost or created.
+        prop_assert_eq!(
+            claimant_payout + counterparty_payout,
+            amount,
+            "conservation violated: amount={}, bps={}, claimant={}, counterparty={}",
+            amount, claimant_bps, claimant_payout, counterparty_payout
+        );
+
+        // (b) No negative payouts.
+        prop_assert!(claimant_payout >= 0, "claimant payout negative");
+        prop_assert!(counterparty_payout >= 0, "counterparty payout negative");
+
+        // (c) Neither side can exceed the disputed amount.
+        prop_assert!(claimant_payout <= amount, "claimant payout exceeds amount");
+        prop_assert!(counterparty_payout <= amount, "counterparty payout exceeds amount");
+    });
+}
+
+/// Strict invariant test: the treasury's token balance must decrease by exactly
+/// the disputed amount (the hold-amount invariant), regardless of rounding.
+#[test]
+fn prop_split_hold_amount_invariant() {
+    proptest!(|(
+        amount in 1i128..=10_000_000i128,
+        claimant_bps in 0u32..=BPS_DENOMINATOR
+    )| {
+        let env = Env::default();
+        let (client, admin, token_client, token_id) = setup(&env);
+
+        let claimant = Address::generate(&env);
+        let counterparty = Address::generate(&env);
+
+        let sid = client.propose_settlement(&admin, &claimant, &amount, &0_u64);
+        let did = client.raise_dispute(&claimant, &sid, &counterparty, &amount, &500, &None);
+
+        let treasury_before = token_client.balance(&token_id);
+
+        client.resolve_dispute_split(&admin, &did, &claimant_bps, &token_id, &None);
+
+        let treasury_after = token_client.balance(&token_id);
+
+        prop_assert_eq!(
+            treasury_before - treasury_after,
+            amount,
+            "treasury must disburse exactly the disputed amount: amount={}, bps={}",
+            amount, claimant_bps
+        );
     });
 }
 
@@ -346,7 +422,7 @@ fn split_deterministic_results() {
         let claimant_before = token_client_inner.balance(&claimant);
         let counterparty_before = token_client_inner.balance(&counterparty);
 
-        client_inner.resolve_dispute_split(&admin_inner, &did, &claimant_bps, &token_id);
+        client_inner.resolve_dispute_split(&admin_inner, &did, &claimant_bps, &token_id, &None);
 
         let claimant_after = token_client_inner.balance(&claimant);
         let counterparty_after = token_client_inner.balance(&counterparty);

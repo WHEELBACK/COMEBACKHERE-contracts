@@ -20,3 +20,4 @@ soroban-sdk.workspace = true
 
 [dev-dependencies]
 soroban-sdk = { workspace = true, features = ["testutils"] }
+trybuild = { version = "1.0.122", features = ["diff"] }

@@ -3,8 +3,9 @@
 pub use compliance_errors::ComplianceError;
 pub use invoice_errors::InvoiceError;
 pub use treasury::TreasuryError;
+pub use workflow_errors::WorkflowError;
 
-/// Unified error type spanning all three COMEBACKHERE contracts.
+/// Unified error type spanning all COMEBACKHERE contracts.
 ///
 /// Integration clients and cross-contract tests can import this single type
 /// and handle errors from any contract with one `match` arm.
@@ -14,12 +15,13 @@ pub use treasury::TreasuryError;
 /// settlement-workflow link failure this repo hit from exactly that mistake.
 /// `protocol-errors` exists to sit outside the on-chain dependency graph, not
 /// inside it, and that stays true even once this crate depends on nothing but
-/// the three error enums themselves.
+/// the four error enums themselves.
 #[derive(Copy, Clone, Debug, PartialEq)]
 pub enum ProtocolError {
     Invoice(InvoiceError),
     Treasury(TreasuryError),
     Compliance(ComplianceError),
+    Workflow(WorkflowError),
 }
 
 impl From<InvoiceError> for ProtocolError {
@@ -40,6 +42,12 @@ impl From<ComplianceError> for ProtocolError {
     }
 }
 
+impl From<WorkflowError> for ProtocolError {
+    fn from(e: WorkflowError) -> Self {
+        ProtocolError::Workflow(e)
+    }
+}
+
 impl ProtocolError {
     /// Returns the originating contract name as a static string slice.
     pub fn contract_name(&self) -> &'static str {
@@ -47,6 +55,7 @@ impl ProtocolError {
             ProtocolError::Invoice(_) => "invoice",
             ProtocolError::Treasury(_) => "treasury",
             ProtocolError::Compliance(_) => "compliance",
+            ProtocolError::Workflow(_) => "settlement-workflow",
         }
     }
 
@@ -56,43 +65,16 @@ impl ProtocolError {
             ProtocolError::Invoice(e) => invoice_description(*e),
             ProtocolError::Treasury(e) => treasury_description(*e),
             ProtocolError::Compliance(e) => compliance_description(*e),
+            ProtocolError::Workflow(e) => workflow_description(*e),
         }
     }
 }
 
 // Exhaustive matches: adding a variant without a description fails to compile.
+// Invoice messages are owned by `invoice-errors` itself (#883), so they are
+// defined once next to the enum rather than duplicated here.
 fn invoice_description(e: InvoiceError) -> &'static str {
-    use InvoiceError::*;
-    match e {
-        Unauthorized => "Caller is not authorized for this action.",
-        ContractPaused => "The invoice contract is paused.",
-        InvalidAmount => "The invoice amount is invalid.",
-        NotPending => "The invoice is not pending.",
-        Expired => "The invoice has expired.",
-        NotFound => "Invoice not found.",
-        AlreadyInitialized => "The invoice contract is already initialized.",
-        ZeroDuration => "The invoice duration must be greater than zero.",
-        ExpiryOverflow => "The invoice expiry time is out of range.",
-        NotPaid => "The invoice has not been paid.",
-        NotReleased => "The invoice escrow has not been released.",
-        AmountPrecision => "The amount has too many decimal places.",
-        DuplicateNonce => "This invoice nonce has already been used.",
-        ExpiryTooLong => "The invoice expiry is too far in the future.",
-        MetadataMismatch => "The invoice metadata does not match.",
-        NoPendingAdmin => "There is no pending admin transfer.",
-        InvalidPaymentLinkHash => "The payment link hash is invalid.",
-        NotRefundRequested => "No refund has been requested for this invoice.",
-        TokenMismatch => "The payment token does not match the invoice.",
-        BatchTooLarge => "Too many items in one batch.",
-        CooldownActive => "Please wait before trying this action again.",
-        InvoiceCountOverflow => "The invoice limit has been reached.",
-        HashTooLong => "The provided hash is too long.",
-        PaymentStateInconsistent => "The invoice does not describe a completed payment.",
-        RefundTransferFailed => "The refund transfer failed.",
-        RefundTokenNotSet => "The invoice has no token to refund through.",
-        RefundFeeTooHigh => "The refund fee is too high.",
-        ArithmeticOverflow => "The calculation overflowed.",
-    }
+    e.message()
 }
 
 fn treasury_description(e: TreasuryError) -> &'static str {
@@ -145,13 +127,32 @@ fn treasury_description(e: TreasuryError) -> &'static str {
         DuplicateVote => "The signer has already voted on this dispute.",
         NoPendingAdmin => "There is no pending admin transfer.",
         LabelTooLong => "The signer label is too long.",
+        InvalidTimelockDelay => "The timelock delay is outside the allowed bounds.",
+        DuplicateReferenceId => "This deposit reference id was already used recently.",
+        TokenHasBalance => "The token still has depositor balances and cannot be removed.",
     }
 }
 
 fn compliance_description(e: ComplianceError) -> &'static str {
+    use ComplianceError::*;
     match e {
-        ComplianceError::AlreadyInitialized => "The compliance contract is already initialized.",
+        AlreadyInitialized => "The compliance contract is already initialized.",
+        Unauthorized => "Caller is not authorized for this compliance action.",
+        ContractPaused => "The compliance contract is paused.",
+        BatchTooLarge => "Too many addresses in one compliance batch.",
+        AddressIndexFull => "The compliance address index is full.",
+        BulkOperationCooldown => "Bulk compliance operation cooldown has not elapsed.",
+        UnexpectedSchemaVersion => "Unexpected compliance storage schema version.",
+        OperatorCannotClearAdminBlock => "Operators cannot clear admin-placed blocks.",
+        OperatorSetFull => "The compliance operator set is full.",
+        InvalidJurisdictionCode => "The jurisdiction code is invalid.",
+        NoPendingAdmin => "There is no pending admin transfer.",
+        InvalidTierLimit => "The tier transaction limit is invalid.",
     }
+}
+
+fn workflow_description(e: WorkflowError) -> &'static str {
+    e.message()
 }
 
 #[cfg(test)]

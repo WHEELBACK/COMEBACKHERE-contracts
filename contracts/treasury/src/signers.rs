@@ -5,13 +5,19 @@ use crate::{
 use multisig::{meets_threshold, record_approval, require_authorized_signer, signer_weight};
 use soroban_sdk::{contractimpl, Address, Env, String, Symbol, Vec};
 
-/// Maximum length (in bytes) accepted for an optional signer label (#568).
+/// Maximum length (in bytes) accepted for an optional signer label (#568, #740).
 /// Labels are purely informational and are never consulted for authorisation.
+/// `set_signer_label` rejects any label longer than this to bound storage costs.
 pub(crate) const MAX_SIGNER_LABEL_LEN: u32 = 64;
 
 #[contractimpl]
 impl TreasuryContract {
-    /// Registers or updates the approval weight of `signer` (admin-only). Weight 0 deactivates the signer.
+    /// Registers or updates the approval weight of `signer` (admin-only).
+    ///
+    /// Weight must be strictly positive: a zero-weight signer would remain in
+    /// `SignerList` with no voting power, confusing `get_all_signers` and the
+    /// quorum math. Use `remove_signer` to deactivate a signer instead.
+    /// Errors: `ZeroSignerWeight`.
     /// Emits: `signer_weight_set`.
     pub fn set_signer(
         env: Env,
@@ -20,27 +26,23 @@ impl TreasuryContract {
         weight: u32,
     ) -> Result<(), TreasuryError> {
         require_admin(&env, &admin);
+        if weight == 0 {
+            return Err(TreasuryError::InvalidAmount);
+        }
         env.storage()
             .instance()
             .set(&DataKey::Signer(signer.clone()), &weight);
+        // Targeted membership check first: only touch `SignerList` when the
+        // signer is genuinely new, avoiding a needless deserialize/serialize
+        // round-trip on the common reweight path.
         let mut list: Vec<Address> = env
             .storage()
             .instance()
             .get(&DataKey::SignerList)
             .unwrap_or_else(|| Vec::new(&env));
-        if weight > 0 {
-            if !list.contains(&signer) {
-                list.push_back(signer.clone());
-                env.storage().instance().set(&DataKey::SignerList, &list);
-            }
-        } else {
-            let mut updated = Vec::new(&env);
-            for s in list.iter() {
-                if s != signer {
-                    updated.push_back(s);
-                }
-            }
-            env.storage().instance().set(&DataKey::SignerList, &updated);
+        if !list.contains(&signer) {
+            list.push_back(signer.clone());
+            env.storage().instance().set(&DataKey::SignerList, &list);
         }
         env.events()
             .publish((Symbol::new(&env, "signer_weight_set"), signer), weight);
@@ -94,6 +96,7 @@ impl TreasuryContract {
             .instance()
             .get(&DataKey::Threshold)
             .unwrap_or(0);
+        // Targeted lookup: only the signer being removed needs to be read here.
         let signer_weight: u32 = env
             .storage()
             .instance()
@@ -106,17 +109,24 @@ impl TreasuryContract {
             .get(&DataKey::SignerList)
             .unwrap_or_else(|| Vec::new(&env));
 
+        // Single pass over the registry: accumulate total weight and build the
+        // pruned list at the same time, so the list is only deserialized once.
         let mut total_weight: u32 = 0;
+        let mut updated = Vec::new(&env);
         for s in list.iter() {
+            if s == signer {
+                continue;
+            }
             let w: u32 = env
                 .storage()
                 .instance()
                 .get(&DataKey::Signer(s.clone()))
                 .unwrap_or(0);
             total_weight = total_weight.saturating_add(w);
+            updated.push_back(s);
         }
 
-        let weight_after_removal = total_weight.saturating_sub(signer_weight);
+        let weight_after_removal = total_weight;
         if weight_after_removal < threshold {
             return Err(TreasuryError::QuorumBreak);
         }
@@ -124,12 +134,6 @@ impl TreasuryContract {
         env.storage()
             .instance()
             .remove(&DataKey::Signer(signer.clone()));
-        let mut updated = Vec::new(&env);
-        for s in list.iter() {
-            if s != signer {
-                updated.push_back(s);
-            }
-        }
         env.storage().instance().set(&DataKey::SignerList, &updated);
         env.events()
             .publish((Symbol::new(&env, "signer_removed"),), signer);
@@ -138,6 +142,8 @@ impl TreasuryContract {
 
     /// Returns the current approval weight for `signer`, or `0` if not registered.
     pub fn get_signer_weight(env: Env, signer: Address) -> u32 {
+        // Targeted `DataKey::Signer(signer)` read; the signer list is never
+        // deserialized on this read-only path.
         signer_weight(&env, &signer)
     }
 
@@ -152,6 +158,7 @@ impl TreasuryContract {
             .unwrap_or_else(|| Vec::new(&env));
         let mut result = Vec::new(&env);
         for signer in list.iter() {
+            // Read-only path: no TTL extension, just targeted per-signer lookups.
             let weight: u32 = env
                 .storage()
                 .instance()
@@ -166,6 +173,16 @@ impl TreasuryContract {
         result
     }
 
+    /// Returns the signer-rotation proposal with the given `rotation_id`, or `None`
+    /// if it does not exist. Works for pending, executed and cancelled proposals
+    /// alike so signers can confirm exactly what they are approving (or have approved).
+    pub fn get_rotation(env: Env, rotation_id: u64) -> Option<SignerRotationProposal> {
+        // Read-only path: targeted persistent lookup, no TTL extension.
+        env.storage()
+            .persistent()
+            .get(&DataKey::SignerRotation(rotation_id))
+    }
+
     /// Returns the ledger timestamp of the most recent approval recorded for
     /// `signer`, or `None` if the signer has never submitted an approval (#587).
     ///
@@ -176,6 +193,7 @@ impl TreasuryContract {
     /// before it becomes a quorum risk — e.g. flag any signer that has not
     /// approved anything in the last 90 days.
     pub fn get_signer_last_active(env: Env, signer: Address) -> Option<u64> {
+        // Read-only path: targeted lookup, no TTL extension.
         env.storage()
             .instance()
             .get(&DataKey::SignerLastActive(signer))
@@ -218,6 +236,8 @@ impl TreasuryContract {
         // Snapshot old_signer's weight now, at proposal time, so a later
         // set_signer/remove_signer racing against this proposal's execution
         // cannot change what weight new_signer receives (see approve_signer_rotation).
+        // Single targeted `DataKey::Signer(old_signer)` read; the signer list is
+        // never deserialized on this path.
         let captured_old_weight = signer_weight(&env, &old_signer);
         let proposal = SignerRotationProposal {
             id,
@@ -276,6 +296,7 @@ impl TreasuryContract {
             // old_signer's weight right now — old_signer may have been
             // reweighted or removed by an unrelated transaction while this
             // rotation was pending, and that must not change the outcome.
+            // Targeted writes only: no full signer-list deserialization.
             env.storage().instance().set(
                 &DataKey::Signer(proposal.new_signer.clone()),
                 &proposal.captured_old_weight,

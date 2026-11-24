@@ -1,9 +1,13 @@
 use crate::events;
-use crate::events::InvoiceExpiryExtendedEvent;
-use crate::validation::require_admin;
+use crate::events::{
+    GraceWindowUpdatedEvent, InvoiceExpiryExtendedEvent, MaxOpenInvoicesUpdatedEvent, MerchantMaxOpenInvoicesUpdatedEvent,
+};
+use crate::refund::{configured_network_fee, MAX_REFUND_NETWORK_FEE};
+use crate::invoice::{INVOICE_TTL_EXTEND_TO, INVOICE_TTL_THRESHOLD};
+use crate::validation::{require_admin, require_role};
 use crate::{
     DataKey, Invoice, InvoiceContract, InvoiceContractArgs, InvoiceContractClient, InvoiceError,
-    InvoiceStatus,
+    InvoiceRole, InvoiceStatus,
 };
 use soroban_sdk::{contractimpl, Address, Env};
 
@@ -24,11 +28,26 @@ impl InvoiceContract {
 
     /// Set the grace window (seconds) added to expires_at when checking payment validity.
     /// Allows a short buffer after quote expiry for in-flight payments.
+    /// Emits `grace_window_updated` with old and new values.
+    ///
+    /// Callable by the admin or an `InvoiceRole::ConfigManager` (#879).
     pub fn set_grace_window(env: Env, admin: Address, seconds: u64) -> Result<(), InvoiceError> {
-        require_admin(&env, &admin)?;
+        require_role(&env, &admin, InvoiceRole::ConfigManager)?;
+        let old_seconds: u64 = env
+            .storage()
+            .instance()
+            .get(&DataKey::GraceWindow)
+            .unwrap_or(0u64);
         env.storage()
             .instance()
             .set(&DataKey::GraceWindow, &seconds);
+        events::grace_window_updated(
+            &env,
+            &GraceWindowUpdatedEvent {
+                old_seconds,
+                new_seconds: seconds,
+            },
+        );
         Ok(())
     }
 
@@ -37,6 +56,134 @@ impl InvoiceContract {
         env.storage()
             .instance()
             .get(&DataKey::GraceWindow)
+            .unwrap_or(0u64)
+    }
+
+    // --- max open invoices limit ---
+
+    /// Set the maximum number of open (pending) invoices a single merchant may
+    /// hold at one time. Pass 0 to disable the limit (default).
+    /// Emits `max_open_invoices_updated` with old and new values.
+    ///
+    /// Callable by the admin or an `InvoiceRole::ConfigManager` (#879).
+    pub fn set_max_open_invoices(env: Env, admin: Address, limit: u32) -> Result<(), InvoiceError> {
+        require_role(&env, &admin, InvoiceRole::ConfigManager)?;
+        let old_limit: u32 = env
+            .storage()
+            .instance()
+            .get(&DataKey::MaxOpenInvoices)
+            .unwrap_or(0u32);
+        env.storage()
+            .instance()
+            .set(&DataKey::MaxOpenInvoices, &limit);
+        events::max_open_invoices_updated(
+            &env,
+            &MaxOpenInvoicesUpdatedEvent {
+                old_limit,
+                new_limit: limit,
+            },
+        );
+        Ok(())
+    }
+
+    /// Return the current max-open-invoices limit (0 = no limit).
+    pub fn get_max_open_invoices(env: Env) -> u32 {
+        env.storage()
+            .instance()
+            .get(&DataKey::MaxOpenInvoices)
+            .unwrap_or(0u32)
+    }
+
+    // --- #715: per-merchant open-invoice limit override ---
+
+    /// Set a per-merchant override of the open-invoice cap. Pass `None` to clear
+    /// the override, falling back to the global cap. Admin-only.
+    /// Emits `merchant_max_open_invoices_updated`.
+    pub fn set_merchant_max_open_invoices(
+        env: Env,
+        admin: Address,
+        merchant: Address,
+        limit: Option<u32>,
+    ) -> Result<(), InvoiceError> {
+        // #879: admin or `InvoiceRole::ConfigManager`.
+        require_role(&env, &admin, InvoiceRole::ConfigManager)?;
+        let key = DataKey::MerchantMaxOpenInvoices(merchant.clone());
+        match limit {
+            Some(limit) => env.storage().persistent().set(&key, &limit),
+            None => env.storage().persistent().remove(&key),
+        }
+        events::merchant_max_open_invoices_updated(
+            &env,
+            &MerchantMaxOpenInvoicesUpdatedEvent {
+                merchant,
+                new_limit: limit,
+            },
+        );
+        Ok(())
+    }
+
+    /// Return the effective open-invoice cap for `merchant`: the per-merchant
+    /// override if one is set, otherwise the global cap (0 = no limit).
+    pub fn get_max_open_invoices_for(env: Env, merchant: Address) -> u32 {
+        env.storage()
+            .persistent()
+            .get(&DataKey::MerchantMaxOpenInvoices(merchant))
+            .unwrap_or_else(|| {
+                env.storage()
+                    .instance()
+                    .get(&DataKey::MaxOpenInvoices)
+                    .unwrap_or(0u32)
+            })
+    }
+
+    // --- late-fee configuration ---
+
+    /// Set the late-fee rate in basis points (1 bps = 0.01%).
+    /// Applied to overdue invoice amounts by the settlement layer.
+    /// Admin-only. Pass 0 to disable the late fee (default).
+    ///
+    /// Callable by the admin or an `InvoiceRole::FeeManager` (#879).
+    pub fn set_late_fee_bps(env: Env, admin: Address, bps: u32) -> Result<(), InvoiceError> {
+        require_role(&env, &admin, InvoiceRole::FeeManager)?;
+        if bps > crate::refund::BPS_DENOMINATOR {
+            return Err(InvoiceError::InvalidLateFee);
+        }
+        let old_bps: u32 = env.storage().instance().get(&DataKey::LateFee).unwrap_or(0);
+        env.storage().instance().set(&DataKey::LateFee, &bps);
+        // #704: make late-fee changes visible to indexers.
+        events::late_fee_updated(&env, old_bps, bps);
+        Ok(())
+    }
+
+    /// Return the current late-fee rate in basis points (0 if not set).
+    pub fn get_late_fee_bps(env: Env) -> u32 {
+        env.storage()
+            .instance()
+            .get(&DataKey::LateFee)
+            .unwrap_or(0u32)
+    }
+
+    // --- #702: configurable refund window ---
+
+    /// Set the refund window: how many seconds after `paid_at` a payer may
+    /// call `request_refund`. Pass `0` to remove the limit (current behaviour:
+    /// refunds accepted at any time after payment, giving merchants indefinite
+    /// exposure).
+    ///
+    /// Callable by the admin or an `InvoiceRole::ConfigManager` (#879).
+    pub fn set_refund_window(env: Env, admin: Address, seconds: u64) -> Result<(), InvoiceError> {
+        require_role(&env, &admin, InvoiceRole::ConfigManager)?;
+        env.storage()
+            .instance()
+            .set(&DataKey::RefundWindow, &seconds);
+        Ok(())
+    }
+
+    /// Return the current refund window in seconds (0 means no limit).
+    pub fn get_refund_window(env: Env) -> u64 {
+        env.storage()
+            .instance()
+            .get(&DataKey::RefundWindow)
             .unwrap_or(0u64)
     }
 
@@ -71,8 +218,14 @@ impl InvoiceContract {
         Ok(())
     }
 
+    /// Returns the current admin address.
+    pub fn get_admin(env: Env) -> Address {
+        env.storage().instance().get(&DataKey::Admin).unwrap()
+    }
+
+    /// Callable by the admin or an `InvoiceRole::PauseGuardian` (#879).
     pub fn pause(env: Env, admin: Address) -> Result<(), InvoiceError> {
-        require_admin(&env, &admin)?;
+        require_role(&env, &admin, InvoiceRole::PauseGuardian)?;
         env.storage().instance().set(&DataKey::Paused, &true);
         events::contract_paused(&env, &admin);
         Ok(())
@@ -85,6 +238,14 @@ impl InvoiceContract {
         Ok(())
     }
 
+    /// Returns `true` while the contract is paused. Read-only, no auth required.
+    pub fn is_paused(env: Env) -> bool {
+        env.storage()
+            .instance()
+            .get(&DataKey::Paused)
+            .unwrap_or(false)
+    }
+
     /// Extend the expiry of a pending invoice.
     pub fn extend_expiry(
         env: Env,
@@ -92,7 +253,8 @@ impl InvoiceContract {
         id: u64,
         additional_seconds: u64,
     ) -> Result<(), InvoiceError> {
-        require_admin(&env, &admin)?;
+        // #879: admin or `InvoiceRole::ConfigManager`.
+        require_role(&env, &admin, InvoiceRole::ConfigManager)?;
         let mut invoice: Invoice = env
             .storage()
             .persistent()
@@ -107,9 +269,7 @@ impl InvoiceContract {
             .checked_add(additional_seconds)
             .filter(|new_expires_at| *new_expires_at > old_expires_at)
             .ok_or(InvoiceError::ExpiryOverflow)?;
-        env.storage()
-            .persistent()
-            .set(&DataKey::Invoice(id), &invoice);
+        crate::store_invoice(&env, &invoice)?;
         events::invoice_expiry_extended(
             &env,
             &InvoiceExpiryExtendedEvent {
@@ -119,5 +279,73 @@ impl InvoiceContract {
             },
         );
         Ok(())
+    }
+
+    // --- #701: admin-configurable refund network fee ---
+
+    /// Set the flat refund network fee (in stroops) deducted from refund payouts.
+    /// Admin-only. Must be in `[0, MAX_REFUND_NETWORK_FEE]`.
+    /// Emits `refund_network_fee_updated` with the old and new fee.
+    ///
+    /// Callable by the admin or an `InvoiceRole::FeeManager` (#879).
+    pub fn set_refund_network_fee(env: Env, admin: Address, fee: i128) -> Result<(), InvoiceError> {
+        require_role(&env, &admin, InvoiceRole::FeeManager)?;
+        if !(0..=MAX_REFUND_NETWORK_FEE).contains(&fee) {
+            return Err(InvoiceError::InvalidAmount);
+        }
+        let old_fee = configured_network_fee(&env);
+        env.storage()
+            .instance()
+            .set(&DataKey::RefundNetworkFee, &fee);
+        events::refund_network_fee_updated(&env, old_fee, fee);
+        Ok(())
+    }
+
+    /// Return the refund network fee in force, in stroops
+    /// (`REFUND_NETWORK_FEE` when not explicitly configured).
+    pub fn get_refund_network_fee(env: Env) -> i128 {
+        configured_network_fee(&env)
+    }
+
+    // --- #879: granular role-based authorization ---
+
+    /// Grant `role` to `account`. Admin-only; idempotent. Emits `role_granted`.
+    pub fn grant_role(
+        env: Env,
+        admin: Address,
+        role: InvoiceRole,
+        account: Address,
+    ) -> Result<(), InvoiceError> {
+        require_admin(&env, &admin)?;
+        let key = DataKey::RoleMember(role, account.clone());
+        env.storage().persistent().set(&key, &true);
+        env.storage()
+            .persistent()
+            .extend_ttl(&key, INVOICE_TTL_THRESHOLD, INVOICE_TTL_EXTEND_TO);
+        events::role_granted(&env, role, &account);
+        Ok(())
+    }
+
+    /// Revoke `role` from `account`. Admin-only; idempotent. Emits `role_revoked`.
+    pub fn revoke_role(
+        env: Env,
+        admin: Address,
+        role: InvoiceRole,
+        account: Address,
+    ) -> Result<(), InvoiceError> {
+        require_admin(&env, &admin)?;
+        env.storage()
+            .persistent()
+            .remove(&DataKey::RoleMember(role, account.clone()));
+        events::role_revoked(&env, role, &account);
+        Ok(())
+    }
+
+    /// Whether `account` holds `role` explicitly. The admin implicitly holds
+    /// every role, but is not reported here unless it was granted one.
+    pub fn has_role(env: Env, role: InvoiceRole, account: Address) -> bool {
+        env.storage()
+            .persistent()
+            .has(&DataKey::RoleMember(role, account))
     }
 }

@@ -1,25 +1,25 @@
 //! Instruction-cost scaling test for `TreasuryContract::resolve_dispute`.
 //!
-//! `resolve_dispute` (contracts/treasury/src/disputes.rs:121-178), after
-//! flipping the target dispute's status, walks `while i <= dispute_count`
-//! over *every* dispute ID ever raised against the contract instance — not
-//! just the ones tied to the settlement being resolved — to determine
-//! whether any other open dispute still references the same settlement
-//! before releasing the settlement's hold (disputes.rs:154-168).
+//! Historically `resolve_dispute` (contracts/treasury/src/disputes.rs) walked
+//! `while i <= dispute_count` over *every* dispute ID ever raised against the
+//! contract instance — not just the ones tied to the settlement being
+//! resolved — to determine whether any other open dispute still referenced
+//! the same settlement before releasing the settlement's hold. That scan was
+//! unbounded by anything related to the settlement being resolved: its
+//! iteration count was exactly `DisputeCount`, the *global*, monotonically
+//! increasing total of disputes ever raised against this treasury instance.
 //!
-//! Reading the code confirms this loop is genuinely unbounded by anything
-//! related to the settlement being resolved: its iteration count is exactly
-//! `DisputeCount`, the *global*, monotonically increasing total of disputes
-//! ever raised against this treasury instance, regardless of how many (if
-//! any) of those disputes touch the settlement in question. There is no
-//! secondary index from settlement → its disputes, and no cap on
-//! `DisputeCount` itself (`raise_dispute` only rejects on `u64` overflow).
-//! This is not implicitly bounded by anything else in the contract.
+//! #916 streamlined storage deserialization by maintaining a per-settlement
+//! open-dispute counter (`SettlementOpenDisputeCount(settlement_id)`) that is
+//! updated in `raise_dispute`/`resolve_dispute`/`expire_dispute`. With that
+//! index in place, `resolve_dispute` checks `count == 0` in O(1) instead of
+//! rescanning full history, so its cost is now decoupled from the total
+//! historical dispute count.
 //!
 //! This test measures `resolve_dispute`'s CPU instruction cost as a function
 //! of accumulated historical dispute count, at scales far beyond current
 //! real usage, to make the cost-vs-history-size relationship explicit and
-//! catch any future regression that makes it worse.
+//! catch any future regression that reintroduces history-dependent scaling.
 
 use soroban_sdk::{testutils::Address as _, Address, Env};
 use treasury::{SettlementStatus, TreasuryContract, TreasuryContractClient};
@@ -75,7 +75,7 @@ fn bench_resolve_dispute_cost(historical_disputes: u64) -> (u64, u64) {
     assert_eq!(client.get_settlement(&sid).status, SettlementStatus::OnHold);
 
     env.cost_estimate().budget().reset_tracker();
-    client.resolve_dispute(&admin, &did, &true);
+    client.resolve_dispute(&admin, &did, &true, &None);
     let instructions = env.cost_estimate().budget().cpu_instruction_cost();
 
     assert_eq!(
@@ -88,20 +88,21 @@ fn bench_resolve_dispute_cost(historical_disputes: u64) -> (u64, u64) {
 }
 
 /// Measures resolve_dispute's instruction cost at increasing amounts of
-/// unrelated historical dispute volume and asserts the cost strictly
-/// increases with history size — i.e. that the loop's cost is driven by
-/// total dispute history, not by anything bounded relative to the
-/// settlement actually being resolved. Prints the resulting cost curve with
-/// `--nocapture` so the growth relationship is visible, not just asserted.
+/// unrelated historical dispute volume and asserts the cost no longer scales
+/// with history size — i.e. that the per-settlement open-dispute index lookup
+/// keeps `resolve_dispute`'s cost bounded relative to the settlement actually
+/// being resolved, regardless of how much unrelated dispute history exists.
+/// Prints the resulting cost curve with `--nocapture` so the relationship is
+/// visible, not just asserted.
 ///
 /// Run with:
 ///   cargo test --package comebackhere-treasury --test resolve_dispute_dos_test -- --nocapture
 #[test]
-fn resolve_dispute_cost_scales_with_total_historical_dispute_count() {
+fn resolve_dispute_cost_is_independent_of_total_historical_dispute_count() {
     // Sample sizes kept modest: each raises that many disputes through the
-    // contract and then resolves one against an O(DisputeCount) scan, so the
-    // aggregate call count grows fast. These are large enough to make the
-    // scaling visible and assertable without a multi-minute test.
+    // contract and then resolves one. With the per-settlement index the
+    // resolve path is O(1) in history, so the aggregate call count is the
+    // only thing that grows with these sizes.
     let sample_sizes = [0u64, 40, 160, 400, 1_000];
     let mut results = Vec::new();
 
@@ -114,71 +115,52 @@ fn resolve_dispute_cost_scales_with_total_historical_dispute_count() {
         eprintln!("  historical_disputes={n:>6}  instructions={instructions}");
     }
 
-    // The loop scans 1..=DisputeCount unconditionally, so cost at a larger
-    // historical count must be strictly greater than at a smaller one — this
-    // is the DoS-relevant relationship: cost is coupled to total contract
-    // history, not to anything bounded by the settlement being resolved.
-    for pair in results.windows(2) {
-        let (n_small, cost_small) = pair[0];
-        let (n_large, cost_large) = pair[1];
+    // With the per-settlement open-dispute counter, resolve_dispute no longer
+    // scans 1..=DisputeCount, so cost must not grow with unrelated history.
+    // Allow a small tolerance for incidental host-metering noise (e.g. the
+    // footprint of the surrounding call) but reject any history-driven
+    // growth: a reintroduced O(DisputeCount) scan would blow far past this.
+    let (_, c_base) = results[0];
+    let (n_large, c_large) = results[results.len() - 1];
+    assert!(
+        c_large <= c_base + c_base / 4 + 50_000,
+        "expected resolve_dispute cost to be independent of historical dispute \
+         count after the per-settlement index lookup, but cost grew from \
+         {c_base} instructions at n=0 to {c_large} instructions at n={n_large}; \
+         this suggests the O(DisputeCount) scan was reintroduced"
+    );
+
+    // Sub-linear scaling check across the whole curve: cost at the largest
+    // sample must stay well under linear growth relative to the smallest.
+    // A linear (or worse) relationship would fail this comfortably.
+    for &(n, cost) in &results[1..] {
+        let linear_bound = c_base.saturating_add(c_base.saturating_mul(n) / 10);
         assert!(
-            cost_large > cost_small,
-            "expected resolve_dispute cost to strictly increase with historical \
-             dispute count ({n_small} disputes -> {cost_small} instructions vs. \
-             {n_large} disputes -> {cost_large} instructions); if this ever fails \
-             it means the loop stopped scaling with DisputeCount, which would be a \
-             welcome fix worth documenting, not a bug in this test"
+            cost <= linear_bound.max(c_base + 50_000),
+            "resolve_dispute cost at n={n} ({cost} instructions) exceeds the \
+             sub-linear bound derived from baseline {c_base} instructions; \
+             cost must not scale with total historical dispute count"
         );
     }
-
-    // Sanity check the growth rate doesn't get worse than it is today. The
-    // contract-side scan is O(DisputeCount) storage reads, but each read also
-    // lands in the host's recorded storage footprint, whose per-entry cost
-    // grows with the footprint's size — so the metered total is observably
-    // super-linear (~quadratic) in the dispute count, not linear. Bound the
-    // growth between the two largest samples by the quadratic ratio
-    // (n3/n2)^2: today's curve sits well inside it, while something
-    // genuinely worse (e.g. a Vec::contains scan inside the loop, making it
-    // cubic) would blow straight through it.
-    let (_, c_base) = results[0];
-    let (n2, c2) = results[3];
-    let (n3, c3) = results[4];
-    let growth = (c3 - c_base) as f64 / (c2 - c_base) as f64;
-    let quadratic_bound = (n3 as f64 / n2 as f64).powi(2);
-    assert!(
-        growth <= quadratic_bound,
-        "resolve_dispute cost above baseline grew {growth:.2}x from n={n2} to \
-         n={n3}, more than the {quadratic_bound:.2}x a quadratic curve allows; \
-         this is worse than the scan's current scaling and would make the \
-         instruction-budget ceiling arrive even sooner"
-    );
 }
 
-/// Documents the finding from reading the code: this is a genuine,
-/// currently-unbounded DoS surface, not one implicitly capped by something
-/// else in the contract (no per-settlement dispute index, no cap on
-/// DisputeCount besides u64 overflow). Once `DisputeCount` grows large
-/// enough that this scan alone approaches Soroban's per-transaction
-/// instruction budget, every future `resolve_dispute` call — for any
-/// settlement, not just the one that pushed the count over the edge —
-/// becomes uncallable. This should be filed as its own follow-up issue
-/// (e.g. maintaining a `SettlementOpenDisputeCount(settlement_id)` counter
-/// updated in `raise_dispute`/`resolve_dispute`/`expire_dispute`, so
-/// `resolve_dispute` can check `count == 0` in O(1) instead of rescanning
-/// full history) rather than fixed silently in this PR.
+/// Confirms the #916 fix: the per-settlement open-dispute counter
+/// (`SettlementOpenDisputeCount(settlement_id)`, updated in
+/// `raise_dispute`/`resolve_dispute`/`expire_dispute`) lets `resolve_dispute`
+/// check `count == 0` in O(1) instead of rescanning full history, so the
+/// previously-unbounded DoS surface is closed. This test keeps the finding
+/// greppable and CI-visible: resolving with a large amount of unrelated
+/// historical dispute volume must cost essentially the same as resolving with
+/// almost none.
 #[test]
-fn finding_documented_unbounded_scan_is_not_implicitly_capped() {
-    // This test exists to make the finding greppable and CI-visible rather
-    // than only living in a doc comment: resolve_dispute's cost at a large
-    // historical count must not equal its cost at a small one, which would
-    // be the signature of an implicit cap (e.g. an early-exit index) that
-    // doesn't exist today.
+fn resolve_dispute_cost_is_bounded_by_settlement_relevant_history() {
     let (_, cost_small) = bench_resolve_dispute_cost(1);
     let (_, cost_large) = bench_resolve_dispute_cost(1_000);
     assert!(
-        cost_large > cost_small * 10,
-        "expected a large gap between resolving with 1 vs. 1000 historical \
-         disputes (got {cost_small} vs {cost_large} instructions), confirming \
-         the scan is genuinely unbounded by settlement-relevant history"
+        cost_large <= cost_small + cost_small / 4 + 50_000,
+        "expected resolving with 1 vs. 1000 historical disputes to cost about \
+         the same after the per-settlement index lookup (got {cost_small} vs \
+         {cost_large} instructions); a large gap would mean the unbounded \
+         O(DisputeCount) scan is back"
     );
 }
