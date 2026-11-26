@@ -74,10 +74,14 @@ jobs:
           echo "Deployer Address: $DEPLOYER_ADDR"
 
       - name: Build contract WASM binaries
+        env:
+          SOROBAN_SDK_BUILD_SYSTEM_SUPPORTS_SPEC_SHAKING_V2: "1"
         run: |
-          for pkg in comebackhere-compliance comebackhere-invoice comebackhere-treasury comebackhere-settlement-workflow; do
-            stellar contract build --package "$pkg"
-          done
+          cargo build --target wasm32v1-none --release \
+            -p comebackhere-compliance \
+            -p comebackhere-invoice \
+            -p comebackhere-treasury \
+            -p comebackhere-settlement-workflow
 
       - name: Optimize contract WASM binaries
         run: |
@@ -132,24 +136,16 @@ jobs:
             --id "$TREASURY_ID" \
             --source "$SOURCE" \
             --network "$NETWORK" \
-            -- initialize --admin "$DEPLOYER_ADDRESS" --threshold 1
+            -- initialize --admin "$DEPLOYER_ADDRESS" --threshold 1 --signers '[]'
 
-          echo "Deploying Settlement Workflow contract..."
+          echo "Deploying and initializing Settlement Workflow contract..."
           SETTLEMENT_WORKFLOW_ID=$(stellar contract deploy \
             --wasm target/wasm32v1-none/release/settlement_workflow.wasm \
             --source "$SOURCE" \
-            --network "$NETWORK")
-          echo "Settlement Workflow ID: $SETTLEMENT_WORKFLOW_ID"
-
-          # The workflow's admin is fixed at initialize and thereafter only
-          # changeable via the two-step transfer_admin/accept_admin flow (#621),
-          # so there is no single-step override here.
-          echo "Initializing Settlement Workflow contract..."
-          stellar contract invoke \
-            --id "$SETTLEMENT_WORKFLOW_ID" \
-            --source "$SOURCE" \
             --network "$NETWORK" \
-            -- initialize --admin "$DEPLOYER_ADDRESS" --compliance_id "$COMPLIANCE_ID" --treasury_id "$TREASURY_ID"
+            -- \
+            --admin "$DEPLOYER_ADDRESS" --compliance_id "$COMPLIANCE_ID" --treasury_id "$TREASURY_ID")
+          echo "Settlement Workflow ID: $SETTLEMENT_WORKFLOW_ID"
 
           echo "COMPLIANCE_ID=$COMPLIANCE_ID" >> $GITHUB_ENV
           echo "INVOICE_ID=$INVOICE_ID" >> $GITHUB_ENV
