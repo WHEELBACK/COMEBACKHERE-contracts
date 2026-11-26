@@ -74,9 +74,11 @@ stellar network add --rpc-url "$RPC_URL" --network-passphrase "$NETWORK_PASSPHRA
 
 # 3. Setup Admin Identity
 log_info "Ensuring admin identity exists..."
-stellar keys generate --network "$NETWORK" admin 2>/dev/null || true
+stellar keys generate --network "$NETWORK" --fund admin 2>/dev/null || stellar keys generate admin 2>/dev/null || true
 ADMIN_ADDRESS=$(stellar keys address admin)
 log_info "Admin Address: $ADMIN_ADDRESS"
+log_info "Ensuring admin account is funded..."
+stellar keys fund admin --network "$NETWORK" 2>/dev/null || curl -sf "http://localhost:8000/friendbot?addr=${ADMIN_ADDRESS}" > /dev/null || true
 
 # 4. Deploy and Initialize Compliance
 log_info "Deploying Compliance contract..."
