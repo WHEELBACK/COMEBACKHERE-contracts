@@ -34,6 +34,10 @@ pub enum RoleManagerError {
     RoleAlreadyGranted = 6,
     /// `revoke_role` on an account that does not hold the role.
     RoleNotGranted = 7,
+    /// Stored state failed an invariant check (#936).
+    StateInconsistency = 8,
+    /// An account already holds the maximum number of roles (#936).
+    TooManyRoles = 9,
 }
 
 /// Validation errors for role grant/revoke operations.
@@ -73,6 +77,8 @@ impl core::fmt::Display for RoleManagerError {
             RoleManagerError::EmptyRole => "role-manager: empty role symbol",
             RoleManagerError::RoleAlreadyGranted => "role-manager: role already granted",
             RoleManagerError::RoleNotGranted => "role-manager: role not granted",
+            RoleManagerError::StateInconsistency => "role-manager: stored state is inconsistent",
+            RoleManagerError::TooManyRoles => "role-manager: account role limit reached",
         })
     }
 }

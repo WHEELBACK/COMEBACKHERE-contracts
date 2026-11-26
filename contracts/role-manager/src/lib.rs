@@ -1,6 +1,7 @@
 #![no_std]
 
 mod errors;
+mod invariants;
 mod roles;
 
 pub use errors::{RoleManagementError, RoleManagerError};
@@ -47,6 +48,7 @@ impl RoleManagerContract {
         }
         env.storage().instance().set(&DataKey::Admin, &admin);
         env.storage().instance().set(&DataKey::Paused, &false);
+        invariants::check(&env)?;
         env.events()
             .publish((Symbol::new(&env, "role_manager_initialized"),), admin);
         Ok(())
@@ -71,13 +73,20 @@ impl RoleManagerContract {
         if role == Symbol::new(&env, "") {
             return Err(RoleManagementError::EmptyRole.into());
         }
-        let mut granted = roles::stored_roles(&env, &account);
+        // Repair legacy corruption in memory, then enforce the strict
+        // invariants before committing the new list (#936).
+        let mut granted = roles::sanitized_roles(&env, &account);
+        if roles::is_full(&granted) {
+            return Err(RoleManagerError::TooManyRoles);
+        }
         if granted.contains(&role) {
             return Err(RoleManagementError::RoleAlreadyGranted.into());
         }
         granted.push_back(role.clone());
+        invariants::verify_grants(&env, &granted)?;
         roles::set_stored_roles(&env, &account, &granted);
-        env.events().publish((Symbol::new(&env, "role_granted"), account), role);
+        env.events()
+            .publish((Symbol::new(&env, "role_granted"), account), role);
         Ok(())
     }
 
@@ -100,7 +109,7 @@ impl RoleManagerContract {
         if role == Symbol::new(&env, "") {
             return Err(RoleManagementError::EmptyRole.into());
         }
-        let granted = roles::stored_roles(&env, &account);
+        let granted = roles::sanitized_roles(&env, &account);
         if !granted.contains(&role) {
             return Err(RoleManagementError::RoleNotGranted.into());
         }
@@ -110,8 +119,10 @@ impl RoleManagerContract {
                 updated.push_back(granted_role.clone());
             }
         }
+        invariants::verify_grants(&env, &updated)?;
         roles::set_stored_roles(&env, &account, &updated);
-        env.events().publish((Symbol::new(&env, "role_revoked"), account), role);
+        env.events()
+            .publish((Symbol::new(&env, "role_revoked"), account), role);
         Ok(())
     }
 
@@ -123,8 +134,11 @@ impl RoleManagerContract {
     /// Cross-contract enforcement point: authenticates `account` and fails
     /// with `MissingRole` if it does not hold `role`.
     pub fn require_role(env: Env, role: Symbol, account: Address) -> Result<(), RoleManagerError> {
+        if role == Symbol::new(&env, "") {
+            return Err(RoleManagementError::EmptyRole.into());
+        }
         account.require_auth();
-        if !roles::has_granted(&env, &account, &role) {
+        if !roles::has_granted_checked(&env, &account, &role)? {
             return Err(RoleManagerError::MissingRole);
         }
         Ok(())
@@ -146,5 +160,22 @@ impl RoleManagerContract {
     /// Returns the stored admin, if `initialize` has been called.
     pub fn get_admin(env: Env) -> Option<Address> {
         env.storage().instance().get(&DataKey::Admin)
+    }
+
+    // -------------------------------------------------------------------------
+    // Invariant audit (#936)
+    // -------------------------------------------------------------------------
+
+    /// Read-only audit of the instance-level invariants. Operators and
+    /// monitors can detect a half-initialized instance before mutating it.
+    pub fn verify_invariants(env: Env) -> Result<(), RoleManagerError> {
+        invariants::check(&env)
+    }
+
+    /// Read-only audit of one account's grant list. Corrupt lists (empty
+    /// symbols, duplicates, or more than the configured maximum) are reported
+    /// as `StateInconsistency` / `TooManyRoles` instead of being trusted.
+    pub fn verify_account_roles(env: Env, account: Address) -> Result<(), RoleManagerError> {
+        invariants::verify_grants(&env, &roles::stored_roles(&env, &account))
     }
 }

@@ -468,24 +468,16 @@ fn error_variants_expose_custom_messages() {
 
 #[test]
 fn error_messages_are_non_empty_for_all_variants() {
-    let variants = [
-        TimeLockError::AlreadyInitialized,
-        TimeLockError::Unauthorized,
-        TimeLockError::InsufficientRole,
-        TimeLockError::ZeroDuration,
-        TimeLockError::ZeroAmount,
-        TimeLockError::LockNotFound,
-        TimeLockError::LockNotMatured,
-        TimeLockError::AlreadyReleased,
-        TimeLockError::BeneficiaryMismatch,
-        TimeLockError::ExpiryOverflow,
-        TimeLockError::ContractPaused,
-        TimeLockError::ZeroDeposit,
-    ];
-    for v in variants {
+    // Iterate the canonical registry so newly appended variants (#945) are
+    // covered automatically instead of relying on a hand-maintained list.
+    for v in TimeLockError::ALL {
         assert!(
             !v.message().is_empty(),
             "every error variant must have a non-empty message"
+        );
+        assert!(
+            !v.category().is_empty(),
+            "every error variant must have a non-empty category"
         );
     }
 }
