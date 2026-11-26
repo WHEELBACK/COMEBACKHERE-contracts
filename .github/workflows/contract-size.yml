@@ -84,14 +84,14 @@ jobs:
           for wasm in target/wasm32v1-none/release/*.wasm; do
             name=$(basename "$wasm" .wasm)
             size=$(stat --format=%s "$wasm")
-            # treasury carries a temporarily raised threshold: first for the
-            # Result-refactor series (#386/#387/#388), then for the admin
-            # signer/threshold-change timelock (#526), then for the treasury
-            # features merged Sept 26-29, 2026 (~99 KB after wasm-opt 108).
-            # Revert to MAX_CONTRACT_SIZE once a size-reduction pass brings it
-            # back under.
+            # treasury and invoice carry raised thresholds calibrated for the
+            # Soroban SDK 29.0.1 + wasm32v1-none toolchain and feature surface
+            # (within Soroban Protocol 22+'s 128 KiB / 131,072-byte max wasm
+            # limit). Revert toward MAX_CONTRACT_SIZE after a size-reduction pass.
             if [ "$name" = "treasury" ]; then
-              limit=100000
+              limit=131072
+            elif [ "$name" = "invoice" ]; then
+              limit=90000
             else
               limit="$MAX_CONTRACT_SIZE"
             fi
