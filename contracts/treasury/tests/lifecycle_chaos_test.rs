@@ -605,19 +605,19 @@ fn check_invariants(
     }
 
     // 2. All-or-nothing payout - never a partially applied transfer.
-    if s.merchant_balance != 0 && s.merchant_balance != s.minted_total {
+    if s.merchant_balance != 0 && s.merchant_balance != AMOUNT {
         return Err(InvariantViolation::new(
             step,
             operation,
             format!(
                 "partial payout: merchant holds {} (expected 0 or {})",
-                s.merchant_balance, s.minted_total
+                s.merchant_balance, AMOUNT
             ),
         ));
     }
 
     // 3. Merchant is paid iff the settlement executed.
-    let merchant_paid = s.merchant_balance == s.minted_total;
+    let merchant_paid = s.merchant_balance == AMOUNT;
     if merchant_paid != (s.settlement_status == SettlementStatus::Executed) {
         return Err(InvariantViolation::new(
             step,
@@ -739,6 +739,7 @@ struct ChaosCtx {
     ctx: Ctx,
     inv_id: u64,
     settlement_id: Option<u64>,
+    last_dispute_id: Option<u64>,
     minted_total: i128,
     merchant_allowed: bool,
     invoice_paused: bool,
@@ -768,6 +769,7 @@ impl ChaosCtx {
             ctx,
             inv_id,
             settlement_id: None,
+            last_dispute_id: None,
             minted_total: 0,
             merchant_allowed: false,
             invoice_paused: false,
@@ -820,26 +822,38 @@ impl ChaosCtx {
             ChaosOp::RaiseDispute => {
                 if let Some(id) = self.settlement_id {
                     let claimant = Address::generate(&self.ctx.env);
-                    let _ = catch_unwind(AssertUnwindSafe(|| {
-                        self.ctx.treasury.raise_dispute(
+                    if let Ok(Ok(did)) = catch_unwind(AssertUnwindSafe(|| {
+                        self.ctx.treasury.try_raise_dispute(
                             &claimant,
                             &id,
                             &self.ctx.merchant,
                             &1,
                             &u64::MAX,
                             &None,
+                        )
+                    })) {
+                        if let Ok(did) = did {
+                            self.last_dispute_id = Some(did);
+                        }
+                    }
+                }
+            }
+            ChaosOp::ResolveDispute => {
+                if let Some(did) = self.last_dispute_id {
+                    let _ = catch_unwind(AssertUnwindSafe(|| {
+                        let _ = self.ctx.treasury.try_resolve_dispute(
+                            &self.ctx.admin,
+                            &did,
+                            &true,
+                            &None,
                         );
                     }));
                 }
             }
-            ChaosOp::ResolveDispute => {
-                if let Some(id) = self.settlement_id {
-                    let _ = catch_unwind(AssertUnwindSafe(|| {
-                        self.ctx.treasury.resolve_dispute(&self.ctx.admin, &id);
-                    }));
-                }
-            }
             ChaosOp::AllowMerchant => {
+                self.ctx
+                    .compliance_client()
+                    .clear_address(&self.ctx.admin, &self.ctx.merchant);
                 self.ctx
                     .compliance_client()
                     .allow_address(&self.ctx.admin, &self.ctx.merchant);
@@ -847,9 +861,11 @@ impl ChaosCtx {
             }
             ChaosOp::RevokeMerchant => {
                 let _ = catch_unwind(AssertUnwindSafe(|| {
-                    self.ctx
-                        .compliance_client()
-                        .revoke_address(&self.ctx.admin, &self.ctx.merchant);
+                    let _ = self.ctx.compliance_client().try_block_address(
+                        &self.ctx.admin,
+                        &self.ctx.merchant,
+                        &None,
+                    );
                 }));
                 self.merchant_allowed = false;
             }
@@ -876,7 +892,9 @@ impl ChaosCtx {
             }
             ChaosOp::ReleaseEscrow => {
                 let _ = catch_unwind(AssertUnwindSafe(|| {
-                    self.ctx.invoice.release_escrow(&self.ctx.admin, &self.inv_id);
+                    self.ctx
+                        .invoice
+                        .release_escrow(&self.ctx.admin, &self.inv_id);
                 }));
             }
         }

@@ -1,9 +1,10 @@
 use crate::events;
 use crate::events::{
-    GraceWindowUpdatedEvent, InvoiceExpiryExtendedEvent, MaxOpenInvoicesUpdatedEvent, MerchantMaxOpenInvoicesUpdatedEvent,
+    GraceWindowUpdatedEvent, InvoiceExpiryExtendedEvent, MaxOpenInvoicesUpdatedEvent,
+    MerchantMaxOpenInvoicesUpdatedEvent,
 };
-use crate::refund::{configured_network_fee, MAX_REFUND_NETWORK_FEE};
 use crate::invoice::{INVOICE_TTL_EXTEND_TO, INVOICE_TTL_THRESHOLD};
+use crate::refund::{configured_network_fee, MAX_REFUND_NETWORK_FEE};
 use crate::validation::{require_admin, require_role};
 use crate::{
     DataKey, Invoice, InvoiceContract, InvoiceContractArgs, InvoiceContractClient, InvoiceError,
@@ -98,7 +99,7 @@ impl InvoiceContract {
 
     /// Set a per-merchant override of the open-invoice cap. Pass `None` to clear
     /// the override, falling back to the global cap. Admin-only.
-    /// Emits `merchant_max_open_invoices_updated`.
+    /// Emits `merchant_max_open_updated`.
     pub fn set_merchant_max_open_invoices(
         env: Env,
         admin: Address,
@@ -220,7 +221,10 @@ impl InvoiceContract {
 
     /// Returns the current admin address.
     pub fn get_admin(env: Env) -> Address {
-        env.storage().instance().get(&DataKey::Admin).unwrap()
+        env.storage()
+            .instance()
+            .get(&DataKey::Admin)
+            .unwrap_or_else(|| soroban_sdk::panic_with_error!(&env, InvoiceError::Unauthorized))
     }
 
     /// Callable by the admin or an `InvoiceRole::PauseGuardian` (#879).

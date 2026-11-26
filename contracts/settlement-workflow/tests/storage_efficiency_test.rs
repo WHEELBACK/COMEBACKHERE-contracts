@@ -76,8 +76,7 @@ fn execute_with_compliance_instruction_budget_has_not_regressed() {
     let token_id = env.register_stellar_asset_contract(admin.clone());
     compliance.allow_address(&admin, &merchant);
     let settlement_id = treasury.propose_settlement(&admin, &merchant, &10_000_000, &0_u64);
-    token::StellarAssetClient::new(&env, &token_id)
-        .mint(&treasury.address, &10_000_000);
+    token::StellarAssetClient::new(&env, &token_id).mint(&treasury.address, &10_000_000);
 
     env.cost_estimate().budget().reset_unlimited();
     env.cost_estimate().budget().reset_tracker();
@@ -100,7 +99,10 @@ fn storage_reads_are_idempotent() {
 
     let first = workflow.is_paused();
     let second = workflow.is_paused();
-    assert_eq!(first, second, "is_paused() must return the same value on repeated reads");
+    assert_eq!(
+        first, second,
+        "is_paused() must return the same value on repeated reads"
+    );
 }
 
 /// After `pause`, `is_paused()` returns true; after `unpause`, false.

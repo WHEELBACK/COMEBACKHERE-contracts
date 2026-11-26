@@ -28,8 +28,13 @@
 //   2. Add an entry to CHANGELOG.md describing the storage migration path.
 //   3. Include both changes in the same PR so reviewers see the full picture.
 
-use compliance::{ComplianceContract, ComplianceContractClient, ComplianceError, DataKey};
-use soroban_sdk::{testutils::Address as _, Address, Env};
+use compliance::{
+    ComplianceContract, ComplianceContractClient, ComplianceError, DataKey, CURRENT_SCHEMA_VERSION,
+};
+use soroban_sdk::{
+    testutils::{Address as _, Events},
+    Address, Env, Symbol, TryFromVal,
+};
 
 /// The schema version that compliance::initialize stores and
 /// get_schema_version returns.  This is intentionally a snapshot constant —
@@ -165,11 +170,13 @@ fn migrate_v1_to_v2_preserves_populated_state() {
 
     // Force storage to v1 while keeping the populated v1-shaped state.
     env.as_contract(&id, || {
+        env.storage().instance().set(&DataKey::SchemaVersion, &1u32);
         env.storage()
-            .instance()
-            .set(&DataKey::SchemaVersion, &1u32);
-        env.storage().persistent().set(&DataKey::Allowed(allowed_addr.clone()), &true);
-        env.storage().persistent().set(&DataKey::Blocked(blocked_addr.clone()), &true);
+            .persistent()
+            .set(&DataKey::Allowed(allowed_addr.clone()), &true);
+        env.storage()
+            .persistent()
+            .set(&DataKey::Blocked(blocked_addr.clone()), &true);
         env.storage()
             .persistent()
             .set(&DataKey::Allowed(expiring_addr.clone()), &true);
@@ -184,7 +191,7 @@ fn migrate_v1_to_v2_preserves_populated_state() {
     let before_expiring_allowed = client.is_allowed(&expiring_addr);
     let before_blocked = client.is_blocked(&blocked_addr);
     let before_expiring_blocked = client.is_blocked(&expiring_addr);
-    let before_expiring_status = client.address_status(&expiring_addr);
+    let before_expiring_status = client.address_status(&admin, &expiring_addr);
 
     // Migrate from v1 to v2.
     let version = client.migrate(&admin);
@@ -197,7 +204,10 @@ fn migrate_v1_to_v2_preserves_populated_state() {
     assert_eq!(client.is_allowed(&expiring_addr), before_expiring_allowed);
     assert_eq!(client.is_blocked(&blocked_addr), before_blocked);
     assert_eq!(client.is_blocked(&expiring_addr), before_expiring_blocked);
-    assert_eq!(client.address_status(&expiring_addr), before_expiring_status);
+    assert_eq!(
+        client.address_status(&admin, &expiring_addr),
+        before_expiring_status
+    );
 }
 
 /// `address_status` must be callable and consistent before and after migration
@@ -216,9 +226,7 @@ fn migrate_preserves_address_status_for_blocked_and_expiring() {
     client.initialize(&admin);
 
     env.as_contract(&id, || {
-        env.storage()
-            .instance()
-            .set(&DataKey::SchemaVersion, &1u32);
+        env.storage().instance().set(&DataKey::SchemaVersion, &1u32);
         env.storage()
             .persistent()
             .set(&DataKey::Allowed(addr.clone()), &true);
@@ -230,9 +238,9 @@ fn migrate_preserves_address_status_for_blocked_and_expiring() {
             .set(&DataKey::AllowedUntil(addr.clone()), &far_future);
     });
 
-    let before = client.address_status(&addr);
+    let before = client.address_status(&admin, &addr);
     client.migrate(&admin);
-    let after = client.address_status(&addr);
+    let after = client.address_status(&admin, &addr);
     assert_eq!(before, after);
     assert_eq!(client.get_schema_version(), CURRENT_SCHEMA_VERSION);
 }
@@ -258,8 +266,14 @@ fn migrate_at_current_version_is_noop() {
     let before_events: std::vec::Vec<String> = env
         .events()
         .all()
+        .events()
         .iter()
-        .map(|(_, topics, _)| Symbol::from_val(&env, &topics.get_unchecked(0)).to_string())
+        .map(|ev| {
+            let soroban_sdk::xdr::ContractEventBody::V0(v0) = &ev.body;
+            Symbol::try_from_val(&env, &v0.topics[0])
+                .unwrap()
+                .to_string()
+        })
         .collect();
     assert!(!before_events.iter().any(|n| n == "schema_migrated"));
 
@@ -271,8 +285,14 @@ fn migrate_at_current_version_is_noop() {
     let after_events: std::vec::Vec<String> = env
         .events()
         .all()
+        .events()
         .iter()
-        .map(|(_, topics, _)| Symbol::from_val(&env, &topics.get_unchecked(0)).to_string())
+        .map(|ev| {
+            let soroban_sdk::xdr::ContractEventBody::V0(v0) = &ev.body;
+            Symbol::try_from_val(&env, &v0.topics[0])
+                .unwrap()
+                .to_string()
+        })
         .collect();
     assert_eq!(before_events, after_events);
 }

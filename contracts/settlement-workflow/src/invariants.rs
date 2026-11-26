@@ -83,7 +83,11 @@ pub fn enforce(env: &Env) {
 /// so the settlement path never calls a misconfigured pair.
 pub fn checked_pinned_contracts(env: &Env) -> Result<(Address, Address), WorkflowError> {
     let (compliance_id, treasury_id) = pinned_contracts(env)?;
-    ensure_distinct_external(&env.current_contract_address(), &compliance_id, &treasury_id)?;
+    ensure_distinct_external(
+        &env.current_contract_address(),
+        &compliance_id,
+        &treasury_id,
+    )?;
     Ok((compliance_id, treasury_id))
 }
 

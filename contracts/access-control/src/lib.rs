@@ -52,7 +52,13 @@ impl AccessControl {
     /// - `AlreadyInitialized` if the contract has already been initialized.
     /// - `InvalidRole` if the default admin role symbol is invalid.
     pub fn initialize(env: Env, admin: Address) {
-        if env.storage().instance().has(&DataKey::RoleAdminRole(Symbol::new(&env, DEFAULT_ADMIN_ROLE)))
+        if env
+            .storage()
+            .instance()
+            .has(&DataKey::RoleAdminRole(Symbol::new(
+                &env,
+                DEFAULT_ADMIN_ROLE,
+            )))
         {
             panic_with_error!(&env, AccessControlError::AlreadyInitialized);
         }

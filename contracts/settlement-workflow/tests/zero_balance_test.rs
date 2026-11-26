@@ -58,7 +58,10 @@ fn zero_treasury_balance_returns_insufficient_balance() {
     assert_eq!(c.execute_err(id), TreasuryError::InsufficientBalance);
     // Nothing moved and the settlement is still executable once funded.
     assert_eq!(c.balance(&c.f.merchant), 0);
-    assert_eq!(c.f.treasury.get_settlement(&id).status, SettlementStatus::Pending);
+    assert_eq!(
+        c.f.treasury.get_settlement(&id).status,
+        SettlementStatus::Pending
+    );
 
     c.fund_treasury(AMOUNT);
     c.f.workflow
@@ -72,7 +75,11 @@ fn balances_below_the_amount_are_rejected_and_exact_balance_succeeds() {
         let c = ctx();
         let id = c.propose();
         c.fund_treasury(funded);
-        assert_eq!(c.execute_err(id), TreasuryError::InsufficientBalance, "funded {funded}");
+        assert_eq!(
+            c.execute_err(id),
+            TreasuryError::InsufficientBalance,
+            "funded {funded}"
+        );
         assert_eq!(c.balance(&c.f.treasury_contract_id), funded);
     }
 
@@ -118,19 +125,17 @@ fn batch_with_zero_balance_skips_without_panicking() {
     let c = ctx();
     let ids = Vec::from_array(&c.env, [c.propose(), c.propose()]);
 
-    let executed = c
-        .f
-        .workflow
-        .execute_with_compliance_batch(&ids, &c.token, &c.f.merchant);
+    let executed =
+        c.f.workflow
+            .execute_with_compliance_batch(&ids, &c.token, &c.f.merchant);
     assert!(executed.is_empty());
     assert_eq!(c.balance(&c.f.merchant), 0);
 
     // Funding for one settlement executes exactly one.
     c.fund_treasury(AMOUNT);
-    let executed = c
-        .f
-        .workflow
-        .execute_with_compliance_batch(&ids, &c.token, &c.f.merchant);
+    let executed =
+        c.f.workflow
+            .execute_with_compliance_batch(&ids, &c.token, &c.f.merchant);
     assert_eq!(executed.len(), 1);
     assert_eq!(c.balance(&c.f.merchant), AMOUNT);
     assert_eq!(c.balance(&c.f.treasury_contract_id), 0);
@@ -139,10 +144,8 @@ fn batch_with_zero_balance_skips_without_panicking() {
 #[test]
 fn empty_batch_is_a_no_op() {
     let c = ctx();
-    let executed = c.f.workflow.execute_with_compliance_batch(
-        &Vec::new(&c.env),
-        &c.token,
-        &c.f.merchant,
-    );
+    let executed =
+        c.f.workflow
+            .execute_with_compliance_batch(&Vec::new(&c.env), &c.token, &c.f.merchant);
     assert!(executed.is_empty());
 }

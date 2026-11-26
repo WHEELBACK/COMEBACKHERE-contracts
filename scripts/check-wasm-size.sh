@@ -46,7 +46,7 @@ done
 
 # Default wasm path if not provided
 if [ -z "$WASM_PATH" ]; then
-  WASM_PATH="target/wasm32-unknown-unknown/release/treasury.wasm"
+  WASM_PATH="target/wasm32v1-none/release/treasury.wasm"
 fi
 
 # ---- Validate wasm file exists ---------------------------------------------

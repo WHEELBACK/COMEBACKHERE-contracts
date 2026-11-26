@@ -18,9 +18,7 @@ use treasury::TreasuryError;
 const AMOUNT: i128 = 5_000;
 
 mod mocks {
-    use soroban_sdk::{
-        contract, contracterror, contractimpl, symbol_short, Address, Env, Vec,
-    };
+    use soroban_sdk::{contract, contracterror, contractimpl, symbol_short, Address, Env, Vec};
     use treasury::{MaybeAddress, Settlement, SettlementHoldReason, SettlementStatus};
 
     /// Compliance double: returns a configurable verdict and records every
@@ -31,13 +29,23 @@ mod mocks {
     #[contractimpl]
     impl MockCompliance {
         pub fn set_verdict(env: Env, allowed: bool) {
-            env.storage().instance().set(&symbol_short!("verdict"), &allowed);
+            env.storage()
+                .instance()
+                .set(&symbol_short!("verdict"), &allowed);
         }
 
         pub fn is_allowed(env: Env, address: Address) -> bool {
-            let calls: u32 = env.storage().instance().get(&symbol_short!("calls")).unwrap_or(0);
-            env.storage().instance().set(&symbol_short!("calls"), &(calls + 1));
-            env.storage().instance().set(&symbol_short!("last"), &address);
+            let calls: u32 = env
+                .storage()
+                .instance()
+                .get(&symbol_short!("calls"))
+                .unwrap_or(0);
+            env.storage()
+                .instance()
+                .set(&symbol_short!("calls"), &(calls + 1));
+            env.storage()
+                .instance()
+                .set(&symbol_short!("last"), &address);
             env.storage()
                 .instance()
                 .get(&symbol_short!("verdict"))
@@ -57,7 +65,10 @@ mod mocks {
         }
 
         pub fn calls(env: Env) -> u32 {
-            env.storage().instance().get(&symbol_short!("calls")).unwrap_or(0)
+            env.storage()
+                .instance()
+                .get(&symbol_short!("calls"))
+                .unwrap_or(0)
         }
 
         pub fn last_checked(env: Env) -> Option<Address> {
@@ -94,7 +105,11 @@ mod mocks {
             token_contract: Address,
         ) -> Result<(), MockError> {
             signer.require_auth();
-            let refuse_odd: bool = env.storage().instance().get(&symbol_short!("refuse")).unwrap_or(false);
+            let refuse_odd: bool = env
+                .storage()
+                .instance()
+                .get(&symbol_short!("refuse"))
+                .unwrap_or(false);
             if refuse_odd && settlement_id % 2 == 1 {
                 return Err(MockError::Refused);
             }
@@ -135,7 +150,10 @@ mod mocks {
         }
 
         pub fn calls(env: Env) -> u32 {
-            env.storage().instance().get(&symbol_short!("calls")).unwrap_or(0)
+            env.storage()
+                .instance()
+                .get(&symbol_short!("calls"))
+                .unwrap_or(0)
         }
 
         pub fn last_signer(env: Env) -> Option<Address> {
@@ -147,7 +165,10 @@ mod mocks {
         }
 
         pub fn executed_ids(env: Env) -> Vec<u64> {
-            env.storage().instance().get(&symbol_short!("ids")).unwrap_or(Vec::new(&env))
+            env.storage()
+                .instance()
+                .get(&symbol_short!("ids"))
+                .unwrap_or(Vec::new(&env))
         }
     }
 }
@@ -210,16 +231,20 @@ fn executed_events(c: &Ctx) -> std::vec::Vec<(u64, Address, Address, i128)> {
     c.env
         .events()
         .all()
+        .filter_by_contract(&c.workflow_id)
+        .events()
         .iter()
-        .filter(|(contract, _, _)| *contract == c.workflow_id)
-        .filter_map(|(_, topics, data)| {
-            let first = Symbol::try_from_val(&c.env, &topics.get(0)?).ok()?;
+        .filter_map(|ev| {
+            let soroban_sdk::xdr::ContractEventBody::V0(v0) = &ev.body;
+            let first = Symbol::try_from_val(&c.env, v0.topics.first()?).ok()?;
             if first != name {
                 return None;
             }
-            let id = u64::try_from_val(&c.env, &topics.get(1)?).ok()?;
+            let id_val = soroban_sdk::Val::try_from_val(&c.env, v0.topics.get(1)?).ok()?;
+            let id = u64::try_from_val(&c.env, &id_val).ok()?;
+            let data_val = soroban_sdk::Val::try_from_val(&c.env, &v0.data).ok()?;
             let (merchant, token, amount) =
-                <(Address, Address, i128)>::try_from_val(&c.env, &data).ok()?;
+                <(Address, Address, i128)>::try_from_val(&c.env, &data_val).ok()?;
             Some((id, merchant, token, amount))
         })
         .collect()
@@ -230,6 +255,7 @@ fn allowed_merchant_flows_compliance_then_treasury_with_exact_arguments() {
     let c = ctx();
     c.workflow
         .execute_with_compliance(&7, &c.token, &c.merchant);
+    let events = executed_events(&c);
 
     assert_eq!(c.compliance.calls(), 1);
     assert_eq!(c.compliance.last_checked(), Some(c.merchant.clone()));
@@ -242,7 +268,7 @@ fn allowed_merchant_flows_compliance_then_treasury_with_exact_arguments() {
 
     // The summary event carries the amount read back from treasury.
     assert_eq!(
-        executed_events(&c),
+        events,
         std::vec![(7, c.merchant.clone(), c.token.clone(), AMOUNT)]
     );
 }
@@ -266,7 +292,9 @@ fn denied_merchant_never_reaches_treasury() {
 fn treasury_refusal_propagates_and_rolls_back() {
     // Funded, so the failure is the mock's own refusal, not a balance issue.
     let c = ctx_with(AMOUNT, true, AMOUNT * 10);
-    let res = c.workflow.try_execute_with_compliance(&3, &c.token, &c.merchant);
+    let res = c
+        .workflow
+        .try_execute_with_compliance(&3, &c.token, &c.merchant);
 
     assert!(res.is_err());
     assert_ne!(res, Err(Ok(TreasuryError::InsufficientBalance)));
@@ -295,12 +323,12 @@ fn batch_checks_compliance_once_and_skips_refused_ids() {
     let executed = c
         .workflow
         .execute_with_compliance_batch(&ids, &c.token, &c.merchant);
+    let events: std::vec::Vec<u64> = executed_events(&c).into_iter().map(|e| e.0).collect();
 
     assert_eq!(executed, Vec::from_array(&c.env, [2u64, 4, 6]));
     assert_eq!(c.compliance.calls(), 1);
     assert_eq!(c.treasury.calls(), 3);
     assert_eq!(c.treasury.executed_ids(), executed);
-    let events: std::vec::Vec<u64> = executed_events(&c).into_iter().map(|e| e.0).collect();
     assert_eq!(events, std::vec![2, 4, 6]);
 }
 
@@ -366,4 +394,3 @@ fn unregistered_counterparties_fail_without_side_effects() {
         .is_err());
     assert_eq!(token::Client::new(&env, &token).balance(&merchant), 0);
 }
-

@@ -7,8 +7,9 @@ use soroban_sdk::{
 
 fn last_event_symbol(env: &Env) -> Symbol {
     let events = env.events().all();
-    let (_, topics, _) = events.last().unwrap();
-    Symbol::from_val(env, &topics.get_unchecked(0))
+    let last = events.events().last().unwrap();
+    let soroban_sdk::xdr::ContractEventBody::V0(v0) = &last.body;
+    soroban_sdk::TryFromVal::try_from_val(env, &v0.topics[0]).unwrap()
 }
 
 fn setup() -> (Env, Address, Address, ComplianceContractClient<'static>) {
@@ -709,14 +710,17 @@ fn bulk_get_address_status_returns_full_status() {
     client.allow_address(&admin, &allowed);
     client.block_address(&admin, &blocked, &None);
 
-    let statuses = client
-        .bulk_get_address_status(&soroban_sdk::vec![&env, allowed.clone(), blocked.clone(), unknown.clone()])
-        .unwrap();
+    let statuses = client.bulk_get_address_status(&soroban_sdk::vec![
+        &env,
+        allowed.clone(),
+        blocked.clone(),
+        unknown.clone()
+    ]);
 
     assert_eq!(statuses.len(), 3);
     assert_eq!(
         statuses.get(0).unwrap(),
-        &AddressStatus {
+        AddressStatus {
             allowed: true,
             blocked: false,
             expires_at: None,
@@ -726,7 +730,7 @@ fn bulk_get_address_status_returns_full_status() {
     );
     assert_eq!(
         statuses.get(1).unwrap(),
-        &AddressStatus {
+        AddressStatus {
             allowed: false,
             blocked: true,
             expires_at: None,
@@ -736,7 +740,7 @@ fn bulk_get_address_status_returns_full_status() {
     );
     assert_eq!(
         statuses.get(2).unwrap(),
-        &AddressStatus {
+        AddressStatus {
             allowed: false,
             blocked: false,
             expires_at: None,
@@ -752,10 +756,10 @@ fn bulk_get_address_status_includes_tier() {
     let (env, admin, subject, client) = setup();
     client.allow_address_with_tier(&admin, &subject, &3);
 
-    let statuses = client.bulk_get_address_status(&soroban_sdk::vec![&env, subject.clone()]).unwrap();
+    let statuses = client.bulk_get_address_status(&soroban_sdk::vec![&env, subject.clone()]);
     assert_eq!(
         statuses.get(0).unwrap(),
-        &AddressStatus {
+        AddressStatus {
             allowed: true,
             blocked: false,
             expires_at: None,
@@ -767,12 +771,11 @@ fn bulk_get_address_status_includes_tier() {
 
 #[test]
 fn bulk_get_address_status_includes_expiry() {
-    use compliance::AddressStatus;
     let (env, admin, subject, client) = setup();
     let now = env.ledger().timestamp();
     client.allow_address_until(&admin, &subject, &(now + 1000));
 
-    let statuses = client.bulk_get_address_status(&soroban_sdk::vec![&env, subject.clone()]).unwrap();
+    let statuses = client.bulk_get_address_status(&soroban_sdk::vec![&env, subject.clone()]);
     let status = statuses.get(0).unwrap();
     assert_eq!(status.expires_at, Some(now + 1000));
     assert_eq!(status.tier, 0);
@@ -781,12 +784,11 @@ fn bulk_get_address_status_includes_expiry() {
 
 #[test]
 fn bulk_get_address_status_expired_temp_allow_is_not_currently_allowed() {
-    use compliance::AddressStatus;
     let (env, admin, subject, client) = setup();
     let now = env.ledger().timestamp();
     client.allow_address_until(&admin, &subject, &now); // expires at now → not currently allowed
 
-    let statuses = client.bulk_get_address_status(&soroban_sdk::vec![&env, subject.clone()]).unwrap();
+    let statuses = client.bulk_get_address_status(&soroban_sdk::vec![&env, subject.clone()]);
     let status = statuses.get(0).unwrap();
     assert_eq!(status.expires_at, Some(now));
     assert_eq!(status.allowed, true);
@@ -795,20 +797,20 @@ fn bulk_get_address_status_expired_temp_allow_is_not_currently_allowed() {
 
 #[test]
 fn bulk_get_address_status_over_cap_is_rejected() {
-    let (env, admin, _, client) = setup();
+    let (env, _admin, _, client) = setup();
     let mut addrs: soroban_sdk::Vec<Address> = soroban_sdk::Vec::new(&env);
     for _ in 0..(compliance::MAX_BATCH_SIZE + 1) {
         addrs.push_back(Address::generate(&env));
     }
     let result = client.try_bulk_get_address_status(&addrs);
-    assert_eq!(result, Err(Ok(ContractError::BatchTooLarge)));
+    assert_eq!(result, Err(Ok(ComplianceError::BatchTooLarge)));
 }
 
 #[test]
 fn bulk_get_address_status_empty_input_returns_empty() {
     let (env, _, _, client) = setup();
     let addresses: soroban_sdk::Vec<Address> = soroban_sdk::Vec::new(&env);
-    let results = client.bulk_get_address_status(&addresses).unwrap();
+    let results = client.bulk_get_address_status(&addresses);
     assert_eq!(results.len(), 0);
 }
 
@@ -1331,9 +1333,7 @@ fn set_tier_limit_emits_event() {
     let (env, admin, _subject, client) = setup();
     client.set_tier_limit(&admin, &0, &1_000_000);
 
-    let events = env.events().all();
-    let last_event = events.last().unwrap();
-    let event_symbol = Symbol::from_val(&env, &last_event.1.get_unchecked(0));
+    let event_symbol = last_event_symbol(&env);
     assert_eq!(event_symbol, Symbol::new(&env, "tier_limit_set"));
 }
 

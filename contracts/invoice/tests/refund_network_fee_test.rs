@@ -9,8 +9,8 @@
 //! * Non-admin callers are rejected.
 
 use invoice::{
-    InvoiceContract, InvoiceContractClient, InvoiceError, REFUND_NETWORK_FEE,
-    MAX_REFUND_NETWORK_FEE,
+    InvoiceContract, InvoiceContractClient, InvoiceError, MAX_REFUND_NETWORK_FEE,
+    REFUND_NETWORK_FEE,
 };
 use soroban_sdk::{testutils::Address as _, Address, Env};
 
@@ -88,20 +88,22 @@ fn test_set_refund_network_fee_unauthorized_is_rejected() {
 
 #[test]
 fn test_set_refund_network_fee_emits_event() {
+    use invoice::RefundNetworkFeeUpdatedEvent;
     use soroban_sdk::testutils::Events;
     use soroban_sdk::{Symbol, TryFromVal};
-    use invoice::RefundNetworkFeeUpdatedEvent;
 
     let (env, admin, client) = setup();
     let new_fee: i128 = 1_000_000;
     client.set_refund_network_fee(&admin, &new_fee);
 
     let events = env.events().all();
-    let (_, topics, data) = events.last().unwrap();
+    let last = events.events().last().unwrap();
+    let soroban_sdk::xdr::ContractEventBody::V0(v0) = &last.body;
     assert_eq!(
-        Symbol::try_from_val(&env, &topics.get_unchecked(0)).unwrap(),
+        Symbol::try_from_val(&env, &v0.topics[0]).unwrap(),
         Symbol::new(&env, "refund_network_fee_updated")
     );
+    let data = soroban_sdk::Val::try_from_val(&env, &v0.data).unwrap();
     let payload = RefundNetworkFeeUpdatedEvent::try_from_val(&env, &data).unwrap();
     assert_eq!(payload.old_fee, REFUND_NETWORK_FEE);
     assert_eq!(payload.new_fee, new_fee);

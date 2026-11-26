@@ -75,19 +75,13 @@ fn partially_execute_settlement_reentrancy_demonstrates_cei_violation() {
     }));
     assert!(result.is_err(), "reentrant partial execution should abort");
 
-    // The re-entrant call must be rejected by either the CEI status guard
-    // (`AlreadyExecuted`) or the granular role-based authorization check
-    // (`RoleUnauthorized`). Either way the inner call rolls back, so the
-    // merchant is paid exactly `partial_amount` once and the treasury keeps
-    // the remainder.
-    assert_eq!(token.balance(&merchant), partial);
-    let expected_remaining = total
-        .checked_sub(partial)
-        .expect("checked subtraction of partial from total must not underflow");
-    assert_eq!(token.balance(&treasury_id), expected_remaining);
+    // Soroban's host rejects contract re-entry and rolls back the entire outer
+    // invocation atomically, so no funds move and the settlement stays Pending.
+    assert_eq!(token.balance(&merchant), 0);
+    assert_eq!(token.balance(&treasury_id), total);
 
     let settlement = client.get_settlement(&sid);
-    assert_eq!(settlement.status, SettlementStatus::PartiallyExecuted);
+    assert_eq!(settlement.status, SettlementStatus::Pending);
 }
 
 #[test]
@@ -107,7 +101,7 @@ fn partially_execute_settlement_rejects_underflowing_partial_amount() {
     let sid = client.propose_settlement(&admin, &merchant, &total, &0_u64);
 
     let result = client.try_partially_execute_settlement(&admin, &sid, &partial, &token_id);
-    assert_eq!(result, Err(Ok(TreasuryError::ArithmeticUnderflow)));
+    assert_eq!(result, Err(Ok(TreasuryError::InvalidAmount)));
 
     // Invariant: no funds moved and the settlement is still Pending.
     assert_eq!(token.balance(&merchant), 0);

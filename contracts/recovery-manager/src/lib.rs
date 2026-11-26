@@ -2,6 +2,7 @@
 
 use soroban_sdk::{contract, contracterror, contractimpl, contracttype, Address, Env};
 
+/// Error codes returned by the recovery-manager contract.
 #[contracterror]
 #[derive(Copy, Clone, Debug, Eq, PartialEq, PartialOrd, Ord)]
 #[repr(u32)]
@@ -16,6 +17,7 @@ pub enum RecoveryError {
     InvalidSettlement = 8,
 }
 
+/// Storage keys for the recovery-manager contract.
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum DataKey {
@@ -36,7 +38,9 @@ impl RecoveryManager {
         }
         admin.require_auth();
         env.storage().instance().set(&DataKey::Admin, &admin);
-        env.storage().instance().set(&DataKey::TotalRecovered, &0i128);
+        env.storage()
+            .instance()
+            .set(&DataKey::TotalRecovered, &0i128);
         Ok(())
     }
 
@@ -75,11 +79,7 @@ impl RecoveryManager {
     ///
     /// Uses checked arithmetic throughout so that any underflow/overflow is
     /// surfaced as a typed error rather than panicking or wrapping.
-    pub fn partial_settle(
-        env: Env,
-        account: Address,
-        amount: i128,
-    ) -> Result<i128, RecoveryError> {
+    pub fn partial_settle(env: Env, account: Address, amount: i128) -> Result<i128, RecoveryError> {
         account.require_auth();
 
         // Validate inputs before any computation.
@@ -290,10 +290,11 @@ mod test {
         // Deterministic pseudo-fuzz sweep over a range of amounts.
         let mut amount: i128 = -50;
         while amount <= 10_050 {
+            let bal_before = client.balance(&user);
             let res = client.try_partial_settle(&user, &amount);
             if amount <= 0 {
                 assert_eq!(res, Err(Ok(RecoveryError::InvalidAmount)));
-            } else if amount > client.balance(&user) {
+            } else if amount > bal_before {
                 assert_eq!(res, Err(Ok(RecoveryError::InsufficientBalance)));
             } else {
                 assert!(res.is_ok());

@@ -27,11 +27,17 @@ fn leaf(env: &Env, a: &Address) -> BytesN<32> {
     env.crypto().sha256(&a.clone().to_xdr(env)).into()
 }
 
-/// Positional node hash: `sha256(left || right)` with no sorting.
-/// This is the convention `is_blocked_with_proof` uses.
+/// Canonical sorted-pair node hash: `sha256(min(a, b) || max(a, b))`.
+/// Matches `is_blocked_with_proof` in `contracts/compliance/src/lib.rs`, which
+/// accepts a flat `Vec<BytesN<32>>` sibling proof without direction bits.
 fn node(env: &Env, left: &BytesN<32>, right: &BytesN<32>) -> BytesN<32> {
-    let mut buf = Bytes::from_array(env, &left.to_array());
-    buf.extend_from_array(&right.to_array());
+    let (a, b) = if left.to_array() <= right.to_array() {
+        (left, right)
+    } else {
+        (right, left)
+    };
+    let mut buf = Bytes::from_array(env, &a.to_array());
+    buf.extend_from_array(&b.to_array());
     env.crypto().sha256(&buf).into()
 }
 

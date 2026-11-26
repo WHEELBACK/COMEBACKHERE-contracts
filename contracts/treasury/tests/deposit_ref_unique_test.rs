@@ -57,7 +57,12 @@ fn setup() -> Setup {
     client.initialize(&admin, &1, &soroban_sdk::Vec::new(&env));
     let token = env.register_contract(None, TestToken);
     TestTokenClient::new(&env, &token).mint(&depositor, &1_000_000);
-    Setup { env, client, depositor, token }
+    Setup {
+        env,
+        client,
+        depositor,
+        token,
+    }
 }
 
 fn reference(env: &Env, s: &str) -> Option<Bytes> {
@@ -99,14 +104,19 @@ fn deposit_allows_reference_id_after_ttl() {
         li.timestamp += 600_000 * 5;
     });
 
-    assert!(s.client.try_deposit(&s.depositor, &s.token, &100, &r).is_ok());
+    assert!(s
+        .client
+        .try_deposit(&s.depositor, &s.token, &100, &r)
+        .is_ok());
 }
 
 #[test]
 fn deposit_allows_distinct_and_absent_reference_ids() {
     let s = setup();
-    s.client.deposit(&s.depositor, &s.token, &100, &reference(&s.env, "ref-a"));
-    s.client.deposit(&s.depositor, &s.token, &100, &reference(&s.env, "ref-b"));
+    s.client
+        .deposit(&s.depositor, &s.token, &100, &reference(&s.env, "ref-a"));
+    s.client
+        .deposit(&s.depositor, &s.token, &100, &reference(&s.env, "ref-b"));
     // No reference: never deduplicated.
     s.client.deposit(&s.depositor, &s.token, &100, &None);
     s.client.deposit(&s.depositor, &s.token, &100, &None);

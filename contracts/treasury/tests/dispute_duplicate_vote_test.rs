@@ -1,7 +1,10 @@
 //! Tests for duplicate-vote rejection in `vote_dispute_resolution` (#573).
 
 use proptest::prelude::*;
-use soroban_sdk::{testutils::Address as _, Address, Env};
+use soroban_sdk::{
+    testutils::{Address as _, Ledger as _},
+    Address, Env,
+};
 use treasury::{DisputeStatus, TreasuryContract, TreasuryContractClient, TreasuryError};
 
 /// A threshold of 2 with two weight-1 signers means a single signer's vote is never
@@ -186,8 +189,8 @@ fn expired_then_resolved_is_rejected() {
     let did = client.raise_dispute(&claimant, &sid, &merchant, &5_000_000, &500, &None);
 
     // Advance the ledger past the dispute deadline so it expires.
-    env.ledger().set_sequence_number(env.ledger().sequence() + 10_000);
-    let _ = client.try_expire_dispute(&did);
+    env.ledger().with_mut(|l| l.sequence_number += 10_000);
+    let _ = client.try_expire_dispute(&admin, &did);
 
     let status = client.get_dispute(&did).status;
     if status == DisputeStatus::Expired {
@@ -230,19 +233,26 @@ proptest! {
             prop_assert_eq!(client.get_dispute(&did).status, DisputeStatus::Raised);
         }
 
-        // Second distinct vote reaches the threshold exactly.
-        client.vote_dispute_resolution(&other_signer, &did, &second_vote);
-        prop_assert_eq!(
-            client.get_dispute(&did).status,
-            DisputeStatus::ResolvedClaimant
-        );
+        // Second distinct vote: if it disagrees with the first vote's direction,
+        // it is rejected with ResolutionDirectionMismatch and the dispute stays Raised;
+        // if it agrees, it reaches the threshold and resolves in that direction.
+        if second_vote != first_vote {
+            let r = client.try_vote_dispute_resolution(&other_signer, &did, &second_vote);
+            prop_assert_eq!(r, Err(Ok(TreasuryError::ResolutionDirectionMismatch)));
+            prop_assert_eq!(client.get_dispute(&did).status, DisputeStatus::Raised);
+        } else {
+            client.vote_dispute_resolution(&other_signer, &did, &second_vote);
+            let expected = if first_vote {
+                DisputeStatus::ResolvedClaimant
+            } else {
+                DisputeStatus::ResolvedCounterparty
+            };
+            prop_assert_eq!(client.get_dispute(&did).status, expected.clone());
 
-        // Any further vote is rejected and cannot regress the terminal state.
-        let r = client.try_vote_dispute_resolution(&other_signer, &did, &second_vote);
-        prop_assert_eq!(r, Err(Ok(TreasuryError::DisputeAlreadyResolved)));
-        prop_assert_eq!(
-            client.get_dispute(&did).status,
-            DisputeStatus::ResolvedClaimant
-        );
+            // Any further vote is rejected and cannot regress the terminal state.
+            let r = client.try_vote_dispute_resolution(&other_signer, &did, &second_vote);
+            prop_assert_eq!(r, Err(Ok(TreasuryError::DisputeAlreadyResolved)));
+            prop_assert_eq!(client.get_dispute(&did).status, expected);
+        }
     }
 }

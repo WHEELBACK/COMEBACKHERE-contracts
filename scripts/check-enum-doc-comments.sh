@@ -60,8 +60,7 @@ trap 'rm -f "$status_file"' EXIT
 ERROR_ENUM_MACROS='declare_contract_error'
 
 # Error crates whose `declare_contract_error!` variants must each be documented.
-ERROR_CRATE_DIRS='crates/event-emitter-errors crates/storage-layout-errors crates/access-control-errors'
-=======
+ERROR_CRATE_DIRS='crates/compliance-errors crates/invoice-errors crates/workflow-errors'
 
 find contracts crates -name '*.rs' -type f | sort | while read -r file; do
     # Skip test files

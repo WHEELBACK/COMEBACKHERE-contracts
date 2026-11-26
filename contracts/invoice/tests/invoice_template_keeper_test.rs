@@ -192,7 +192,10 @@ fn batch_at_max_batch_size_is_accepted() {
     }
 
     env.ledger().with_mut(|l| l.timestamp = ONE_DAY);
-    assert_eq!(client.generate_due_invoices(&ids), TEMPLATE_KEEPER_BATCH_SIZE);
+    assert_eq!(
+        client.generate_due_invoices(&ids),
+        TEMPLATE_KEEPER_BATCH_SIZE
+    );
 }
 
 #[test]

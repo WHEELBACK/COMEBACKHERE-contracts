@@ -82,7 +82,10 @@ impl WorkflowError {
     /// Maps an on-chain error code back to its variant, so clients that only
     /// see the raw `Error(Contract, #n)` can recover the typed error (#874).
     pub fn from_code(code: u32) -> Option<WorkflowError> {
-        WorkflowError::ALL.iter().copied().find(|e| e.code() == code)
+        WorkflowError::ALL
+            .iter()
+            .copied()
+            .find(|e| e.code() == code)
     }
 
     /// Stable, human-readable name of the variant (#874).

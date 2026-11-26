@@ -87,11 +87,7 @@ impl TreasuryContract {
         if !env.storage().persistent().has(&balance_key) {
             return Err(TreasuryError::InsufficientBalance);
         }
-        let mut balance: i128 = env
-            .storage()
-            .persistent()
-            .get(&balance_key)
-            .unwrap_or(0);
+        let mut balance: i128 = env.storage().persistent().get(&balance_key).unwrap_or(0);
         if balance < amount {
             return Err(TreasuryError::InsufficientBalance);
         }
@@ -99,10 +95,7 @@ impl TreasuryContract {
         balance = balance
             .checked_sub(amount)
             .ok_or(TreasuryError::ArithmeticOverflow)?;
-        env.storage().persistent().set(
-            &balance_key,
-            &balance,
-        );
+        env.storage().persistent().set(&balance_key, &balance);
         // Decrement the aggregate per-token total (#742).
         let total: i128 = env
             .storage()

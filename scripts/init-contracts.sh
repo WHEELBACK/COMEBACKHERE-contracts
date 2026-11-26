@@ -52,29 +52,18 @@ log_info "Using network: $NETWORK ($RPC_URL)"
 # `memory.copy`) that Rust >= 1.82 enables by default for wasm32 and the
 # Soroban host rejects; see the wasm-opt step below for the rest.
 log_info "Building contracts..."
-CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUSTFLAGS="-C target-cpu=mvp" \
-cargo build --target wasm32-unknown-unknown --release \
-    -p comebackhere-compliance \
-    -p comebackhere-invoice \
-    -p comebackhere-treasury \
-    -p comebackhere-settlement-workflow
+for pkg in comebackhere-compliance comebackhere-invoice comebackhere-treasury comebackhere-settlement-workflow; do
+    stellar contract build --package "$pkg"
+done
 
-# target-cpu=mvp doesn't reach the prebuilt `core` that gets linked in, which
-# is built with `reference-types` and carries call_indirect encodings the
-# Soroban host's validator rejects ("reference-types not enabled: zero byte
-# expected"). Nothing actually uses reference types, so re-encoding through
-# binaryen with only MVP + sign-ext/mutable-globals enabled yields a
-# deployable module. Custom sections (contractspecv0 etc.) are preserved.
-# -Oz also shrinks the modules: treasury's unoptimized install transaction
-# grew large enough to time out on the local quickstart network.
 if ! command -v wasm-opt > /dev/null 2>&1; then
     log_error "wasm-opt not found. Install binaryen (e.g. 'apt-get install binaryen' or 'brew install binaryen')."
     exit 1
 fi
-log_info "Lowering contract wasm to the Soroban-supported feature set..."
+log_info "Optimizing contract wasm..."
 for contract in compliance invoice treasury settlement_workflow; do
-    wasm="target/wasm32-unknown-unknown/release/${contract}.wasm"
-    wasm-opt -Oz --mvp-features --enable-sign-ext --enable-mutable-globals "$wasm" -o "$wasm"
+    wasm="target/wasm32v1-none/release/${contract}.wasm"
+    wasm-opt -Oz --strip-debug --strip-dwarf --vacuum --all-features "$wasm" -o "$wasm"
 done
 
 # 2. Setup network
@@ -90,7 +79,7 @@ log_info "Admin Address: $ADMIN_ADDRESS"
 # 4. Deploy and Initialize Compliance
 log_info "Deploying Compliance contract..."
 COMPLIANCE_ID=$(stellar contract deploy \
-    --wasm target/wasm32-unknown-unknown/release/compliance.wasm \
+    --wasm target/wasm32v1-none/release/compliance.wasm \
     --source admin \
     --network "$NETWORK")
 log_info "Compliance ID: $COMPLIANCE_ID"
@@ -105,7 +94,7 @@ stellar contract invoke \
 # 5. Deploy and Initialize Invoice
 log_info "Deploying Invoice contract..."
 INVOICE_ID=$(stellar contract deploy \
-    --wasm target/wasm32-unknown-unknown/release/invoice.wasm \
+    --wasm target/wasm32v1-none/release/invoice.wasm \
     --source admin \
     --network "$NETWORK")
 log_info "Invoice ID: $INVOICE_ID"
@@ -120,7 +109,7 @@ stellar contract invoke \
 # 6. Deploy and Initialize Treasury
 log_info "Deploying Treasury contract..."
 TREASURY_ID=$(stellar contract deploy \
-    --wasm target/wasm32-unknown-unknown/release/treasury.wasm \
+    --wasm target/wasm32v1-none/release/treasury.wasm \
     --source admin \
     --network "$NETWORK")
 log_info "Treasury ID: $TREASURY_ID"
@@ -135,7 +124,7 @@ stellar contract invoke \
 # 7. Deploy and Initialize Settlement Workflow
 echo "Deploying Settlement Workflow contract..."
 SETTLEMENT_WORKFLOW_ID=$(stellar contract deploy \
-    --wasm target/wasm32-unknown-unknown/release/settlement_workflow.wasm \
+    --wasm target/wasm32v1-none/release/settlement_workflow.wasm \
     --source admin \
     --network "$NETWORK")
 echo "Settlement Workflow ID: $SETTLEMENT_WORKFLOW_ID"

@@ -155,7 +155,11 @@ pub fn setup_with_workflow(env: &Env, register_workflow_signer: bool) -> Workflo
 
     let workflow_contract_id = env.register(
         SettlementWorkflowContract,
-        (admin.clone(), compliance_contract_id.clone(), treasury_contract_id.clone()),
+        (
+            admin.clone(),
+            compliance_contract_id.clone(),
+            treasury_contract_id.clone(),
+        ),
     );
     let workflow = SettlementWorkflowContractClient::new(env, &workflow_contract_id);
     // The workflow contract executes settlements as itself, so it must be an

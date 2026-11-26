@@ -26,7 +26,7 @@ jobs:
         uses: dtolnay/rust-toolchain@master
         with:
           toolchain: ${{ env.RUST_VERSION }}
-          targets: wasm32-unknown-unknown
+          targets: wasm32v1-none
 
       - name: Install stellar-cli build dependencies
         run: sudo apt-get update && sudo apt-get install -y libdbus-1-dev libudev-dev pkg-config
@@ -49,10 +49,10 @@ jobs:
           key: build
 
       - name: Build compliance contract (WASM)
-        run: cargo build --target wasm32-unknown-unknown --release -p comebackhere-compliance
+        run: stellar contract build --package comebackhere-compliance
 
       - name: Build invoice contract (WASM)
-        run: cargo build --target wasm32-unknown-unknown --release -p comebackhere-invoice
+        run: stellar contract build --package comebackhere-invoice
 
       - name: Build treasury contract (WASM)
-        run: cargo build --target wasm32-unknown-unknown --release -p comebackhere-treasury
+        run: stellar contract build --package comebackhere-treasury

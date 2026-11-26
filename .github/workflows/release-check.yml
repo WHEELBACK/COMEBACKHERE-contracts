@@ -72,12 +72,14 @@ jobs:
         uses: dtolnay/rust-toolchain@master
         with:
           toolchain: ${{ env.RUST_VERSION }}
-          targets: wasm32-unknown-unknown
+          targets: wasm32v1-none
 
       - name: Build contract WASM
+        env:
+          SOROBAN_SDK_BUILD_SYSTEM_SUPPORTS_SPEC_SHAKING_V2: "1"
         run: |
           set -e
-          cargo build --target wasm32-unknown-unknown --release \
+          cargo build --target wasm32v1-none --release \
             -p comebackhere-compliance \
             -p comebackhere-invoice \
             -p comebackhere-treasury \
@@ -95,7 +97,7 @@ jobs:
             echo ""
             echo "| Contract | Size (bytes) |"
             echo "|----------|-------------:|"
-            for wasm in target/wasm32-unknown-unknown/release/*.wasm; do
+            for wasm in target/wasm32v1-none/release/*.wasm; do
               name=$(basename "$wasm" .wasm)
               size=$(stat --format=%s "$wasm")
               echo "| $name | $size |"

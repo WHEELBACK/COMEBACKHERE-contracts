@@ -105,19 +105,31 @@ fn every_variant_serializes_uniquely() {
         ),
         (
             "RoleMember(ConfigManager, a)",
-            xdr(&env, DataKey::RoleMember(InvoiceRole::ConfigManager, addr_a.clone())),
+            xdr(
+                &env,
+                DataKey::RoleMember(InvoiceRole::ConfigManager, addr_a.clone()),
+            ),
         ),
         (
             "RoleMember(ConfigManager, b)",
-            xdr(&env, DataKey::RoleMember(InvoiceRole::ConfigManager, addr_b.clone())),
+            xdr(
+                &env,
+                DataKey::RoleMember(InvoiceRole::ConfigManager, addr_b.clone()),
+            ),
         ),
         (
             "RoleMember(FeeManager, a)",
-            xdr(&env, DataKey::RoleMember(InvoiceRole::FeeManager, addr_a.clone())),
+            xdr(
+                &env,
+                DataKey::RoleMember(InvoiceRole::FeeManager, addr_a.clone()),
+            ),
         ),
         (
             "RoleMember(PauseGuardian, a)",
-            xdr(&env, DataKey::RoleMember(InvoiceRole::PauseGuardian, addr_a.clone())),
+            xdr(
+                &env,
+                DataKey::RoleMember(InvoiceRole::PauseGuardian, addr_a.clone()),
+            ),
         ),
     ]);
 }

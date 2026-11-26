@@ -58,7 +58,10 @@ fn revoke_not_granted_role_fails_role_not_granted() {
 fn require_role_fails_when_not_granted_and_succeeds_when_granted() {
     let (env, admin, account, client) = setup();
     let role = Symbol::new(&env, "trading");
-    let err = client.try_require_role(&role, &account).unwrap_err().unwrap();
+    let err = client
+        .try_require_role(&role, &account)
+        .unwrap_err()
+        .unwrap();
     assert_eq!(err, RoleManagerError::MissingRole);
     client.grant_role(&admin, &role, &account);
     assert!(client.try_require_role(&role, &account).is_ok());

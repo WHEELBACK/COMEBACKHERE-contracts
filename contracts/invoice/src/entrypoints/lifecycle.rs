@@ -1,7 +1,8 @@
 use crate::events::{self, InvoiceAmountUpdatedEvent};
 use crate::validation::{
     require_admin, require_expiry_not_too_long, require_hash_not_too_long, require_not_paused,
-    require_payer_not_merchant, require_positive_amount, require_usdc_precision, require_valid_payment_link_hash,
+    require_payer_not_merchant, require_positive_amount, require_usdc_precision,
+    require_valid_payment_link_hash,
 };
 use crate::{append_history, payer_index_add, pending_index_add, pending_index_remove};
 use crate::{

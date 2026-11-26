@@ -32,7 +32,7 @@ jobs:
         uses: dtolnay/rust-toolchain@master
         with:
           toolchain: ${{ env.RUST_VERSION }}
-          targets: wasm32-unknown-unknown
+          targets: wasm32v1-none
 
       - name: Cache Rust dependencies
         uses: Swatinem/rust-cache@v2
@@ -69,7 +69,7 @@ jobs:
         uses: dtolnay/rust-toolchain@master
         with:
           toolchain: ${{ env.RUST_VERSION }}
-          targets: wasm32-unknown-unknown
+          targets: wasm32v1-none
 
       - name: Install cargo-mutants
         run: cargo install cargo-mutants
@@ -92,7 +92,7 @@ jobs:
         uses: dtolnay/rust-toolchain@master
         with:
           toolchain: stable
-          targets: wasm32-unknown-unknown
+          targets: wasm32v1-none
 
       - name: Cache Rust dependencies
         uses: Swatinem/rust-cache@v2
@@ -106,7 +106,7 @@ jobs:
   # available soroban-sdk 22.x patch release, catching upstream regressions
   # in patch versions before they reach a Dependabot PR attempt. This job is
   # not a required check — the pinned `test` job above is what gates merges.
-  test-latest-soroban-22x:
+  test-latest-soroban-29x:
     if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     continue-on-error: true
@@ -125,14 +125,14 @@ jobs:
         uses: dtolnay/rust-toolchain@master
         with:
           toolchain: ${{ env.RUST_VERSION }}
-          targets: wasm32-unknown-unknown
+          targets: wasm32v1-none
 
       - name: Cache Rust dependencies
         uses: Swatinem/rust-cache@v2
         with:
-          key: test-latest-soroban-22x
+          key: test-latest-soroban-29x
 
-      - name: Update soroban-sdk to latest 22.x patch
+      - name: Update soroban-sdk to latest 29.x patch
         run: cargo update -p soroban-sdk
 
       - name: Run tests
@@ -145,16 +145,16 @@ jobs:
         run: cargo fmt --all -- --check
 
   # Non-blocking matrix job: runs the test suite against a small set of
-  # pinned soroban-sdk 22.x patch versions to catch any subtle behavior changes
+  # pinned soroban-sdk 29.x patch versions to catch any subtle behavior changes
   # or regressions introduced in patch-level updates that might otherwise slip
   # through as safe by virtue of being patch versions. This job is not a required
   # check — the pinned `test` job above is what gates merges.
-  test-soroban-sdk-22x-matrix:
+  test-soroban-sdk-29x-matrix:
     runs-on: ubuntu-latest
     continue-on-error: true
     strategy:
       matrix:
-        soroban-version: ["22.0.8", "22.0.11"]
+        soroban-version: ["29.0.0", "29.0.1"]
     steps:
       - uses: actions/checkout@v4
 
@@ -170,7 +170,7 @@ jobs:
         uses: dtolnay/rust-toolchain@master
         with:
           toolchain: ${{ env.RUST_VERSION }}
-          targets: wasm32-unknown-unknown
+          targets: wasm32v1-none
 
       - name: Cache Rust dependencies
         uses: Swatinem/rust-cache@v2

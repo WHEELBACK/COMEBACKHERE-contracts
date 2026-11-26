@@ -166,7 +166,11 @@ impl StorageLayoutContract {
     /// # Invariants
     /// - The stored balance is non-negative.
     /// - The counter is strictly increasing.
-    pub fn set_balance(env: Env, account: Address, balance: i128) -> Result<(), StorageLayoutError> {
+    pub fn set_balance(
+        env: Env,
+        account: Address,
+        balance: i128,
+    ) -> Result<(), StorageLayoutError> {
         account.require_auth();
         write_balance(&env, &account, balance)
     }
@@ -199,7 +203,11 @@ impl StorageLayoutContract {
     /// # Invariants
     /// - The resulting balance is non-negative.
     /// - The counter is strictly increasing on any non-zero adjustment.
-    pub fn adjust_balance(env: Env, account: Address, delta: i128) -> Result<i128, StorageLayoutError> {
+    pub fn adjust_balance(
+        env: Env,
+        account: Address,
+        delta: i128,
+    ) -> Result<i128, StorageLayoutError> {
         account.require_auth();
         if !is_initialized(&env) {
             return Err(StorageLayoutError::NotInitialized);
@@ -394,22 +402,12 @@ mod test {
         let (_env, client, account) = setup();
         client.initialize();
         client.set_balance(&account, &1000);
-        let deltas: [i128; 9] = [
-            0,
-            1,
-            -1,
-            i128::MAX,
-            i128::MIN,
-            500,
-            -500,
-            -1000,
-            -1001,
-        ];
+        let deltas: [i128; 9] = [0, 1, -1, i128::MAX, i128::MIN, 500, -500, -1000, -1001];
         for d in deltas {
             // Must never panic; either Ok or a typed error.
             let _ = client.try_adjust_balance(&account, &d);
             // Balance must remain non-negative if present.
-            if let Ok(b) = client.try_get_balance(&account) {
+            if let Ok(Ok(b)) = client.try_get_balance(&account) {
                 assert!(b >= 0);
             }
         }

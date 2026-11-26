@@ -68,7 +68,10 @@ fn remaining_never_underflows_when_executed_exceeds_approved() {
     let (approved, executed, remaining) = client.get_partial_progress(&sid);
     assert_eq!(approved, 1_000_000);
     assert_eq!(executed, 5_000_000);
-    assert_eq!(remaining, 0, "remaining must saturate at zero, not underflow");
+    assert_eq!(
+        remaining, 0,
+        "remaining must saturate at zero, not underflow"
+    );
 }
 
 /// Two consecutive partial executions whose cumulative sum exceeds the settlement
@@ -84,7 +87,7 @@ fn second_partial_execution_rejected_when_cumulative_exceeds_amount() {
 
     // Re-propose a new settlement to test the guard on cumulative total.
     // (The first settlement is now PartiallyExecuted; we need a new pending one.)
-    let merchant = soroban_sdk::testutils::Address::generate(&env);
+    let merchant = Address::generate(&env);
     token::StellarAssetClient::new(&env, &token_id).mint(&client.address, &total);
     let sid2 = client.propose_settlement(&admin, &merchant, &total, &0_u64);
 
@@ -110,9 +113,9 @@ fn second_partial_execution_rejected_when_cumulative_exceeds_amount() {
     // partial_amount >= settlement.amount → InvalidAmount (gate 1)
     let err = client
         .try_partially_execute_settlement(&admin, &sid5, &total, &token_id)
-        .unwrap()
-        .unwrap_err();
-    assert_eq!(err, TreasuryError::InvalidAmount.into());
+        .unwrap_err()
+        .unwrap();
+    assert_eq!(err, TreasuryError::InvalidAmount);
 }
 
 /// The `checked_add` guard prevents arithmetic overflow in the cumulative executed
@@ -148,7 +151,7 @@ fn checked_add_overflow_guard_fires_on_cumulative_overflow() {
     // so use 500_000: (i128::MAX - 1) + 500_000 overflows.
     let err = client
         .try_partially_execute_settlement(&admin, &sid, &500_000, &token_id)
-        .unwrap()
-        .unwrap_err();
-    assert_eq!(err, TreasuryError::ArithmeticOverflow.into());
+        .unwrap_err()
+        .unwrap();
+    assert_eq!(err, TreasuryError::ArithmeticOverflow);
 }

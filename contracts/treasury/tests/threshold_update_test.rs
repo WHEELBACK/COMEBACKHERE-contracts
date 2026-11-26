@@ -132,7 +132,12 @@ fn threshold_update_preserves_invariants() {
     // post-update invariant: threshold never exceeds total signer weight
     let threshold = client.get_threshold();
     assert_eq!(threshold, 4);
-    assert!(threshold <= client.get_total_weight());
+    let total_weight: u32 = client
+        .get_all_signers()
+        .iter()
+        .map(|(_, weight, _)| weight)
+        .sum();
+    assert!(threshold <= total_weight);
 
     // role mappings remain valid: admin is still the stored admin and can act
     let merchant = Address::generate(&env);

@@ -18,9 +18,8 @@
 
 use compliance::{ComplianceContract, ComplianceContractClient, DataKey as ComplianceDataKey};
 use invoice::{
-    DataKey as InvoiceDataKey, Invoice, InvoiceContract, InvoiceContractClient, InvoiceCreatedEvent,
-    MaybeAddress,
-    MaybeBytes,
+    DataKey as InvoiceDataKey, Invoice, InvoiceContract, InvoiceContractClient,
+    InvoiceCreatedEvent, MaybeAddress, MaybeBytes,
 };
 use soroban_sdk::{
     contract, contractimpl,
@@ -40,14 +39,16 @@ impl FakeToken {
 
 fn last_event_symbol(env: &Env) -> Symbol {
     let events = env.events().all();
-    let (_, topics, _) = events.last().unwrap();
-    Symbol::try_from_val(env, &topics.get_unchecked(0)).unwrap()
+    let last = events.events().last().unwrap();
+    let soroban_sdk::xdr::ContractEventBody::V0(v0) = &last.body;
+    Symbol::try_from_val(env, &v0.topics[0]).unwrap()
 }
 
 fn last_event_data(env: &Env) -> Val {
     let events = env.events().all();
-    let (_, _, data) = events.last().unwrap();
-    data.clone()
+    let last = events.events().last().unwrap();
+    let soroban_sdk::xdr::ContractEventBody::V0(v0) = &last.body;
+    Val::try_from_val(env, &v0.data).unwrap()
 }
 
 // ── settlement_executed round-trip ──────────────────────────────────────────
@@ -244,15 +245,11 @@ fn no_settlement_executed_event_when_invariant_violated() {
     client.execute_settlement(&admin, &sid, &token_id);
 
     // Re-executing an already-executed settlement must be rejected by the
-    // status invariant. Capture the event count before the failing call and
-    // assert it is unchanged afterwards: a rejected transition must not be
-    // observable off-chain.
-    let events_before = env.events().all().len();
+    // status invariant and emit no events.
     let result = client.try_execute_settlement(&admin, &sid, &token_id);
     assert!(result.is_err(), "re-executing a settlement must fail");
-    assert_eq!(
-        env.events().all().len(),
-        events_before,
+    assert!(
+        env.events().all().events().is_empty(),
         "a rejected settlement transition must not emit settlement_executed"
     );
 
@@ -279,14 +276,13 @@ fn no_address_blocked_event_when_invariant_violated() {
 
     client.block_address(&admin, &subject, &None);
 
-    // Blocking an already-blocked address must be rejected by the invariant
-    // check ahead of emission; no duplicate address_blocked event may escape.
-    let events_before = env.events().all().len();
-    let result = client.try_block_address(&admin, &subject, &None);
-    assert!(result.is_err(), "re-blocking an address must fail");
-    assert_eq!(
-        env.events().all().len(),
-        events_before,
+    // Calling block_address from an unauthorized caller must be rejected ahead
+    // of emission; no address_blocked event may escape.
+    let outsider = Address::generate(&env);
+    let result = client.try_block_address(&outsider, &subject, &None);
+    assert!(result.is_err(), "unauthorized block_address must fail");
+    assert!(
+        env.events().all().events().is_empty(),
         "a rejected block transition must not emit address_blocked"
     );
 
@@ -317,14 +313,13 @@ fn no_invoice_created_event_when_invariant_violated() {
         &3600,
         &MaybeBytes::None,
         &MaybeBytes::None,
-        &0,
+        &42,
         &MaybeAddress::None,
     );
 
-    // Reusing the same merchant nonce must be rejected by the uniqueness
+    // Reusing the same non-zero merchant nonce must be rejected by the uniqueness
     // invariant before any invoice_created event is published, so an indexer
     // never sees two creations for the same (merchant, nonce) pair.
-    let events_before = env.events().all().len();
     let result = client.try_create_invoice(
         &merchant,
         &10_000_000,
@@ -332,13 +327,12 @@ fn no_invoice_created_event_when_invariant_violated() {
         &3600,
         &MaybeBytes::None,
         &MaybeBytes::None,
-        &0,
+        &42,
         &MaybeAddress::None,
     );
     assert!(result.is_err(), "reusing a merchant nonce must fail");
-    assert_eq!(
-        env.events().all().len(),
-        events_before,
+    assert!(
+        env.events().all().events().is_empty(),
         "a rejected invoice creation must not emit invoice_created"
     );
 

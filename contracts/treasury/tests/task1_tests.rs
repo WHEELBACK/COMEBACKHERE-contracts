@@ -80,10 +80,12 @@ fn double_cancel_panics() {
 
 // ─── #117 Event ordering snapshots ───────────────────────────────────────────
 
-fn event_symbol(env: &Env, topics: &soroban_sdk::Vec<soroban_sdk::Val>) -> String {
+fn last_event_symbol(env: &Env) -> String {
     use soroban_sdk::TryFromVal;
-    let val = topics.get_unchecked(0);
-    Symbol::try_from_val(env, &val)
+    let events = env.events().all();
+    let last = events.events().last().unwrap();
+    let soroban_sdk::xdr::ContractEventBody::V0(v0) = &last.body;
+    Symbol::try_from_val(env, &v0.topics[0])
         .unwrap_or_else(|_| Symbol::new(env, ""))
         .to_string()
 }
@@ -97,11 +99,11 @@ fn event_order_propose_approve_cancel() {
     client.set_signer(&admin, &backup, &1);
 
     let sid = client.propose_settlement(&admin, &merchant, &5_000_000, &0_u64);
-    let proposed_symbol = event_symbol(&env, &env.events().all().last().unwrap().1);
+    let proposed_symbol = last_event_symbol(&env);
     client.approve_settlement(&backup, &sid);
-    let approved_symbol = event_symbol(&env, &env.events().all().last().unwrap().1);
+    let approved_symbol = last_event_symbol(&env);
     client.cancel_settlement(&admin, &sid);
-    let cancelled_symbol = event_symbol(&env, &env.events().all().last().unwrap().1);
+    let cancelled_symbol = last_event_symbol(&env);
 
     assert_eq!(proposed_symbol, "settlement_proposed");
     assert_eq!(approved_symbol, "settlement_approved");
@@ -116,9 +118,9 @@ fn event_order_propose_then_execute() {
     let token_id = env.register_contract(None, FakeToken);
 
     let sid = client.propose_settlement(&admin, &merchant, &1_000, &0_u64);
-    let proposed_symbol = event_symbol(&env, &env.events().all().last().unwrap().1);
+    let proposed_symbol = last_event_symbol(&env);
     client.execute_settlement(&admin, &sid, &token_id);
-    let executed_symbol = event_symbol(&env, &env.events().all().last().unwrap().1);
+    let executed_symbol = last_event_symbol(&env);
 
     assert_eq!(proposed_symbol, "settlement_proposed");
     assert_eq!(executed_symbol, "settlement_executed");

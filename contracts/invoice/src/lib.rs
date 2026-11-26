@@ -1,4 +1,5 @@
 #![no_std]
+#![allow(deprecated)]
 // The soroban-sdk #[contractimpl] macro expands each contract method into
 // additional generated items (e.g. the argument-spec helper) whose span
 // clippy attributes to the macro invocation rather than the annotated
@@ -15,24 +16,26 @@ mod template;
 mod validation;
 
 pub use events::{
-    EscrowReleasedEvent, GraceWindowUpdatedEvent, InvoiceAmountUpdatedEvent,
-    InvoiceCreatedEvent, InvoiceExpiryExtendedEvent, InvoiceTransferredEvent, MaxOpenInvoicesUpdatedEvent, MerchantMaxOpenInvoicesUpdatedEvent, RefundNetworkFeeUpdatedEvent, RefundProcessedEvent,
+    EscrowReleasedEvent, GraceWindowUpdatedEvent, InvoiceAmountUpdatedEvent, InvoiceCreatedEvent,
+    InvoiceExpiryExtendedEvent, InvoiceTransferredEvent, MaxOpenInvoicesUpdatedEvent,
+    MerchantMaxOpenInvoicesUpdatedEvent, RefundNetworkFeeUpdatedEvent, RefundProcessedEvent,
 };
+pub use invariants::verify_invoice_invariants;
 pub use invoice::StatusTransition;
 pub use invoice::{
     BatchInvoiceParams, DataKey, Invoice, InvoiceError, InvoiceErrorCategory, InvoiceRole,
-    InvoiceStatus, InvoiceSummary,
-    MaybeAddress, MaybeBytes, MaybeU64, RefundStatus, INVOICE_TTL_EXTEND_TO, INVOICE_TTL_THRESHOLD,
-    MAX_BATCH_EXPIRE, MAX_BATCH_SIZE, MAX_LATE_FEE_BPS, MAX_PAGE_LIMIT, MAX_PAYER_INDEX_ENTRIES,
+    InvoiceStatus, InvoiceSummary, MaybeAddress, MaybeBytes, MaybeU64, RefundStatus,
+    INVOICE_TTL_EXTEND_TO, INVOICE_TTL_THRESHOLD, MAX_BATCH_EXPIRE, MAX_BATCH_SIZE,
+    MAX_LATE_FEE_BPS, MAX_PAGE_LIMIT, MAX_PAYER_INDEX_ENTRIES,
 };
 pub use refund::{
-    calculate_net_refund, calculate_net_refund_with_network_fee, refund_recipient, transfer_net_refund, verify_payment_state, NetRefund,
-    BPS_DENOMINATOR, MAX_REFUND_FEE_BPS, MAX_REFUND_NETWORK_FEE, REFUND_NETWORK_FEE,
+    calculate_net_refund, calculate_net_refund_with_network_fee, refund_recipient,
+    transfer_net_refund, verify_payment_state, NetRefund, BPS_DENOMINATOR, MAX_REFUND_FEE_BPS,
+    MAX_REFUND_NETWORK_FEE, REFUND_NETWORK_FEE,
 };
 pub use template::{
     InvoiceTemplate, RecurrenceInterval, TEMPLATE_KEEPER_BATCH_SIZE, TEMPLATE_PAGE_LIMIT,
 };
-pub use invariants::verify_invoice_invariants;
 pub use validation::require_valid_discount;
 pub use validation::{require_memo_not_too_long, MAX_MEMO_BYTES};
 

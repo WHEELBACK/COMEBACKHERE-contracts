@@ -71,6 +71,9 @@ fn pending_metrics_budget_many_tokens_and_settlements() {
     // Record the measured numbers for the PR / docs cross-reference.
     std::println!(
         "get_pending_metrics: {} settlements across {} tokens -> cpu={} mem={}",
-        NUM_SETTLEMENTS, NUM_TOKENS, cpu, mem
+        NUM_SETTLEMENTS,
+        NUM_TOKENS,
+        cpu,
+        mem
     );
 }

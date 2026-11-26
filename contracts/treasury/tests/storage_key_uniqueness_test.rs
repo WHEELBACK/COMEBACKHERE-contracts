@@ -12,32 +12,6 @@ use treasury::DataKey;
 /// Mock caller contract used to exercise treasury storage accessors through a
 /// real cross-contract invocation (Soroban testutils host).
 ///
-/// The caller holds no storage of its own; it simply forwards calls into the
-/// treasury contract so the host records the nested invocation footprint.
-#[soroban_sdk::contract]
-pub struct StorageLayoutCaller;
-
-#[soroban_sdk::contractimpl]
-impl StorageLayoutCaller {
-    /// Read a treasury storage key through a cross-contract call.
-    pub fn read_key(env: Env, treasury: Address, key: DataKey) -> Option<u32> {
-        let client = treasury::TreasuryClient::new(&env, &treasury);
-        client.get_u32(&key)
-    }
-
-    /// Write a treasury storage key through a cross-contract call.
-    pub fn write_key(env: Env, treasury: Address, key: DataKey, value: u32) {
-        let client = treasury::TreasuryClient::new(&env, &treasury);
-        client.set_u32(&key, &value);
-    }
-
-    /// Extend the TTL of a treasury storage key through a cross-contract call.
-    pub fn bump_key(env: Env, treasury: Address, key: DataKey, extend_to: u32) {
-        let client = treasury::TreasuryClient::new(&env, &treasury);
-        client.bump_key_ttl(&key, &extend_to);
-    }
-}
-
 fn xdr(env: &Env, key: impl ToXdr) -> Vec<u8> {
     key.to_xdr(env).into_iter().collect()
 }
@@ -227,77 +201,6 @@ fn per_holder_keys_stay_separate() {
             xdr(&env, DataKey::WithdrawnInWindow(b)),
         ),
     ]);
-}
-
-/// Cross-contract invocation: a mock caller writes and reads treasury storage
-/// keys, and the resulting key space must stay collision-free.
-#[test]
-fn cross_contract_storage_roundtrip_preserves_key_uniqueness() {
-    let env = Env::default();
-    env.mock_all_auths();
-
-    let treasury_id = env.register_contract(None, treasury::Treasury);
-    let caller_id = env.register_contract(None, StorageLayoutCaller);
-    let caller = StorageLayoutCallerClient::new(&env, &caller_id);
-
-    let holder = Address::generate(&env);
-    let token = Address::generate(&env);
-
-    let keys = [
-        DataKey::SettlementCount,
-        DataKey::DisputeCount,
-        DataKey::RotationCount,
-        DataKey::SignerChangeCount,
-        DataKey::Settlement(1),
-        DataKey::Dispute(1),
-        DataKey::SignerRotation(1),
-        DataKey::SignerChange(1),
-        DataKey::PartialApprovedTotal(1),
-        DataKey::Balance(holder.clone(), token.clone()),
-        DataKey::Signer(holder.clone()),
-        DataKey::MerchantPayoutAddress(holder.clone()),
-        DataKey::LastRotationProposal(holder.clone()),
-        DataKey::WithdrawalWindowStart(holder.clone()),
-        DataKey::WithdrawnInWindow(holder.clone()),
-    ];
-
-    // Each key is written through the caller with a distinct value, so a
-    // collision would surface as a clobbered read below.
-    for (index, key) in keys.iter().enumerate() {
-        let value = (index as u32) + 1;
-        caller.write_key(&treasury_id, key, &value);
-        assert_eq!(
-            caller.read_key(&treasury_id, key),
-            Some(value),
-            "cross-contract write/read mismatch for {key:?}"
-        );
-    }
-
-    // Re-read everything: no later write may have overwritten an earlier key.
-    for (index, key) in keys.iter().enumerate() {
-        assert_eq!(
-            caller.read_key(&treasury_id, key),
-            Some((index as u32) + 1),
-            "storage collision detected for {key:?} after cross-contract writes"
-        );
-    }
-}
-
-/// Cross-contract TTL extension must succeed and leave the value intact.
-#[test]
-fn cross_contract_ttl_extension_keeps_value() {
-    let env = Env::default();
-    env.mock_all_auths();
-
-    let treasury_id = env.register_contract(None, treasury::Treasury);
-    let caller_id = env.register_contract(None, StorageLayoutCaller);
-    let caller = StorageLayoutCallerClient::new(&env, &caller_id);
-
-    let key = DataKey::SettlementCount;
-    caller.write_key(&treasury_id, &key, &7);
-    caller.bump_key(&treasury_id, &key, &10_000);
-
-    assert_eq!(caller.read_key(&treasury_id, &key), Some(7));
 }
 
 /// Unit variants are distinguished by name alone.

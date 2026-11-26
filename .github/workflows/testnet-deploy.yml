@@ -42,7 +42,7 @@ jobs:
         uses: dtolnay/rust-toolchain@master
         with:
           toolchain: ${{ env.RUST_VERSION }}
-          targets: wasm32-unknown-unknown
+          targets: wasm32v1-none
 
       - name: Install stellar-cli build dependencies
         run: sudo apt-get update && sudo apt-get install -y libdbus-1-dev libudev-dev pkg-config binaryen
@@ -73,23 +73,16 @@ jobs:
           echo "DEPLOYER_ADDRESS=$DEPLOYER_ADDR" >> $GITHUB_ENV
           echo "Deployer Address: $DEPLOYER_ADDR"
 
-      # target-cpu=mvp: see scripts/init-contracts.sh.
       - name: Build contract WASM binaries
-        env:
-          CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUSTFLAGS: "-C target-cpu=mvp"
         run: |
-          cargo build --target wasm32-unknown-unknown --release \
-            -p comebackhere-compliance \
-            -p comebackhere-invoice \
-            -p comebackhere-treasury \
-            -p comebackhere-settlement-workflow
+          for pkg in comebackhere-compliance comebackhere-invoice comebackhere-treasury comebackhere-settlement-workflow; do
+            stellar contract build --package "$pkg"
+          done
 
-      # See scripts/init-contracts.sh: re-encode without reference-types so
-      # the Soroban host's wasm validator accepts the modules.
-      - name: Lower contract WASM to Soroban-supported features
+      - name: Optimize contract WASM binaries
         run: |
           for contract in compliance invoice treasury settlement_workflow; do
-            wasm="target/wasm32-unknown-unknown/release/${contract}.wasm"
+            wasm="target/wasm32v1-none/release/${contract}.wasm"
             wasm-opt -Oz --mvp-features --enable-sign-ext --enable-mutable-globals "$wasm" -o "$wasm"
           done
 
@@ -101,7 +94,7 @@ jobs:
 
           echo "Deploying Compliance contract..."
           COMPLIANCE_ID=$(stellar contract deploy \
-            --wasm target/wasm32-unknown-unknown/release/compliance.wasm \
+            --wasm target/wasm32v1-none/release/compliance.wasm \
             --source "$SOURCE" \
             --network "$NETWORK")
           echo "Compliance ID: $COMPLIANCE_ID"
@@ -115,7 +108,7 @@ jobs:
 
           echo "Deploying Invoice contract..."
           INVOICE_ID=$(stellar contract deploy \
-            --wasm target/wasm32-unknown-unknown/release/invoice.wasm \
+            --wasm target/wasm32v1-none/release/invoice.wasm \
             --source "$SOURCE" \
             --network "$NETWORK")
           echo "Invoice ID: $INVOICE_ID"
@@ -129,7 +122,7 @@ jobs:
 
           echo "Deploying Treasury contract..."
           TREASURY_ID=$(stellar contract deploy \
-            --wasm target/wasm32-unknown-unknown/release/treasury.wasm \
+            --wasm target/wasm32v1-none/release/treasury.wasm \
             --source "$SOURCE" \
             --network "$NETWORK")
           echo "Treasury ID: $TREASURY_ID"
@@ -143,7 +136,7 @@ jobs:
 
           echo "Deploying Settlement Workflow contract..."
           SETTLEMENT_WORKFLOW_ID=$(stellar contract deploy \
-            --wasm target/wasm32-unknown-unknown/release/settlement_workflow.wasm \
+            --wasm target/wasm32v1-none/release/settlement_workflow.wasm \
             --source "$SOURCE" \
             --network "$NETWORK")
           echo "Settlement Workflow ID: $SETTLEMENT_WORKFLOW_ID"

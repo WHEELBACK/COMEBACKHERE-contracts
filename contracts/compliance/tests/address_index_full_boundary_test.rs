@@ -37,6 +37,7 @@ fn setup() -> (Env, Address, ComplianceContractClient<'static>) {
     let env = Env::default();
     env.mock_all_auths();
     env.cost_estimate().budget().reset_unlimited();
+    env.cost_estimate().disable_resource_limits();
     let admin = Address::generate(&env);
     let id = env.register_contract(None, ComplianceContract);
     let client = ComplianceContractClient::new(&env, &id);
@@ -120,7 +121,10 @@ fn new_distinct_address_beyond_cap_is_rejected_with_address_index_full() {
     let overflow_address_3 = Address::generate(&env);
     let allow_until_result =
         client.try_allow_address_until(&admin, &overflow_address_3, &1_000_000);
-    assert_eq!(allow_until_result, Err(Ok(ComplianceError::AddressIndexFull)));
+    assert_eq!(
+        allow_until_result,
+        Err(Ok(ComplianceError::AddressIndexFull))
+    );
 }
 
 #[test]

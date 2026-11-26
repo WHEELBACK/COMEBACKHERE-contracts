@@ -65,10 +65,7 @@ pub enum ErrorCategory {
 pub fn error_category(e: TreasuryError) -> (&'static str, &'static str) {
     match e {
         // ── Authorization (discriminants 9, 10, 34) ──────────────────────
-        TreasuryError::Unauthorized => (
-            "Authorization",
-            "caller is not authorized",
-        ),
+        TreasuryError::Unauthorized => ("Authorization", "caller is not authorized"),
         TreasuryError::UnauthorizedSigner => (
             "Authorization",
             "signer is not registered or has zero weight",
@@ -80,22 +77,10 @@ pub fn error_category(e: TreasuryError) -> (&'static str, &'static str) {
 
         // ── State (discriminants 1, 3, 4, 13, 14, 15, 17, 21, 22, 26,
         //          29, 37, 39, 40, 44, 46) ─────────────────────────────────
-        TreasuryError::AlreadyInitialized => (
-            "State",
-            "contract has already been initialized",
-        ),
-        TreasuryError::SettlementNotFound => (
-            "State",
-            "settlement not found",
-        ),
-        TreasuryError::AlreadyExecuted => (
-            "State",
-            "settlement is already in a terminal state",
-        ),
-        TreasuryError::RotationNotFound => (
-            "State",
-            "signer rotation proposal not found",
-        ),
+        TreasuryError::AlreadyInitialized => ("State", "contract has already been initialized"),
+        TreasuryError::SettlementNotFound => ("State", "settlement not found"),
+        TreasuryError::AlreadyExecuted => ("State", "settlement is already in a terminal state"),
+        TreasuryError::RotationNotFound => ("State", "signer rotation proposal not found"),
         TreasuryError::RotationAlreadyExecuted => (
             "State",
             "signer rotation proposal has already been executed",
@@ -104,42 +89,24 @@ pub fn error_category(e: TreasuryError) -> (&'static str, &'static str) {
             "State",
             "settlement is currently on hold and cannot be executed",
         ),
-        TreasuryError::AlreadyOnHold => (
-            "State",
-            "settlement is already on hold",
-        ),
-        TreasuryError::DisputeNotFound => (
-            "State",
-            "dispute not found",
-        ),
-        TreasuryError::DisputeAlreadyResolved => (
-            "State",
-            "dispute has already been resolved",
-        ),
+        TreasuryError::AlreadyOnHold => ("State", "settlement is already on hold"),
+        TreasuryError::DisputeNotFound => ("State", "dispute not found"),
+        TreasuryError::DisputeAlreadyResolved => ("State", "dispute has already been resolved"),
         TreasuryError::SettlementNotCancellable => (
             "State",
             "settlement cannot be cancelled in its current state",
         ),
-        TreasuryError::NotOnHold => (
-            "State",
-            "settlement is not on hold",
-        ),
+        TreasuryError::NotOnHold => ("State", "settlement is not on hold"),
         TreasuryError::ForceCancelNotAllowed => (
             "State",
             "settlement is in a terminal state and cannot be force-cancelled",
         ),
-        TreasuryError::SignerChangeNotFound => (
-            "State",
-            "signer change proposal not found",
-        ),
+        TreasuryError::SignerChangeNotFound => ("State", "signer change proposal not found"),
         TreasuryError::SignerChangeAlreadyFinalised => (
             "State",
             "signer change proposal has already been executed or cancelled",
         ),
-        TreasuryError::ApprovalNotFound => (
-            "State",
-            "approval from this signer was not found",
-        ),
+        TreasuryError::ApprovalNotFound => ("State", "approval from this signer was not found"),
         TreasuryError::NoPendingAdmin => (
             "State",
             "no pending admin transfer exists or it has expired",
@@ -147,34 +114,26 @@ pub fn error_category(e: TreasuryError) -> (&'static str, &'static str) {
 
         // ── Validation (discriminants 2, 7, 20, 23, 24, 25, 31, 36,
         //               42, 44, 45, 48, 49) ────────────────────────────────
-        TreasuryError::ZeroThreshold => (
-            "Validation",
-            "approval threshold must be greater than zero",
-        ),
+        TreasuryError::ZeroThreshold => {
+            ("Validation", "approval threshold must be greater than zero")
+        }
         TreasuryError::InvalidAmount => (
             "Validation",
             "amount is invalid (zero, negative, or out of range)",
         ),
-        TreasuryError::ArithmeticOverflow => (
-            "Validation",
-            "arithmetic operation overflowed",
-        ),
+        TreasuryError::ArithmeticOverflow => ("Validation", "arithmetic operation overflowed"),
         TreasuryError::ResolutionDirectionMismatch => (
             "Validation",
             "resolution direction does not match the existing resolution vote",
         ),
-        TreasuryError::WeightOverflow => (
-            "Validation",
-            "accumulated signer weight overflowed u32",
-        ),
+        TreasuryError::WeightOverflow => ("Validation", "accumulated signer weight overflowed u32"),
         TreasuryError::InsufficientBalance => (
             "Validation",
             "depositor balance is insufficient for the requested withdrawal",
         ),
-        TreasuryError::InvalidSplitRatio => (
-            "Validation",
-            "claimant split basis-points exceeds 10 000",
-        ),
+        TreasuryError::InvalidSplitRatio => {
+            ("Validation", "claimant split basis-points exceeds 10 000")
+        }
         TreasuryError::QuorumBreak => (
             "Validation",
             "removing this signer would drop total weight below the threshold",
@@ -191,10 +150,9 @@ pub fn error_category(e: TreasuryError) -> (&'static str, &'static str) {
             "Validation",
             "deposit reference id has already been used within its TTL window",
         ),
-        TreasuryError::WithdrawalLimitExceeded => (
-            "Validation",
-            "withdrawal would exceed the per-window limit",
-        ),
+        TreasuryError::WithdrawalLimitExceeded => {
+            ("Validation", "withdrawal would exceed the per-window limit")
+        }
 
         // ── Configuration (discriminants 5, 6, 11, 12, 18, 19, 30, 43, 47, 50) ──
         TreasuryError::ThresholdNotMet => (
@@ -209,10 +167,9 @@ pub fn error_category(e: TreasuryError) -> (&'static str, &'static str) {
             "Configuration",
             "token contract address is invalid (e.g. self-reference)",
         ),
-        TreasuryError::TokenNotAllowed => (
-            "Configuration",
-            "token is not on the treasury allowlist",
-        ),
+        TreasuryError::TokenNotAllowed => {
+            ("Configuration", "token is not on the treasury allowlist")
+        }
         TreasuryError::ThresholdUnreachable => (
             "Configuration",
             "new threshold exceeds total registered signer weight",
@@ -243,18 +200,9 @@ pub fn error_category(e: TreasuryError) -> (&'static str, &'static str) {
             "Timing",
             "contract is paused; state-mutating operations are blocked",
         ),
-        TreasuryError::DisputeNotExpired => (
-            "Timing",
-            "dispute has not yet expired",
-        ),
-        TreasuryError::TtlNotElapsed => (
-            "Timing",
-            "TTL window has not elapsed",
-        ),
-        TreasuryError::NotPaused => (
-            "Timing",
-            "operation requires the contract to be paused",
-        ),
+        TreasuryError::DisputeNotExpired => ("Timing", "dispute has not yet expired"),
+        TreasuryError::TtlNotElapsed => ("Timing", "TTL window has not elapsed"),
+        TreasuryError::NotPaused => ("Timing", "operation requires the contract to be paused"),
         TreasuryError::RotationProposalCooldown => (
             "Timing",
             "a rotation proposal for this signer is still within its cooldown window",
@@ -269,10 +217,7 @@ pub fn error_category(e: TreasuryError) -> (&'static str, &'static str) {
         ),
 
         // ── Capacity (discriminants 24, 28) ──────────────────────────────
-        TreasuryError::BatchTooLarge => (
-            "Capacity",
-            "batch exceeds the maximum allowed size",
-        ),
+        TreasuryError::BatchTooLarge => ("Capacity", "batch exceeds the maximum allowed size"),
         TreasuryError::AllowlistFull => (
             "Capacity",
             "token allowlist has reached the maximum allowed size",

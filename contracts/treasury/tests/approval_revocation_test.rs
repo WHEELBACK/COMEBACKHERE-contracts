@@ -211,17 +211,17 @@ fn revoke_emits_settlement_approval_revoked_event() {
     let revoked = client.revoke_approval(&backup, &sid);
 
     let events = env.events().all();
-    let (_, topics, data) = events.last().unwrap();
+    let last = events.events().last().unwrap();
+    let soroban_sdk::xdr::ContractEventBody::V0(v0) = &last.body;
     assert_eq!(
-        Symbol::try_from_val(&env, &topics.get_unchecked(0)).unwrap(),
+        Symbol::try_from_val(&env, &v0.topics[0]).unwrap(),
         Symbol::new(&env, "settlement_approval_revoked")
     );
-    assert_eq!(
-        u64::try_from_val(&env, &topics.get_unchecked(1)).unwrap(),
-        sid
-    );
+    let sid_val = soroban_sdk::Val::try_from_val(&env, &v0.topics[1]).unwrap();
+    assert_eq!(u64::try_from_val(&env, &sid_val).unwrap(), sid);
+    let data_val = soroban_sdk::Val::try_from_val(&env, &v0.data).unwrap();
     let (event_signer, event_settlement) =
-        <(Address, Settlement)>::try_from_val(&env, &data).unwrap();
+        <(Address, Settlement)>::try_from_val(&env, &data_val).unwrap();
     assert_eq!(event_signer, backup);
     assert_eq!(event_settlement, revoked);
 }

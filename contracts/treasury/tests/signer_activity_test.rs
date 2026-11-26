@@ -233,13 +233,13 @@ fn signer_activity_does_not_disturb_settlement_invariants() {
 
     // Approval count must never exceed the configured threshold.
     let threshold = client.get_threshold();
-    assert!(client.get_approval_count(&sid) <= threshold);
+    assert!(client.get_settlement(&sid).approvals.len() <= threshold);
 
     env.ledger().with_mut(|l| l.timestamp = 200);
     client.approve_settlement(&backup, &sid);
 
     // Activity tracking must not corrupt approval accounting.
-    assert!(client.get_approval_count(&sid) <= threshold);
+    assert!(client.get_settlement(&sid).approvals.len() <= threshold);
     assert_eq!(client.get_signer_last_active(&admin), Some(100));
     assert_eq!(client.get_signer_last_active(&backup), Some(200));
 }

@@ -2,6 +2,7 @@ use soroban_sdk::{contracttype, Address};
 
 // Error types and their client-facing messages live in `crate::errors` (#946).
 
+/// Lifecycle state of a time-lock deposit.
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum LockStatus {
@@ -67,6 +68,7 @@ pub struct TimeLock {
     pub status: LockStatus,
 }
 
+/// Storage keys for the time-lock contract.
 #[contracttype]
 #[derive(Clone)]
 pub enum DataKey {

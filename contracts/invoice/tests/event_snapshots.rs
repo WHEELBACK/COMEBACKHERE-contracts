@@ -1,6 +1,6 @@
 use invoice::{
-    EscrowReleasedEvent, GraceWindowUpdatedEvent, InvoiceContract, InvoiceContractClient, InvoiceCreatedEvent,
-    MaxOpenInvoicesUpdatedEvent, MaybeAddress, MaybeBytes,
+    EscrowReleasedEvent, GraceWindowUpdatedEvent, InvoiceContract, InvoiceContractClient,
+    InvoiceCreatedEvent, MaxOpenInvoicesUpdatedEvent, MaybeAddress, MaybeBytes,
 };
 use soroban_sdk::{
     testutils::{Address as _, Ledger},

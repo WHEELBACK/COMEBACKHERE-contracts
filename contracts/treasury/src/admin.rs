@@ -12,9 +12,7 @@ pub const ROLE_OPERATOR: u32 = 1;
 impl TreasuryContract {
     /// Returns the role assigned to `account`, if any.
     pub fn get_role(env: Env, account: Address) -> Option<u32> {
-        env.storage()
-            .persistent()
-            .get(&DataKey::Role(account))
+        env.storage().persistent().get(&DataKey::Role(account))
     }
 
     /// Assigns `role` to `account` (admin-only). Only `ROLE_ADMIN` and `ROLE_OPERATOR`
@@ -164,7 +162,10 @@ impl TreasuryContract {
 
     /// Returns the current admin address.
     pub fn get_admin(env: Env) -> Address {
-        env.storage().instance().get(&DataKey::Admin).unwrap()
+        env.storage()
+            .instance()
+            .get(&DataKey::Admin)
+            .unwrap_or_else(|| soroban_sdk::panic_with_error!(&env, TreasuryError::Unauthorized))
     }
 
     /// Configures the maximum amount withdrawable per rolling time window (admin-only).
@@ -297,8 +298,8 @@ impl TreasuryContract {
     /// `Unauthorized` if the caller is not the proposed admin.
     /// Emits: `admin_transferred`.
     pub fn accept_admin(env: Env, new_admin: Address) -> Result<(), TreasuryError> {
-        let (pending, expires_at) = Self::get_pending_admin(env.clone())
-            .ok_or(TreasuryError::NoPendingAdmin)?;
+        let (pending, expires_at) =
+            Self::get_pending_admin(env.clone()).ok_or(TreasuryError::NoPendingAdmin)?;
         if env.ledger().timestamp() >= expires_at {
             env.storage().instance().remove(&DataKey::PendingAdmin);
             return Err(TreasuryError::NoPendingAdmin);

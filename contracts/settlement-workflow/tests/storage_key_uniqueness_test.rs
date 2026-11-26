@@ -48,6 +48,5 @@ fn every_variant_serializes_uniquely() {
         ("Admin", xdr(&env, DataKey::Admin)),
         ("PendingAdmin", xdr(&env, DataKey::PendingAdmin)),
         ("Paused", xdr(&env, DataKey::Paused)),
-        ("SchemaVersion", xdr(&env, DataKey::SchemaVersion)),
     ]);
 }

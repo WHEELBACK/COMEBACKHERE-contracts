@@ -4,12 +4,10 @@
 //! and that the execution path is open to any caller (no admin required).
 
 use compliance::{ComplianceContract, ComplianceContractClient};
-use settlement_workflow::{SettlementWorkflowContract, SettlementWorkflowContractClient, WorkflowError};
-use soroban_sdk::{
-    contract, contractimpl,
-    testutils::Address as _,
-    Address, Env,
+use settlement_workflow::{
+    SettlementWorkflowContract, SettlementWorkflowContractClient, WorkflowError,
 };
+use soroban_sdk::{contract, contractimpl, testutils::Address as _, Address, Env};
 use treasury::{TreasuryContract, TreasuryContractClient, TreasuryError};
 
 // ── Minimal pausable stub ────────────────────────────────────────────────────
@@ -94,7 +92,10 @@ fn unpause_requires_stored_admin() {
 
     let err = f.workflow.try_unpause(&f.outsider).unwrap_err().unwrap();
     assert_eq!(err, TreasuryError::Unauthorized.into());
-    assert!(f.workflow.is_paused(), "must remain paused after rejected unpause");
+    assert!(
+        f.workflow.is_paused(),
+        "must remain paused after rejected unpause"
+    );
 
     // Admin succeeds.
     f.workflow.unpause(&f.admin);
@@ -150,7 +151,7 @@ fn accept_admin_requires_pending_nominee() {
 
     // Nominee accepted.
     f.workflow.accept_admin(&new_admin);
-    assert_eq!(f.workflow.get_admin().unwrap(), new_admin);
+    assert_eq!(f.workflow.get_admin(), new_admin);
 }
 
 /// `accept_admin` with no pending nomination returns `NoPendingAdmin`.
@@ -177,10 +178,8 @@ fn emergency_pause_all_requires_pause_admin() {
     let target = f.env.register(PausableStub, ());
 
     // The workflow's stored admin configures the targets; it becomes the emergency-pause admin.
-    f.workflow.initialize_emergency_pause(
-        &f.admin,
-        &soroban_sdk::vec![&f.env, target],
-    );
+    f.workflow
+        .initialize_emergency_pause(&f.admin, &soroban_sdk::vec![&f.env, target]);
 
     // A different address (not the configured emergency pause admin) is rejected.
     let err = f
@@ -199,10 +198,8 @@ fn resume_all_requires_prior_emergency_pause() {
     let f = setup();
     let target = f.env.register(PausableStub, ());
 
-    f.workflow.initialize_emergency_pause(
-        &f.admin,
-        &soroban_sdk::vec![&f.env, target],
-    );
+    f.workflow
+        .initialize_emergency_pause(&f.admin, &soroban_sdk::vec![&f.env, target]);
     f.workflow.emergency_pause_all(&f.admin);
     assert!(f.workflow.get_emergency_paused_at().is_some());
 
@@ -217,10 +214,8 @@ fn resume_all_without_emergency_pause_is_rejected() {
     let f = setup();
     let target = f.env.register(PausableStub, ());
 
-    f.workflow.initialize_emergency_pause(
-        &f.admin,
-        &soroban_sdk::vec![&f.env, target],
-    );
+    f.workflow
+        .initialize_emergency_pause(&f.admin, &soroban_sdk::vec![&f.env, target]);
 
     let err = f
         .workflow
@@ -236,26 +231,25 @@ fn initialize_emergency_pause_requires_stored_admin() {
     let f = setup();
     let target = f.env.register(PausableStub, ());
 
-    // Note: mock_all_auths means the auth check passes, but the stored-admin check
-    // in `require_admin` will reject outsider.
-    // `initialize_emergency_pause` only checks `admin.require_auth()`, not stored admin,
-    // so any address that provides auth can call it. We verify the stored admin IS used
-    // by checking `emergency_pause_all` enforces the pinned EmergencyPauseAdmin.
-    f.workflow.initialize_emergency_pause(
-        &f.outsider,
-        &soroban_sdk::vec![&f.env, target.clone()],
-    );
-
-    // Now outsider is the emergency-pause admin; the original admin is not.
+    // Outsider cannot configure emergency pause on an already-initialized workflow.
     let err = f
         .workflow
-        .try_emergency_pause_all(&f.admin)
+        .try_initialize_emergency_pause(&f.outsider, &soroban_sdk::vec![&f.env, target.clone()])
         .unwrap_err()
         .unwrap();
     assert_eq!(err, WorkflowError::Unauthorized.into());
 
-    // But outsider CAN pause since it was recorded as the emergency-pause admin.
-    f.workflow.emergency_pause_all(&f.outsider);
+    // Stored admin CAN configure and trigger emergency pause.
+    f.workflow
+        .initialize_emergency_pause(&f.admin, &soroban_sdk::vec![&f.env, target]);
+    let err = f
+        .workflow
+        .try_emergency_pause_all(&f.outsider)
+        .unwrap_err()
+        .unwrap();
+    assert_eq!(err, WorkflowError::Unauthorized.into());
+
+    f.workflow.emergency_pause_all(&f.admin);
     assert!(f.workflow.get_emergency_paused_at().is_some());
 }
 

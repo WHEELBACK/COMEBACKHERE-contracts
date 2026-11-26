@@ -1,4 +1,5 @@
 #![no_std]
+#![allow(deprecated)]
 
 use compliance_client::ComplianceClient;
 use multisig::{Settlement, SettlementStatus};
@@ -119,12 +120,7 @@ impl SettlementWorkflowContract {
     /// `AlreadyInitialized` path to hit; the constructor arguments are the
     /// pinned values for the lifetime of the contract.
     /// Emits: `workflow_initialized`.
-    pub fn __constructor(
-        env: Env,
-        admin: Address,
-        compliance_id: Address,
-        treasury_id: Address,
-    ) {
+    pub fn __constructor(env: Env, admin: Address, compliance_id: Address, treasury_id: Address) {
         admin.require_auth();
         env.storage().instance().set(&DataKey::Admin, &admin);
         env.storage()
@@ -379,7 +375,13 @@ impl SettlementWorkflowContract {
         {
             // #876: a zero/short treasury balance traps inside the token
             // transfer with an opaque host error; report it as a typed error.
-            if Self::is_underfunded(&env, &treasury, &treasury_id, settlement_id, &token_contract) {
+            if Self::is_underfunded(
+                &env,
+                &treasury,
+                &treasury_id,
+                settlement_id,
+                &token_contract,
+            ) {
                 return Err(TreasuryError::InsufficientBalance);
             }
             // Any other failure: re-invoke (the failed attempt was rolled

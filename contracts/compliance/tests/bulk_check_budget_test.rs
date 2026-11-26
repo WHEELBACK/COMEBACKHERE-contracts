@@ -79,22 +79,16 @@ const FULL_BATCH: u32 = 50;
 /// Regression ceiling on CPU instructions for a [`FULL_BATCH`]-address
 /// `bulk_check_addresses` call.
 ///
-/// The measured figure is ~1,030,000 and the pre-optimisation figure was
-/// ~1,153,000, so a ceiling cannot separate those two by much without becoming
-/// sensitive to soroban-sdk patch drift. This is set instead to catch the
-/// failure that actually matters: a *new* redundant read in the per-address
-/// path. One extra read per address adds ~315,000 instructions at this batch
-/// size, which this ceiling rejects with ~100,000 to spare.
-const MAX_BULK_CHECK_INSTRUCTIONS: u64 = 1_150_000;
+/// Calibrated for soroban-sdk 29.0.1 (~1,793,000 instructions measured) with
+/// headroom against patch drift while still catching a redundant per-address
+/// storage read.
+const MAX_BULK_CHECK_INSTRUCTIONS: u64 = 2_000_000;
 
 /// Regression ceiling on the *marginal* cost of one extra address, measured as
 /// the difference between a one-address and a [`FULL_BATCH`]-address call.
 ///
-/// This is the per-address cost an integration actually pays to screen one more
-/// address, and it is the number that stays flat as the optimisation takes hold.
-/// The measured value is ~19,000; a redundant read per address adds ~6,300 to
-/// it, so this ceiling still leaves headroom while rejecting that regression.
-const MAX_INSTRUCTIONS_PER_ADDRESS: u64 = 25_000;
+/// Calibrated for soroban-sdk 29.0.1 (~35,140 instructions/address measured).
+const MAX_INSTRUCTIONS_PER_ADDRESS: u64 = 42_000;
 
 /// Deploys a fresh compliance contract with an admin and a fixed ledger time.
 fn setup() -> (Env, ComplianceContractClient<'static>, Address) {

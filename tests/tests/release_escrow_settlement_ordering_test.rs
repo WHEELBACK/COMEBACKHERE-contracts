@@ -34,19 +34,14 @@ impl MockCaller {
     /// Invoke an arbitrary contract entrypoint and return its raw result.
     /// Panics (propagating the callee's error) if the invocation fails, which
     /// is exactly the behaviour a real cross-contract caller would observe.
-    pub fn invoke(
-        env: Env,
-        target: Address,
-        func: Symbol,
-        args: Vec<Val>,
-    ) -> Val {
+    pub fn invoke(env: Env, target: Address, func: Symbol, args: Vec<Val>) -> Val {
         env.invoke_contract::<Val>(&target, &func, args)
     }
 
     /// Invoke an entrypoint and swallow the result, returning `true` on
     /// success. Used to assert that a call succeeds without needing to
     /// marshal the return value back across the contract boundary.
-    pub fn try_invoke(env: Env, target: Address, func: Symbol, args: Vec<Val>) -> bool {
+    pub fn invoke_ok(env: Env, target: Address, func: Symbol, args: Vec<Val>) -> bool {
         env.invoke_contract::<Val>(&target, &func, args);
         true
     }
@@ -104,7 +99,7 @@ struct Fixture {
 
 fn setup() -> Fixture {
     let env = Env::default();
-    env.mock_all_auths();
+    env.mock_all_auths_allowing_non_root_auth();
 
     let admin = Address::generate(&env);
     let merchant = Address::generate(&env);
@@ -287,7 +282,7 @@ fn cross_contract_release_escrow_succeeds() {
     args.push_back(fx.admin.clone().into_val(&fx.env));
     args.push_back(inv_id.into_val(&fx.env));
 
-    let ok = fx.caller.try_invoke(
+    let ok = fx.caller.invoke_ok(
         &fx.invoice_id,
         &Symbol::new(&fx.env, "release_escrow"),
         &args,
@@ -337,7 +332,7 @@ fn cross_contract_release_then_settlement_succeeds() {
     let mut release_args: Vec<Val> = Vec::new(&fx.env);
     release_args.push_back(fx.admin.clone().into_val(&fx.env));
     release_args.push_back(inv_id.into_val(&fx.env));
-    assert!(fx.caller.try_invoke(
+    assert!(fx.caller.invoke_ok(
         &fx.invoice_id,
         &Symbol::new(&fx.env, "release_escrow"),
         &release_args,
@@ -352,7 +347,7 @@ fn cross_contract_release_then_settlement_succeeds() {
     settle_args.push_back(fx.admin.clone().into_val(&fx.env));
     settle_args.push_back(settlement_id.into_val(&fx.env));
     settle_args.push_back(fx.token_id.clone().into_val(&fx.env));
-    assert!(fx.caller.try_invoke(
+    assert!(fx.caller.invoke_ok(
         &fx.treasury_id,
         &Symbol::new(&fx.env, "execute_settlement"),
         &settle_args,
@@ -395,14 +390,17 @@ fn cross_contract_release_escrow_propagates_error() {
     args.push_back(fx.admin.clone().into_val(&fx.env));
     args.push_back(inv_id.into_val(&fx.env));
 
-    let result = fx.caller.try_invoke(
+    let result = fx.caller.try_invoke_ok(
         &fx.invoice_id,
         &Symbol::new(&fx.env, "release_escrow"),
         &args,
     );
-    // The callee panics on the invalid state transition, which propagates as a
+    // The callee rejects the invalid state transition, which propagates as a
     // failed invocation through the caller contract.
-    let _ = result;
+    assert!(
+        result.is_err(),
+        "release_escrow on an unpaid invoice must fail"
+    );
 
     // The invoice must remain in its pre-release state.
     assert_ne!(
@@ -442,7 +440,7 @@ fn cross_contract_release_escrow_metering_is_bounded() {
     args.push_back(fx.admin.clone().into_val(&fx.env));
     args.push_back(inv_id.into_val(&fx.env));
 
-    assert!(fx.caller.try_invoke(
+    assert!(fx.caller.invoke_ok(
         &fx.invoice_id,
         &Symbol::new(&fx.env, "release_escrow"),
         &args,

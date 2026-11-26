@@ -179,7 +179,8 @@ mod tests {
         assert_eq!(checked_sub_i128(i128::MAX, 0), Some(i128::MAX));
         assert_eq!(checked_sub_i128(i128::MIN, 0), Some(i128::MIN));
         assert_eq!(checked_sub_i128(0, i128::MIN), None);
-        assert_eq!(checked_sub_i128(-1, i128::MAX), None);
+        assert_eq!(checked_sub_i128(-1, i128::MAX), Some(i128::MIN));
+        assert_eq!(checked_sub_i128(-2, i128::MAX), None);
     }
 
     #[test]

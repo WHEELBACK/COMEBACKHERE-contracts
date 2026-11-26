@@ -23,12 +23,7 @@ jobs:
 
     services:
       stellar:
-        # Pinned rather than `latest`: `latest` tracks the newest protocol
-        # (28 at the time of pinning), whose XDR the pinned stellar-cli
-        # (STELLAR_CLI_VERSION in .github/versions.env, 22.x) can't parse
-        # ("xdr value invalid"). v480 runs stellar-core 22.3.0 / protocol 22.
-        # Bump together with the CLI pin.
-        image: stellar/quickstart:v480-latest
+        image: stellar/quickstart:latest
         ports:
           - 8000:8000
         env:
@@ -61,7 +56,7 @@ jobs:
         uses: dtolnay/rust-toolchain@master
         with:
           toolchain: ${{ env.RUST_VERSION }}
-          targets: wasm32-unknown-unknown
+          targets: wasm32v1-none
 
       - name: Install stellar-cli build dependencies
         run: sudo apt-get update && sudo apt-get install -y libdbus-1-dev libudev-dev pkg-config binaryen

@@ -129,10 +129,11 @@ fn admin_can_force_cancel_pending_settlement_and_event_is_emitted() {
 
     // The `settlement_force_cancelled` event must have been emitted.
     let target = Symbol::new(&env, "settlement_force_cancelled");
-    let emitted = events.iter().any(|(_, topics, _)| {
-        topics
-            .get(0)
-            .and_then(|v| Symbol::try_from_val(&env, &v).ok())
+    let emitted = events.events().iter().any(|ev| {
+        let soroban_sdk::xdr::ContractEventBody::V0(v0) = &ev.body;
+        v0.topics
+            .first()
+            .and_then(|v| Symbol::try_from_val(&env, v).ok())
             .map(|s| s == target)
             .unwrap_or(false)
     });
@@ -169,10 +170,11 @@ fn admin_can_force_cancel_onhold_settlement_and_event_is_emitted() {
 
     // Verify the event was emitted.
     let target = Symbol::new(&env, "settlement_force_cancelled");
-    let emitted = events.iter().any(|(_, topics, _)| {
-        topics
-            .get(0)
-            .and_then(|v| Symbol::try_from_val(&env, &v).ok())
+    let emitted = events.events().iter().any(|ev| {
+        let soroban_sdk::xdr::ContractEventBody::V0(v0) = &ev.body;
+        v0.topics
+            .first()
+            .and_then(|v| Symbol::try_from_val(&env, v).ok())
             .map(|s| s == target)
             .unwrap_or(false)
     });

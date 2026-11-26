@@ -8,6 +8,7 @@ on:
 
 env:
   CARGO_TERM_COLOR: always
+  SOROBAN_SDK_BUILD_SYSTEM_SUPPORTS_SPEC_SHAKING_V2: "1"
 
 jobs:
   no-std-check:
@@ -27,7 +28,7 @@ jobs:
         uses: dtolnay/rust-toolchain@master
         with:
           toolchain: ${{ env.RUST_VERSION }}
-          targets: wasm32-unknown-unknown
+          targets: wasm32v1-none
 
       - name: Cache Rust dependencies
         uses: Swatinem/rust-cache@v2
@@ -35,10 +36,10 @@ jobs:
           key: no-std-check
 
       - name: Check comebackhere-multisig (wasm32)
-        run: cargo check --target wasm32-unknown-unknown -p comebackhere-multisig
+        run: cargo check --target wasm32v1-none -p comebackhere-multisig
 
       - name: Check comebackhere-protocol-errors (wasm32)
-        run: cargo check --target wasm32-unknown-unknown -p comebackhere-protocol-errors
+        run: cargo check --target wasm32v1-none -p comebackhere-protocol-errors
 
       - name: Check comebackhere-protocol-math (wasm32)
-        run: cargo check --target wasm32-unknown-unknown -p comebackhere-protocol-math
+        run: cargo check --target wasm32v1-none -p comebackhere-protocol-math

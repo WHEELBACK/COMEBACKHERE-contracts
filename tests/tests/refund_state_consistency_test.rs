@@ -76,8 +76,11 @@ fn paid_invoice(f: &Fixture) -> u64 {
 /// True when an `escrow_released` event was published by the last top-level
 /// call. Payloads are deliberately ignored: only the topic symbol matters here.
 fn escrow_released_emitted(env: &Env) -> bool {
-    env.events().all().iter().any(|(_, topics, _)| {
-        Symbol::try_from_val(env, &topics.get_unchecked(0))
+    env.events().all().events().iter().any(|ev| {
+        let soroban_sdk::xdr::ContractEventBody::V0(v0) = &ev.body;
+        v0.topics
+            .first()
+            .and_then(|t| Symbol::try_from_val(env, t).ok())
             .map(|sym| sym == Symbol::new(env, "escrow_released"))
             .unwrap_or(false)
     })

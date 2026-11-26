@@ -26,8 +26,8 @@ if [ -f "$VERSIONS_FILE" ]; then
     set +a
 fi
 REQUIRED_RUST="${RUST_VERSION:-1.95.0}"
-REQUIRED_STELLAR_CLI="${STELLAR_CLI_VERSION:-22.8.2}"
-TARGET="wasm32-unknown-unknown"
+REQUIRED_STELLAR_CLI="${STELLAR_CLI_VERSION:-30.0.1}"
+TARGET="wasm32v1-none"
 
 log_info "Checking development environment..."
 
