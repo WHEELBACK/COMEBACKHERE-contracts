@@ -1,13 +1,15 @@
 #![no_std]
 
+mod errors;
 mod events;
+mod invariants;
+mod proposals;
 mod types;
 
-pub use types::{
-    DataKey, LockStatus, Role, TimeLock, TimeLockError, TimelockProposal, TimelockStatus,
-};
+pub use errors::{category_for, message_for, TimeLockError};
+pub use types::{DataKey, LockStatus, Role, TimeLock, TimelockProposal, TimelockStatus};
 
-use soroban_sdk::{contract, contractimpl, Address, Env, Symbol};
+use soroban_sdk::{contract, contractimpl, Address, Env, String, Symbol};
 
 #[contract]
 pub struct TimeLockContract;
@@ -31,6 +33,9 @@ impl TimeLockContract {
             .set(&DataKey::Role(admin.clone()), &Role::Admin);
         env.storage().instance().set(&DataKey::LockCount, &0u64);
         env.storage().instance().set(&DataKey::Paused, &false);
+        // Post-condition: the freshly written instance must already satisfy
+        // every invariant (#945).
+        invariants::check(&env)?;
         env.events()
             .publish((Symbol::new(&env, "time_lock_initialized"),), admin);
         Ok(())
@@ -47,7 +52,13 @@ impl TimeLockContract {
         target: Address,
         role: Role,
     ) -> Result<(), TimeLockError> {
-        Self::require_admin(&env, &admin)?;
+        let stored_admin = Self::require_admin(&env, &admin)?;
+        // The stored administrator is the only address that can administer the
+        // contract. Demoting it would permanently brick every admin operation
+        // (an unrecoverable state inconsistency), so reject it up front (#945).
+        if target == stored_admin && role != Role::Admin {
+            return Err(TimeLockError::AdminRoleLoss);
+        }
         env.storage().instance().set(&DataKey::Role(target), &role);
         Ok(())
     }
@@ -91,12 +102,22 @@ impl TimeLockContract {
             .checked_add(duration_seconds)
             .ok_or(TimeLockError::ExpiryOverflow)?;
 
+        // The counter is written by `initialize`; a missing counter means the
+        // instance is inconsistent, not that we should silently start over at
+        // zero (which could overwrite an existing lock). Use checked
+        // arithmetic so an exhausted counter returns a typed error instead of
+        // panicking or wrapping (#945).
         let count: u64 = env
             .storage()
             .instance()
             .get(&DataKey::LockCount)
-            .unwrap_or(0);
-        let id = count + 1;
+            .ok_or(TimeLockError::StateInconsistency)?;
+        let id = count
+            .checked_add(1)
+            .ok_or(TimeLockError::LockCountOverflow)?;
+        if env.storage().persistent().has(&DataKey::Lock(id)) {
+            return Err(TimeLockError::StateInconsistency);
+        }
 
         let lock = TimeLock {
             id,
@@ -106,6 +127,7 @@ impl TimeLockContract {
             release_at,
             status: LockStatus::Active,
         };
+        invariants::verify_lock(&lock, id)?;
 
         env.storage().persistent().set(&DataKey::Lock(id), &lock);
         env.storage().instance().set(&DataKey::LockCount, &id);
@@ -122,11 +144,7 @@ impl TimeLockContract {
         beneficiary.require_auth();
         Self::require_not_paused(&env)?;
 
-        let mut lock: TimeLock = env
-            .storage()
-            .persistent()
-            .get(&DataKey::Lock(lock_id))
-            .ok_or(TimeLockError::LockNotFound)?;
+        let mut lock = invariants::get_lock(&env, lock_id)?;
 
         if lock.beneficiary != beneficiary {
             return Err(TimeLockError::BeneficiaryMismatch);
@@ -154,11 +172,7 @@ impl TimeLockContract {
         Self::require_admin(&env, &admin)?;
         Self::require_not_paused(&env)?;
 
-        let mut lock: TimeLock = env
-            .storage()
-            .persistent()
-            .get(&DataKey::Lock(lock_id))
-            .ok_or(TimeLockError::LockNotFound)?;
+        let mut lock = invariants::get_lock(&env, lock_id)?;
 
         if lock.status != LockStatus::Active {
             return Err(TimeLockError::AlreadyReleased);
@@ -172,12 +186,10 @@ impl TimeLockContract {
         Ok(lock)
     }
 
-    /// Return a lock record by ID.
+    /// Return a lock record by ID. Corrupt records are reported through the
+    /// same typed error as lifecycle operations (#945).
     pub fn get_lock(env: Env, lock_id: u64) -> Result<TimeLock, TimeLockError> {
-        env.storage()
-            .persistent()
-            .get(&DataKey::Lock(lock_id))
-            .ok_or(TimeLockError::LockNotFound)
+        invariants::get_lock(&env, lock_id)
     }
 
     // -------------------------------------------------------------------------
@@ -195,12 +207,9 @@ impl TimeLockContract {
         if delay_secs == 0 {
             return Err(TimeLockError::ZeroDelay);
         }
-        if env
-            .storage()
-            .instance()
-            .get::<_, TimelockProposal>(&DataKey::TimelockProposal(target.clone()))
-            .is_some_and(|existing| existing.status == TimelockStatus::Active)
-        {
+        // Streamlined lookup (#943): a finalized proposal needs only its
+        // status field, so its target/timestamps are never deserialized.
+        if let proposals::ProposalLookup::Active(_) = proposals::load(&env, &target)? {
             return Err(TimeLockError::TimelockActive);
         }
         let now = env.ledger().timestamp();
@@ -214,6 +223,7 @@ impl TimeLockContract {
             executable_at,
             status: TimelockStatus::Active,
         };
+        invariants::verify_proposal(&proposal, &target)?;
         env.storage()
             .instance()
             .set(&DataKey::TimelockProposal(target.clone()), &proposal);
@@ -229,14 +239,11 @@ impl TimeLockContract {
         target: Address,
     ) -> Result<TimelockProposal, TimeLockError> {
         Self::require_admin(&env, &admin)?;
-        let mut proposal: TimelockProposal = env
-            .storage()
-            .instance()
-            .get(&DataKey::TimelockProposal(target.clone()))
-            .ok_or(TimeLockError::TimelockNotFound)?;
-        if proposal.status != TimelockStatus::Active {
-            return Err(TimeLockError::TimelockInactive);
-        }
+        let mut proposal = match proposals::load(&env, &target)? {
+            proposals::ProposalLookup::Missing => return Err(TimeLockError::TimelockNotFound),
+            proposals::ProposalLookup::Final => return Err(TimeLockError::TimelockInactive),
+            proposals::ProposalLookup::Active(proposal) => proposal,
+        };
         let now = env.ledger().timestamp();
         if now < proposal.executable_at {
             return Err(TimeLockError::TooEarly);
@@ -259,14 +266,11 @@ impl TimeLockContract {
         target: Address,
     ) -> Result<TimelockProposal, TimeLockError> {
         Self::require_admin(&env, &admin)?;
-        let mut proposal: TimelockProposal = env
-            .storage()
-            .instance()
-            .get(&DataKey::TimelockProposal(target.clone()))
-            .ok_or(TimeLockError::TimelockNotFound)?;
-        if proposal.status != TimelockStatus::Active {
-            return Err(TimeLockError::TimelockInactive);
-        }
+        let mut proposal = match proposals::load(&env, &target)? {
+            proposals::ProposalLookup::Missing => return Err(TimeLockError::TimelockNotFound),
+            proposals::ProposalLookup::Final => return Err(TimeLockError::TimelockInactive),
+            proposals::ProposalLookup::Active(proposal) => proposal,
+        };
         proposal.status = TimelockStatus::Cancelled;
         env.storage()
             .instance()
@@ -278,19 +282,28 @@ impl TimeLockContract {
         Ok(proposal)
     }
 
-    /// Returns the timelock proposal for `target`, if any.
+    /// Returns the timelock proposal for `target`, if it is well-formed.
+    /// Corrupt records are hidden rather than handed to a client (#945).
     pub fn get_timelock(env: Env, target: Address) -> Option<TimelockProposal> {
         env.storage()
             .instance()
-            .get(&DataKey::TimelockProposal(target))
+            .get::<_, TimelockProposal>(&DataKey::TimelockProposal(target.clone()))
+            .and_then(|proposal| {
+                invariants::verify_proposal(&proposal, &target)
+                    .ok()
+                    .map(|_| proposal)
+            })
     }
 
-    /// Returns `true` if `target` has an active (non-final) proposal.
+    /// Returns `true` only if `target` has a well-formed, active proposal.
+    ///
+    /// Uses the single-read status projection from #943 instead of decoding
+    /// the entire record; active proposals are still strictly verified.
     pub fn has_active_timelock(env: Env, target: Address) -> bool {
-        env.storage()
-            .instance()
-            .get::<_, TimelockProposal>(&DataKey::TimelockProposal(target))
-            .is_some_and(|proposal| proposal.status == TimelockStatus::Active)
+        matches!(
+            proposals::load(&env, &target),
+            Ok(proposals::ProposalLookup::Active(_))
+        )
     }
 
     // -------------------------------------------------------------------------
@@ -312,10 +325,37 @@ impl TimeLockContract {
     }
 
     // -------------------------------------------------------------------------
+    // Invariant audit (#945)
+    // -------------------------------------------------------------------------
+
+    /// Read-only audit of the instance-level invariants. Operators and
+    /// monitors can call this on a live deployment to detect corrupted state
+    /// before attempting a state-changing operation.
+    pub fn verify_invariants(env: Env) -> Result<(), TimeLockError> {
+        invariants::check(&env)
+    }
+
+    // -------------------------------------------------------------------------
+    // Client error diagnostics (#946)
+    // -------------------------------------------------------------------------
+
+    /// Human-readable explanation of a raw time-lock error code (#946).
+    ///
+    /// A client that only sees `Error(Contract, #n)` can call this read-only
+    /// entrypoint to display a stable message instead of an opaque number.
+    /// Returns `None` for codes this contract never returns.
+    pub fn get_error_message(env: Env, code: u32) -> Option<String> {
+        errors::message_for(code).map(|message| String::from_str(&env, message))
+    }
+
+    // -------------------------------------------------------------------------
     // Internal helpers
     // -------------------------------------------------------------------------
 
-    fn require_admin(env: &Env, caller: &Address) -> Result<(), TimeLockError> {
+    /// Authenticates `caller` as the stored admin and returns that admin.
+    /// A stored admin without the admin role is treated as corrupted state
+    /// rather than silently falling back to an unprivileged role (#945).
+    fn require_admin(env: &Env, caller: &Address) -> Result<Address, TimeLockError> {
         caller.require_auth();
         let stored: Address = env
             .storage()
@@ -328,12 +368,12 @@ impl TimeLockContract {
         let role: Role = env
             .storage()
             .instance()
-            .get(&DataKey::Role(caller.clone()))
-            .unwrap_or(Role::None);
+            .get(&DataKey::Role(stored.clone()))
+            .ok_or(TimeLockError::StateInconsistency)?;
         if role != Role::Admin {
-            return Err(TimeLockError::InsufficientRole);
+            return Err(TimeLockError::StateInconsistency);
         }
-        Ok(())
+        Ok(stored)
     }
 
     fn require_at_least_operator(env: &Env, caller: &Address) -> Result<(), TimeLockError> {
