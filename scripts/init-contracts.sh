@@ -65,7 +65,7 @@ fi
 log_info "Optimizing contract wasm..."
 for contract in compliance invoice treasury settlement_workflow; do
     wasm="target/wasm32v1-none/release/${contract}.wasm"
-    wasm-opt -Oz --strip-debug --strip-dwarf --vacuum --all-features "$wasm" -o "$wasm"
+    wasm-opt -Oz --mvp-features --enable-sign-ext --enable-mutable-globals --strip-debug --strip-dwarf --vacuum "$wasm" -o "$wasm"
 done
 
 # 2. Setup network
