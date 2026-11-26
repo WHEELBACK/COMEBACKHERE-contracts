@@ -9,7 +9,9 @@ use soroban_sdk::{
     Address, Env, Vec,
 };
 
-use compliance::{ComplianceContract, ComplianceContractClient, ContractError, BULK_OP_COOLDOWN_SECS};
+use compliance::{
+    ComplianceContract, ComplianceContractClient, ContractError, BULK_OP_COOLDOWN_SECS,
+};
 
 fn setup(env: &Env) -> (ComplianceContractClient<'_>, Address) {
     env.mock_all_auths();

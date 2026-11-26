@@ -123,7 +123,13 @@ fn removing_an_unindexed_id_leaves_the_index_untouched() {
     let merchant = Address::generate(&env);
     let ids = client.batch_create_invoice(&merchant, &params(&env, 2));
     let payer = Address::generate(&env);
-    client.mark_paid(&admin, &ids.get(0).unwrap(), &payer, &MaybeBytes::None, &MaybeAddress::None);
+    client.mark_paid(
+        &admin,
+        &ids.get(0).unwrap(),
+        &payer,
+        &MaybeBytes::None,
+        &MaybeAddress::None,
+    );
     assert_eq!(client.get_pending_ids(), vec![&env, ids.get(1).unwrap()]);
 
     // Expiring an already-paid id is a no-op for the index.

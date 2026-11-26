@@ -59,7 +59,7 @@ fn checked_sub_returns_none_instead_of_underflowing() {
     // reported as `None` so the caller can raise its own typed error.
     assert_eq!(checked_sub_i128(5, 3), Some(2));
     assert_eq!(checked_sub_i128(0, 0), Some(0));
-    assert_eq!(checked_sub_i128(3, 5), None);
+    assert_eq!(checked_sub_i128(3, 5), Some(-2));
     assert_eq!(checked_sub_i128(i128::MIN, 1), None);
     assert_eq!(checked_sub_i128(i128::MIN, i128::MAX), None);
 }

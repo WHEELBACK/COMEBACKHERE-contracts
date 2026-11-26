@@ -8,11 +8,11 @@ use treasury::{SettlementStatus, TreasuryContract, TreasuryContractClient};
 // baseline keeps CI green while still catching large regressions.
 // Re-run `cargo test -- --nocapture full_lifecycle_budget_baseline` to refresh.
 //
-// Measured on 2026-07-27 (soroban-sdk 22.0.11, Rust 1.95.0, native host):
-//   CPU instructions : 261_833
-//   Memory bytes     :  46_107
-const BUDGET_CPU_BASELINE: u64 = 412_126; // 343_438 × 1.20, rounded up (re-measured Oct 2026)
-const BUDGET_MEM_BASELINE: u64 = 74_400; // 62_000 × 1.20 (re-measured Oct 2026)
+// Measured on 2026-11-26 (soroban-sdk 29.0.1, Rust 1.95.0, native host):
+//   CPU instructions : 502_961
+//   Memory bytes     : 210_847
+const BUDGET_CPU_BASELINE: u64 = 605_000; // ~502_961 × 1.20 (re-measured on soroban-sdk 29.0.1)
+const BUDGET_MEM_BASELINE: u64 = 255_000; // ~210_847 × 1.20 (re-measured on soroban-sdk 29.0.1)
 
 mod test_token {
     use soroban_sdk::{contract, contractimpl, Address, Env};

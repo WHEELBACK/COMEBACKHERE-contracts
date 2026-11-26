@@ -76,16 +76,16 @@ fn expire_settlement_emits_settlement_expired_event() {
     expire(&env, &client, &admin, sid);
 
     let events = env.events().all();
-    let (_, topics, data) = events.last().unwrap();
+    let last = events.events().last().unwrap();
+    let soroban_sdk::xdr::ContractEventBody::V0(v0) = &last.body;
     assert_eq!(
-        Symbol::try_from_val(&env, &topics.get_unchecked(0)).unwrap(),
+        Symbol::try_from_val(&env, &v0.topics[0]).unwrap(),
         Symbol::new(&env, "settlement_expired")
     );
-    assert_eq!(
-        u64::try_from_val(&env, &topics.get_unchecked(1)).unwrap(),
-        sid
-    );
+    let sid_val = soroban_sdk::Val::try_from_val(&env, &v0.topics[1]).unwrap();
+    assert_eq!(u64::try_from_val(&env, &sid_val).unwrap(), sid);
 
+    let data = soroban_sdk::Val::try_from_val(&env, &v0.data).unwrap();
     let payload = Settlement::try_from_val(&env, &data).unwrap();
     assert_eq!(payload.id, sid);
     assert_eq!(payload.status, SettlementStatus::Expired);
@@ -100,7 +100,9 @@ fn settlement_expired_event_payload_snapshot() {
     expire(&env, &client, &admin, sid);
 
     let events = env.events().all();
-    let (_, _, data) = events.last().unwrap();
+    let last = events.events().last().unwrap();
+    let soroban_sdk::xdr::ContractEventBody::V0(v0) = &last.body;
+    let data = soroban_sdk::Val::try_from_val(&env, &v0.data).unwrap();
     assert_snapshot("settlement_expired", &to_hex(&env, data));
 }
 
@@ -112,8 +114,12 @@ fn expire_settlement_before_ttl_emits_no_expired_event() {
     assert!(client.try_expire_settlement(&admin, &sid).is_err());
 
     let expired = Symbol::new(&env, "settlement_expired");
-    let emitted_expired = env.events().all().iter().any(|(_, topics, _)| {
-        Symbol::try_from_val(&env, &topics.get_unchecked(0)).ok() == Some(expired.clone())
+    let emitted_expired = env.events().all().events().iter().any(|ev| {
+        let soroban_sdk::xdr::ContractEventBody::V0(v0) = &ev.body;
+        v0.topics
+            .first()
+            .and_then(|t| Symbol::try_from_val(&env, t).ok())
+            == Some(expired.clone())
     });
     assert!(!emitted_expired);
 }

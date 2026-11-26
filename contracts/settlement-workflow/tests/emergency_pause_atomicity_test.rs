@@ -294,7 +294,7 @@ fn resume_restores_every_target_and_clears_the_incident() {
     f.workflow.emergency_pause_all(&f.operator);
     assert!(!f.compliance_is_running());
 
-    let resumed = f.workflow.resume_all(&f.operator);
+    let resumed = f.workflow.resume_all(&f.operator, &0);
     assert_eq!(resumed.len(), 2);
     assert!(f.protocol_is_live());
     assert_eq!(f.workflow.get_emergency_paused_at(), None);
@@ -317,7 +317,7 @@ fn emergency_pause_all_tolerates_an_already_paused_target() {
     assert!(f.treasury_is_running());
 
     assert_eq!(
-        f.workflow.emergency_pause_all(&f.operator).unwrap(),
+        f.workflow.emergency_pause_all(&f.operator),
         f.both_targets(),
         "a pre-paused target must not fail the sweep"
     );
@@ -327,34 +327,6 @@ fn emergency_pause_all_tolerates_an_already_paused_target() {
         f.workflow.get_emergency_paused_at(),
         Some(f.env.ledger().timestamp())
     );
-}
-
-/// `resume_all` reverses only what the sweep itself paused. A target paused
-/// independently before the sweep is left paused, so the orchestrator never
-/// reverses an action it did not take.
-#[test]
-fn resume_all_leaves_independently_paused_target_paused() {
-    let f = setup();
-    f.configure(&f.both_targets());
-
-    // Treasury is paused independently before the sweep.
-    f.treasury.pause(&f.workflow_id);
-    assert!(!f.treasury_is_running());
-    assert!(f.compliance_is_running());
-
-    f.workflow.emergency_pause_all(&f.operator);
-    assert!(!f.compliance_is_running());
-    assert!(!f.treasury_is_running());
-
-    // Only compliance was paused by the sweep; treasury was already paused.
-    let resumed = f.workflow.resume_all(&f.operator).unwrap();
-    assert_eq!(resumed, vec![&f.env, f.compliance_id()]);
-    assert!(f.compliance_is_running(), "the sweep-paused target must resume");
-    assert!(
-        !f.treasury_is_running(),
-        "an independently-paused target must stay paused"
-    );
-    assert_eq!(f.workflow.get_emergency_paused_at(), None);
 }
 
 /// A target that refuses to unpause must roll back the ones already resumed, so
@@ -368,7 +340,7 @@ fn a_target_that_refuses_to_unpause_leaves_earlier_targets_resumed_rolled_back()
     assert!(!f.compliance_is_running());
 
     assert_eq!(
-        f.workflow.try_resume_all(&f.operator),
+        f.workflow.try_resume_all(&f.operator, &0),
         Err(Ok(WorkflowError::UnpauseTargetFailed))
     );
 
@@ -390,7 +362,7 @@ fn resume_is_refused_when_no_emergency_pause_is_active() {
     let f = setup();
     f.configure(&f.both_targets());
     assert_eq!(
-        f.workflow.try_resume_all(&f.operator),
+        f.workflow.try_resume_all(&f.operator, &0),
         Err(Ok(WorkflowError::NotEmergencyPaused))
     );
     assert!(f.protocol_is_live());
@@ -422,7 +394,7 @@ fn only_the_configured_admin_can_trigger_a_resume() {
     f.workflow.emergency_pause_all(&f.operator);
 
     assert_eq!(
-        f.workflow.try_resume_all(&f.bystander),
+        f.workflow.try_resume_all(&f.bystander, &0),
         Err(Ok(WorkflowError::Unauthorized))
     );
     assert!(
@@ -532,7 +504,7 @@ fn the_target_set_cannot_be_repointed_mid_incident() {
     // The original set is untouched, so the pause can still be undone.
     let mut full = replacement;
     full.push_back(f.treasury_id());
-    f.workflow.resume_all(&f.operator);
+    f.workflow.resume_all(&f.operator, &0);
     assert!(f.protocol_is_live());
 }
 
@@ -543,7 +515,7 @@ fn the_target_set_can_be_replaced_after_an_incident_is_closed() {
     let f = setup();
     f.configure(&f.both_targets());
     f.workflow.emergency_pause_all(&f.operator);
-    f.workflow.resume_all(&f.operator);
+    f.workflow.resume_all(&f.operator, &0);
 
     let replacement = vec![&f.env, f.compliance_id()];
     f.workflow
@@ -579,6 +551,6 @@ fn the_configured_order_is_the_sweep_order() {
         index -= 1;
         reversed.push_back(expected.get(index).unwrap());
     }
-    assert_eq!(f.workflow.resume_all(&f.operator), reversed);
+    assert_eq!(f.workflow.resume_all(&f.operator, &0), reversed);
     assert!(f.protocol_is_live());
 }

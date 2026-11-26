@@ -14,8 +14,8 @@
 // - Optional types (Option<u64>) serialize to null or value
 
 use crate::invoice::{Invoice, InvoiceRole, MaybeAddress};
-use crate::template::InvoiceTemplate;
 use crate::refund::NetRefund;
+use crate::template::InvoiceTemplate;
 use soroban_sdk::{contracttype, Address, Env, Symbol};
 
 /// Emitted when an amendment changes an invoice's amount fields.
@@ -203,7 +203,7 @@ pub struct MerchantMaxOpenInvoicesUpdatedEvent {
 
 pub fn merchant_max_open_invoices_updated(env: &Env, event: &MerchantMaxOpenInvoicesUpdatedEvent) {
     env.events().publish(
-        (Symbol::new(env, "merchant_max_open_invoices_updated"),),
+        (Symbol::new(env, "merchant_max_open_updated"),),
         event.clone(),
     );
 }
@@ -245,9 +245,11 @@ mod tests {
             );
         });
 
-        let (_, topics, _) = env.events().all().last().unwrap();
+        let events = env.events().all();
+        let last = events.events().last().unwrap();
+        let soroban_sdk::xdr::ContractEventBody::V0(v0) = &last.body;
         assert_eq!(
-            Symbol::try_from_val(&env, &topics.get_unchecked(0)).unwrap(),
+            Symbol::try_from_val(&env, &v0.topics[0]).unwrap(),
             Symbol::new(&env, "invoice_expiry_extended")
         );
     }

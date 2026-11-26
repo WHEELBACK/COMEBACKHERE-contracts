@@ -53,6 +53,7 @@ const SCAN_INSTRUCTION_CEILING: u64 = 2_000_000_000;
 fn treasury_with_history(env: &Env, n: u64) -> (TreasuryContractClient<'static>, Address) {
     env.mock_all_auths();
     env.cost_estimate().budget().reset_unlimited();
+    env.cost_estimate().disable_resource_limits();
 
     let admin = Address::generate(env);
     let contract_id = env.register_contract(None, TreasuryContract);
@@ -149,6 +150,7 @@ fn page_scan_skips_executed_entries_at_scale() {
     let env = Env::default();
     env.mock_all_auths();
     env.cost_estimate().budget().reset_unlimited();
+    env.cost_estimate().disable_resource_limits();
 
     let admin = Address::generate(&env);
     let contract_id = env.register_contract(None, TreasuryContract);

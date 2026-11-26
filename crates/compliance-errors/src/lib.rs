@@ -11,10 +11,15 @@ declare_contract_error! {
     ///
     /// New compliance error variants belong here, not in the contract crate.
     pub enum ComplianceError {
+        /// Contract has already been initialized.
         AlreadyInitialized = 1,
+        /// Caller is not authorized for this operation.
         Unauthorized = 2,
+        /// Contract is currently paused.
         ContractPaused = 3,
+        /// Batch argument exceeds the maximum allowed size.
         BatchTooLarge = 4,
+        /// Address index has reached its maximum capacity.
         AddressIndexFull = 5,
         /// A bulk allow/block call was made before [`BULK_OP_COOLDOWN_SECS`] elapsed since the
         /// caller's previous bulk call (see #454).

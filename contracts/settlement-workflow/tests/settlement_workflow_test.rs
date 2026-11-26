@@ -138,8 +138,10 @@ fn emits_settlement_workflow_executed_event() {
 
     workflow.execute_with_compliance(&settlement_id, &token_id, &merchant);
 
-    let (_, topics, _) = env.events().all().last().unwrap();
-    let emitted_symbol = Symbol::from_val(&env, &topics.get_unchecked(0));
+    let events = env.events().all();
+    let last = events.events().last().unwrap();
+    let soroban_sdk::xdr::ContractEventBody::V0(v0) = &last.body;
+    let emitted_symbol = Symbol::try_from_val(&env, &v0.topics[0]).unwrap();
     assert_eq!(
         emitted_symbol,
         Symbol::new(&env, "settlement_workflow_executed"),
@@ -516,19 +518,25 @@ fn pause_and_unpause_emit_events() {
     ) = setup();
 
     workflow.pause(&admin);
-    let (_, topics, data) = env.events().all().last().unwrap();
+    let events = env.events().all();
+    let last = events.events().last().unwrap();
+    let soroban_sdk::xdr::ContractEventBody::V0(v0) = &last.body;
     assert_eq!(
-        Symbol::from_val(&env, &topics.get_unchecked(0)),
+        Symbol::try_from_val(&env, &v0.topics[0]).unwrap(),
         Symbol::new(&env, "settlement_workflow_paused")
     );
+    let data = soroban_sdk::Val::try_from_val(&env, &v0.data).unwrap();
     assert_eq!(Address::from_val(&env, &data), admin);
 
     workflow.unpause(&admin);
-    let (_, topics, data) = env.events().all().last().unwrap();
+    let events = env.events().all();
+    let last = events.events().last().unwrap();
+    let soroban_sdk::xdr::ContractEventBody::V0(v0) = &last.body;
     assert_eq!(
-        Symbol::from_val(&env, &topics.get_unchecked(0)),
+        Symbol::try_from_val(&env, &v0.topics[0]).unwrap(),
         Symbol::new(&env, "settlement_workflow_unpaused")
     );
+    let data = soroban_sdk::Val::try_from_val(&env, &v0.data).unwrap();
     assert_eq!(Address::from_val(&env, &data), admin);
 }
 
@@ -562,12 +570,18 @@ fn workflow_events(env: &Env, workflow_id: &Address) -> std::vec::Vec<WorkflowEv
 
     env.events()
         .all()
+        .filter_by_contract(workflow_id)
+        .events()
         .iter()
-        .filter(|(contract_id, _, _)| contract_id == workflow_id)
-        .map(|(_, topics, data)| {
-            let name = Symbol::from_val(env, &topics.get_unchecked(0)).to_string();
-            let settlement_id = if topics.len() > 1 {
-                Some(u64::from_val(env, &topics.get_unchecked(1)))
+        .map(|ev| {
+            let soroban_sdk::xdr::ContractEventBody::V0(v0) = &ev.body;
+            let data = soroban_sdk::Val::try_from_val(env, &v0.data).unwrap();
+            let name = Symbol::try_from_val(env, &v0.topics[0])
+                .unwrap()
+                .to_string();
+            let settlement_id = if v0.topics.len() > 1 {
+                let tv = soroban_sdk::Val::try_from_val(env, &v0.topics[1]).unwrap();
+                Some(u64::try_from_val(env, &tv).unwrap())
             } else {
                 None
             };
@@ -800,9 +814,15 @@ fn emitted_events_match_abi_event_snapshot() {
     fn drain(env: &Env, workflow_id: &Address) -> std::vec::Vec<String> {
         env.events()
             .all()
+            .filter_by_contract(workflow_id)
+            .events()
             .iter()
-            .filter(|(contract_id, _, _)| contract_id == workflow_id)
-            .map(|(_, topics, _)| Symbol::from_val(env, &topics.get_unchecked(0)).to_string())
+            .map(|ev| {
+                let soroban_sdk::xdr::ContractEventBody::V0(v0) = &ev.body;
+                Symbol::try_from_val(env, &v0.topics[0])
+                    .unwrap()
+                    .to_string()
+            })
             .collect()
     }
 
@@ -845,7 +865,7 @@ fn emitted_events_match_abi_event_snapshot() {
     emitted.extend(drain(&env, &workflow_id));
     workflow.emergency_pause_all(&admin);
     emitted.extend(drain(&env, &workflow_id));
-    workflow.resume_all(&admin);
+    workflow.resume_all(&admin, &0);
     emitted.extend(drain(&env, &workflow_id));
 
     let new_admin = Address::generate(&env);
@@ -858,9 +878,9 @@ fn emitted_events_match_abi_event_snapshot() {
     // cover `workflow_initialized` too.
     let other_id = env.register(
         SettlementWorkflowContract,
-        (admin.clone(), compliance_id.clone(), other_id.clone()),
+        (admin.clone(), compliance_id.clone(), treasury_id.clone()),
     );
-    let other = SettlementWorkflowContractClient::new(&env, &other_id);
+    let _other = SettlementWorkflowContractClient::new(&env, &other_id);
     emitted.extend(drain(&env, &other_id));
 
     for name in &emitted {

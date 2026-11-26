@@ -362,9 +362,7 @@ struct MockOracle;
 impl MockOracle {
     pub fn set_price(env: Env, admin: Address, asset: Address, price: i128) {
         admin.require_auth();
-        env.storage()
-            .persistent()
-            .set(&("price", asset), &price);
+        env.storage().persistent().set(&("price", asset), &price);
     }
 
     pub fn price(env: Env, asset: Address) -> Option<i128> {
@@ -404,7 +402,12 @@ struct OracleConsumer;
 
 #[contractimpl]
 impl OracleConsumer {
-    pub fn read_quote(env: Env, adapter_id: Address, oracle_id: Address, asset: Address) -> Option<i128> {
+    pub fn read_quote(
+        env: Env,
+        adapter_id: Address,
+        oracle_id: Address,
+        asset: Address,
+    ) -> Option<i128> {
         let adapter = MockOracleAdapterClient::new(&env, &adapter_id);
         adapter.quote(&oracle_id, &asset)
     }
@@ -432,7 +435,7 @@ struct OracleCtx {
 
 fn setup_oracle() -> OracleCtx {
     let env = Env::default();
-    env.mock_all_auths();
+    env.mock_all_auths_allowing_non_root_auth();
 
     let admin = Address::generate(&env);
     let asset = Address::generate(&env);
@@ -496,12 +499,8 @@ fn cross_contract_quote_authorized_succeeds() {
     oracle.set_price(&ctx.admin, &ctx.asset, &7_500_000);
 
     let consumer = OracleConsumerClient::new(&ctx.env, &ctx.consumer_id);
-    let quoted = consumer.read_quote_authorized(
-        &ctx.admin,
-        &ctx.adapter_id,
-        &ctx.oracle_id,
-        &ctx.asset,
-    );
+    let quoted =
+        consumer.read_quote_authorized(&ctx.admin, &ctx.adapter_id, &ctx.oracle_id, &ctx.asset);
     assert_eq!(quoted, Some(7_500_000));
 }
 
@@ -531,12 +530,10 @@ fn cross_contract_quote_authorized_rejects_unauthorized_caller() {
 
     let consumer = OracleConsumerClient::new(&ctx.env, &ctx.consumer_id);
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        consumer.read_quote_authorized(
-            &ctx.admin,
-            &ctx.adapter_id,
-            &ctx.oracle_id,
-            &ctx.asset,
-        );
+        consumer.read_quote_authorized(&ctx.admin, &ctx.adapter_id, &ctx.oracle_id, &ctx.asset);
     }));
-    assert!(result.is_err(), "expected unauthorized caller to be rejected");
+    assert!(
+        result.is_err(),
+        "expected unauthorized caller to be rejected"
+    );
 }

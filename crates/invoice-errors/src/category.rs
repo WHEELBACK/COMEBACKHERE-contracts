@@ -53,10 +53,20 @@ impl InvoiceError {
             ContractPaused | NotPending | Expired | NotFound | NotPaid | NotReleased
             | CooldownActive | TemplateDisabled => C::Lifecycle,
 
-            InvalidAmount | ZeroDuration | AmountPrecision | DuplicateNonce | ExpiryTooLong
-            | MetadataMismatch | InvalidPaymentLinkHash | TokenMismatch | BatchTooLarge
-            | HashTooLong | DiscountExceedsAmount | DiscountDeadlineAfterExpiry
-            | MemoTooLong | InvalidLateFee => C::Validation,
+            InvalidAmount
+            | ZeroDuration
+            | AmountPrecision
+            | DuplicateNonce
+            | ExpiryTooLong
+            | MetadataMismatch
+            | InvalidPaymentLinkHash
+            | TokenMismatch
+            | BatchTooLarge
+            | HashTooLong
+            | DiscountExceedsAmount
+            | DiscountDeadlineAfterExpiry
+            | MemoTooLong
+            | InvalidLateFee => C::Validation,
 
             NotRefundRequested | RefundTransferFailed | RefundTokenNotSet | RefundFeeTooHigh
             | RefundWindowClosed => C::Refund,

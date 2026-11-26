@@ -267,8 +267,13 @@ fn pending(ctx: &Ctx) -> u64 {
 
 fn paid(ctx: &Ctx) -> u64 {
     let id = pending(ctx);
-    ctx.client
-        .mark_paid(&ctx.admin, &id, &ctx.payer, &MaybeBytes::None, &MaybeAddress::None);
+    ctx.client.mark_paid(
+        &ctx.admin,
+        &id,
+        &ctx.payer,
+        &MaybeBytes::None,
+        &MaybeAddress::None,
+    );
     id
 }
 
@@ -278,14 +283,23 @@ fn attacker_cannot_mark_paid_or_release() {
     let id = pending(&ctx);
     assert_eq!(
         ctx.client
-            .try_mark_paid(&ctx.attacker, &id, &ctx.attacker, &MaybeBytes::None, &MaybeAddress::None)
+            .try_mark_paid(
+                &ctx.attacker,
+                &id,
+                &ctx.attacker,
+                &MaybeBytes::None,
+                &MaybeAddress::None
+            )
             .unwrap_err()
             .unwrap(),
         InvoiceError::Unauthorized
     );
     let id = paid(&ctx);
     assert_eq!(
-        ctx.client.try_release_escrow(&ctx.attacker, &id).unwrap_err().unwrap(),
+        ctx.client
+            .try_release_escrow(&ctx.attacker, &id)
+            .unwrap_err()
+            .unwrap(),
         InvoiceError::Unauthorized
     );
     assert_eq!(ctx.client.get_invoice(&id).status, InvoiceStatus::Paid);
@@ -296,7 +310,10 @@ fn attacker_cannot_cancel_or_amend_someone_elses_invoice() {
     let ctx = setup();
     let id = pending(&ctx);
     assert_eq!(
-        ctx.client.try_cancel_invoice(&ctx.attacker, &id).unwrap_err().unwrap(),
+        ctx.client
+            .try_cancel_invoice(&ctx.attacker, &id)
+            .unwrap_err()
+            .unwrap(),
         InvoiceError::Unauthorized
     );
     assert_eq!(
@@ -323,7 +340,10 @@ fn attacker_cannot_hijack_refund_or_payer_rights() {
     let ctx = setup();
     let id = paid(&ctx);
     assert_eq!(
-        ctx.client.try_request_refund(&ctx.attacker, &id).unwrap_err().unwrap(),
+        ctx.client
+            .try_request_refund(&ctx.attacker, &id)
+            .unwrap_err()
+            .unwrap(),
         InvoiceError::Unauthorized
     );
     assert_eq!(
@@ -335,11 +355,17 @@ fn attacker_cannot_hijack_refund_or_payer_rights() {
     );
     ctx.client.request_refund(&ctx.payer, &id);
     assert_eq!(
-        ctx.client.try_approve_refund(&ctx.attacker, &id).unwrap_err().unwrap(),
+        ctx.client
+            .try_approve_refund(&ctx.attacker, &id)
+            .unwrap_err()
+            .unwrap(),
         InvoiceError::Unauthorized
     );
     assert_eq!(
-        ctx.client.try_reject_refund(&ctx.attacker, &id).unwrap_err().unwrap(),
+        ctx.client
+            .try_reject_refund(&ctx.attacker, &id)
+            .unwrap_err()
+            .unwrap(),
         InvoiceError::Unauthorized
     );
     let stored = ctx.client.get_invoice(&id);
@@ -356,7 +382,10 @@ fn attacker_cannot_pause_or_reconfigure() {
         InvoiceError::Unauthorized
     );
     assert_eq!(
-        ctx.client.try_extend_expiry(&ctx.attacker, &id, &60).unwrap_err().unwrap(),
+        ctx.client
+            .try_extend_expiry(&ctx.attacker, &id, &60)
+            .unwrap_err()
+            .unwrap(),
         InvoiceError::Unauthorized
     );
     ctx.client.pause(&ctx.admin);

@@ -22,6 +22,7 @@ pub(crate) fn grant_role(env: &Env, account: &Address, role: &Symbol) {
 }
 
 /// Returns `true` if `caller` holds `role` (or is the stored admin).
+#[allow(dead_code)]
 pub(crate) fn has_role(env: &Env, caller: &Address, role: &Symbol) -> bool {
     let stored_admin: Option<Address> = env.storage().instance().get(&DataKey::Admin);
     if stored_admin.as_ref() == Some(caller) {

@@ -126,7 +126,10 @@ fn every_error_code_round_trips_and_has_a_message() {
         assert_eq!(errors::message_for(code), Some(err.message()));
     }
     assert_eq!(WorkflowError::from_code(0), None);
-    assert_eq!(errors::message_for(WorkflowError::ALL.len() as u32 + 1), None);
+    assert_eq!(
+        errors::message_for(WorkflowError::ALL.len() as u32 + 1),
+        None
+    );
 }
 
 #[test]
@@ -136,7 +139,10 @@ fn error_messages_are_readable_on_chain() {
     let code = WorkflowError::ResumeTooEarly.code();
     assert_eq!(
         f.workflow.get_error_message(&code),
-        Some(String::from_str(&env, WorkflowError::ResumeTooEarly.message()))
+        Some(String::from_str(
+            &env,
+            WorkflowError::ResumeTooEarly.message()
+        ))
     );
     assert_eq!(f.workflow.get_error_message(&9_999), None);
 }

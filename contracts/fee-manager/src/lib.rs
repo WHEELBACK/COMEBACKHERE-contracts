@@ -1,4 +1,5 @@
 #![no_std]
+#![allow(deprecated)]
 
 mod errors;
 mod storage;
@@ -42,7 +43,11 @@ pub struct FeeManagerContract;
 /// Panics with [`FeeManagerError::Unauthorized`] if the check fails.
 fn require_admin(env: &Env, admin: &Address) {
     admin.require_auth();
-    let stored: Address = env.storage().instance().get(&DataKey::Admin).unwrap();
+    let stored: Address = env
+        .storage()
+        .instance()
+        .get(&DataKey::Admin)
+        .unwrap_or_else(|| soroban_sdk::panic_with_error!(env, FeeManagerError::Unauthorized));
     if stored != *admin {
         soroban_sdk::panic_with_error!(env, FeeManagerError::Unauthorized);
     }

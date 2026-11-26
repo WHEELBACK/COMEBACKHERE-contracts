@@ -132,7 +132,10 @@ mod tests {
             assert_eq!(InvoiceError::from_code(e.code()), Some(e));
         }
         assert_eq!(InvoiceError::from_code(0), None);
-        assert_eq!(InvoiceError::from_code(InvoiceError::ALL.len() as u32 + 1), None);
+        assert_eq!(
+            InvoiceError::from_code(InvoiceError::ALL.len() as u32 + 1),
+            None
+        );
     }
 
     #[test]

@@ -18,15 +18,26 @@ fn setup() -> (Env, Address, InvoiceContractClient<'static>) {
 /// Returns the topic-0 symbol of the most recently emitted event.
 fn last_event_symbol(env: &Env) -> String {
     let events = env.events().all();
-    let last = events.last().expect("at least one event must be emitted");
-    Symbol::from_val(env, &last.1.get_unchecked(0)).to_string()
+    let last = events
+        .events()
+        .last()
+        .expect("at least one event must be emitted");
+    let soroban_sdk::xdr::ContractEventBody::V0(v0) = &last.body;
+    Symbol::try_from_val(env, &v0.topics[0])
+        .unwrap()
+        .to_string()
 }
 
 /// Reads the `(old_bps, new_bps)` payload of the most recent event.
 fn last_event_bps(env: &Env) -> (u32, u32) {
     let events = env.events().all();
-    let last = events.last().expect("at least one event must be emitted");
-    <(u32, u32)>::try_from_val(env, &last.2).expect("data must be an (old_bps, new_bps) tuple")
+    let last = events
+        .events()
+        .last()
+        .expect("at least one event must be emitted");
+    let soroban_sdk::xdr::ContractEventBody::V0(v0) = &last.body;
+    let data = soroban_sdk::Val::try_from_val(env, &v0.data).unwrap();
+    <(u32, u32)>::try_from_val(env, &data).expect("data must be an (old_bps, new_bps) tuple")
 }
 
 #[test]
@@ -65,8 +76,8 @@ fn late_fee_can_be_reset_to_zero() {
 
     client.set_late_fee_bps(&admin, &0);
 
-    assert_eq!(client.get_late_fee_bps(), 0);
     assert_eq!(last_event_bps(&env), (250, 0));
+    assert_eq!(client.get_late_fee_bps(), 0);
 }
 
 #[test]

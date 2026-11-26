@@ -29,6 +29,7 @@ mod test_token {
             let from_key = ("bal", from.clone());
             let to_key = ("bal", to.clone());
             let from_bal: i128 = env.storage().persistent().get(&from_key).unwrap_or(0);
+            assert!(from_bal >= amount, "insufficient balance");
             let to_bal: i128 = env.storage().persistent().get(&to_key).unwrap_or(0);
             env.storage()
                 .persistent()
@@ -173,7 +174,10 @@ fn approve_partial_settlement_fuzz_amounts_never_traps() {
             assert!(result.is_ok(), "valid amount {amount} should succeed");
             approved += amount;
         } else {
-            assert!(result.is_err(), "invalid amount {amount} should be rejected");
+            assert!(
+                result.is_err(),
+                "invalid amount {amount} should be rejected"
+            );
         }
 
         let settlement = client.get_settlement(&settlement_id);

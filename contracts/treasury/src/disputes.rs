@@ -168,10 +168,9 @@ impl TreasuryContract {
         env.storage().instance().set(&DataKey::DisputeCount, &id);
         let mut by_settlement = read_settlement_disputes(&env, settlement_id);
         by_settlement.push_back(id);
-        env.storage().persistent().set(
-            &DataKey::SettlementDisputes(settlement_id),
-            &by_settlement,
-        );
+        env.storage()
+            .persistent()
+            .set(&DataKey::SettlementDisputes(settlement_id), &by_settlement);
         env.events()
             .publish((Symbol::new(&env, "dispute_raised"), id), dispute);
         Ok(id)
@@ -334,10 +333,13 @@ impl TreasuryContract {
             soroban_sdk::panic_with_error!(env, TreasuryError::ArithmeticOverflow)
         });
         // #921: use checked subtraction so an out-of-range share can never underflow.
-        let counterparty_amount = dispute
-            .amount
-            .checked_sub(claimant_amount)
-            .unwrap_or_else(|| soroban_sdk::panic_with_error!(env, TreasuryError::ArithmeticOverflow));
+        let counterparty_amount =
+            dispute
+                .amount
+                .checked_sub(claimant_amount)
+                .unwrap_or_else(|| {
+                    soroban_sdk::panic_with_error!(env, TreasuryError::ArithmeticOverflow)
+                });
         if claimant_amount < 0 || counterparty_amount < 0 {
             soroban_sdk::panic_with_error!(env, TreasuryError::ArithmeticOverflow);
         }
@@ -364,8 +366,10 @@ impl TreasuryContract {
         env.storage()
             .persistent()
             .set(&DataKey::Dispute(dispute_id), &dispute);
-        env.events()
-            .publish((Symbol::new(&env, "dispute_resolved_split"), dispute_id), dispute);
+        env.events().publish(
+            (Symbol::new(&env, "dispute_resolved_split"), dispute_id),
+            dispute,
+        );
         release_settlement_hold_if_no_open_disputes(&env, settlement_id);
     }
 

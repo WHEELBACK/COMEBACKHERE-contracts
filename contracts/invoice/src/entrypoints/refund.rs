@@ -2,6 +2,7 @@
 //! readability (#719). No ABI change: soroban-sdk merges every submodule's
 //! `#[contractimpl]` block into a single generated client.
 
+use crate::append_history;
 use crate::events;
 use crate::invoice::{MaybeU64, RefundStatus};
 use crate::refund::{
@@ -9,7 +10,6 @@ use crate::refund::{
     transfer_net_refund, verify_payment_state,
 };
 use crate::validation::{require_admin, require_not_paused};
-use crate::append_history;
 use crate::{
     DataKey, Invoice, InvoiceContract, InvoiceContractArgs, InvoiceContractClient, InvoiceError,
     InvoiceStatus, MaybeAddress, NetRefund,

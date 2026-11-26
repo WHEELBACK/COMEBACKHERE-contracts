@@ -4,6 +4,7 @@ use soroban_sdk::{
     contract, contracterror, contractimpl, contracttype, token, Address, Env, Symbol,
 };
 
+/// Error codes returned by the escrow-vault contract.
 #[contracterror]
 #[derive(Copy, Clone, Debug, Eq, PartialEq, PartialOrd, Ord)]
 #[repr(u32)]
@@ -19,6 +20,7 @@ pub enum Error {
     SameAddress = 9,
 }
 
+/// Lifecycle state of an escrow vault.
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum VaultState {
@@ -29,6 +31,7 @@ pub enum VaultState {
     Refunded,
 }
 
+/// Storage keys for the escrow-vault contract.
 #[contracttype]
 #[derive(Clone)]
 pub enum DataKey {

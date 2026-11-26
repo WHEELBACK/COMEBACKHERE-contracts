@@ -5,7 +5,9 @@
 //! `PauseGuardian` may pause but not unpause. Only the admin grants and
 //! revokes roles, and nobody else can modify any parameter.
 
-use invoice::{InvoiceContract, InvoiceContractClient, InvoiceError, InvoiceRole, MaybeAddress, MaybeBytes};
+use invoice::{
+    InvoiceContract, InvoiceContractClient, InvoiceError, InvoiceRole, MaybeAddress, MaybeBytes,
+};
 use soroban_sdk::{testutils::Address as _, Address, Env};
 
 struct Fixture {
@@ -116,7 +118,8 @@ fn config_manager_can_extend_invoice_expiry() {
 fn fee_manager_is_scoped_to_fee_parameters() {
     let f = setup();
     let manager = Address::generate(&f.env);
-    f.client.grant_role(&f.admin, &InvoiceRole::FeeManager, &manager);
+    f.client
+        .grant_role(&f.admin, &InvoiceRole::FeeManager, &manager);
 
     assert_eq!(fee_calls_ok(&f, &manager), [true; 2]);
     assert_eq!(config_calls_ok(&f, &manager), [false; 4]);
@@ -151,10 +154,12 @@ fn pause_guardian_can_pause_but_not_unpause() {
 fn revoked_role_loses_access() {
     let f = setup();
     let manager = Address::generate(&f.env);
-    f.client.grant_role(&f.admin, &InvoiceRole::FeeManager, &manager);
+    f.client
+        .grant_role(&f.admin, &InvoiceRole::FeeManager, &manager);
     f.client.set_late_fee_bps(&manager, &50);
 
-    f.client.revoke_role(&f.admin, &InvoiceRole::FeeManager, &manager);
+    f.client
+        .revoke_role(&f.admin, &InvoiceRole::FeeManager, &manager);
     assert!(!f.client.has_role(&InvoiceRole::FeeManager, &manager));
     assert_eq!(
         f.client.try_set_late_fee_bps(&manager, &75),

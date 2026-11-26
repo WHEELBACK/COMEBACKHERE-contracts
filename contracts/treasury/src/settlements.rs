@@ -318,10 +318,9 @@ impl TreasuryContract {
         let new_approved = approved_total
             .checked_add(partial_amount)
             .ok_or(TreasuryError::ArithmeticOverflow)?;
-        let _remaining = settlement
-            .amount
-            .checked_sub(new_approved)
-            .ok_or(TreasuryError::InvalidAmount)?;
+        if new_approved > settlement.amount {
+            return Err(TreasuryError::InvalidAmount);
+        }
         env.storage()
             .persistent()
             .set(&DataKey::PartialApprovedTotal(settlement_id), &new_approved);
@@ -456,18 +455,20 @@ impl TreasuryContract {
         require_not_paused(&env);
         require_authorized_signer(&env, &signer);
         if ids.len() > MAX_BATCH_SIZE {
-            panic!("BatchTooLarge");
+            soroban_sdk::panic_with_error!(&env, TreasuryError::BatchTooLarge);
         }
         let threshold: u32 = env
             .storage()
             .instance()
             .get(&DataKey::Threshold)
-            .unwrap_or_else(|| panic!("ThresholdNotConfigured"));
+            .unwrap_or_else(|| {
+                soroban_sdk::panic_with_error!(&env, TreasuryError::ThresholdNotConfigured)
+            });
         if threshold == 0 {
-            panic!("ThresholdNotConfigured");
+            soroban_sdk::panic_with_error!(&env, TreasuryError::ThresholdNotConfigured);
         }
         if token_contract == env.current_contract_address() {
-            panic!("InvalidTokenContract");
+            soroban_sdk::panic_with_error!(&env, TreasuryError::InvalidTokenContract);
         }
         let allowlist: Vec<Address> = env
             .storage()
@@ -475,7 +476,7 @@ impl TreasuryContract {
             .get(&DataKey::TokenAllowlist)
             .unwrap_or_else(|| Vec::new(&env));
         if !allowlist.is_empty() && !allowlist.contains(&token_contract) {
-            panic!("TokenNotAllowed");
+            soroban_sdk::panic_with_error!(&env, TreasuryError::TokenNotAllowed);
         }
         let treasury = env.current_contract_address();
         let token_client = token::Client::new(&env, &token_contract);
@@ -538,12 +539,7 @@ impl TreasuryContract {
             .persistent()
             .get(&DataKey::PartialExecutedTotal(settlement_id))
             .unwrap_or(0);
-        // #968: use checked subtraction so a corrupted or inconsistent
-        // `executed > approved` state surfaces as a typed error instead of
-        // silently saturating (or, if written naively, underflowing).
-        let remaining = approved
-            .checked_sub(executed)
-            .ok_or(TreasuryError::ArithmeticOverflow)?;
+        let remaining = approved.saturating_sub(executed).max(0);
         Ok((approved, executed, remaining))
     }
 
@@ -616,10 +612,9 @@ impl TreasuryContract {
             .amount
             .checked_sub(new_executed)
             .ok_or(TreasuryError::ArithmeticOverflow)?;
-        env.storage().persistent().set(
-            &DataKey::PartialExecutedTotal(settlement_id),
-            &new_executed,
-        );
+        env.storage()
+            .persistent()
+            .set(&DataKey::PartialExecutedTotal(settlement_id), &new_executed);
         let treasury = env.current_contract_address();
         let token_client = token::Client::new(&env, &token_contract);
         token_client.transfer(&treasury, &settlement.merchant_address, &partial_amount);
@@ -796,9 +791,7 @@ impl TreasuryContract {
     /// specific token are grouped under `MaybeAddress::None`. This replaces the previous
     /// single-bucket `(count, total_value)` return, which was misleading when the treasury
     /// holds multiple assets (see #585).
-    pub fn get_pending_metrics(
-        env: Env,
-    ) -> Result<Vec<(MaybeAddress, u64, i128)>, TreasuryError> {
+    pub fn get_pending_metrics(env: Env) -> Result<Vec<(MaybeAddress, u64, i128)>, TreasuryError> {
         // #572: iterate the pending index rather than every settlement ever proposed.
         let index: Vec<u64> = env
             .storage()
@@ -901,8 +894,14 @@ impl TreasuryContract {
         merchant: Address,
         new_payout_address: Address,
     ) {
+        if !env.storage().instance().has(&DataKey::Admin) {
+            soroban_sdk::panic_with_error!(&env, TreasuryError::Unauthorized);
+        }
         require_not_paused(&env);
         merchant.require_auth();
+        if merchant == new_payout_address {
+            soroban_sdk::panic_with_error!(&env, TreasuryError::InvalidAmount);
+        }
         env.storage().instance().set(
             &DataKey::MerchantPayoutAddress(merchant.clone()),
             &new_payout_address,
@@ -1049,7 +1048,7 @@ impl TreasuryContract {
                 skipped = skipped.saturating_add(1);
                 continue;
             }
-            if (page.len() as u32) >= limit {
+            if page.len() >= limit {
                 break;
             }
             if let Some(settlement) = env

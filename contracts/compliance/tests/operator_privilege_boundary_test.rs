@@ -290,7 +290,7 @@ fn add_operator_rejects_beyond_max_operators() {
     // The (MAX_OPERATORS + 1)th operator must be rejected.
     let extra = Address::generate(&env);
     let result = client.try_add_operator(&admin, &extra);
-    assert_eq!(result, Err(Ok(ContractError::OperatorSetFull)));
+    assert_eq!(result, Err(Ok(ComplianceError::OperatorSetFull)));
 
     // The set must remain at the cap.
     let ops = client.get_operators();
@@ -328,8 +328,9 @@ fn add_operator_emits_operator_added_event() {
     client.add_operator(&admin, &op);
 
     let events = env.events().all();
-    let (_, topics, _) = events.last().unwrap();
-    let sym = Symbol::from_val(&env, &topics.get_unchecked(0));
+    let last = events.events().last().unwrap();
+    let soroban_sdk::xdr::ContractEventBody::V0(v0) = &last.body;
+    let sym: Symbol = soroban_sdk::TryFromVal::try_from_val(&env, &v0.topics[0]).unwrap();
     assert_eq!(sym, Symbol::new(&env, "operator_added"));
 }
 
@@ -398,7 +399,7 @@ fn multiple_operators_all_rejected_from_admin_operations() {
     for op in operators.iter() {
         assert_eq!(
             client.try_allow_address(&op, &subject),
-            Err(Ok(ContractError::Unauthorized)),
+            Err(Ok(ComplianceError::Unauthorized)),
             "operator should not be able to call allow_address"
         );
     }
@@ -427,7 +428,7 @@ fn multiple_operators_each_with_independent_access() {
     assert!(client.try_address_status(&op1, &subject).is_ok());
     assert_eq!(
         client.try_address_status(&op2, &subject),
-        Err(Ok(ContractError::Unauthorized))
+        Err(Ok(ComplianceError::Unauthorized))
     );
     assert!(client.try_address_status(&op3, &subject).is_ok());
 }
@@ -490,8 +491,9 @@ fn remove_operator_emits_operator_removed_event() {
     client.remove_operator(&admin, &op);
 
     let events = env.events().all();
-    let (_, topics, _) = events.last().unwrap();
-    let sym = Symbol::from_val(&env, &topics.get_unchecked(0));
+    let last = events.events().last().unwrap();
+    let soroban_sdk::xdr::ContractEventBody::V0(v0) = &last.body;
+    let sym: Symbol = soroban_sdk::TryFromVal::try_from_val(&env, &v0.topics[0]).unwrap();
     assert_eq!(sym, Symbol::new(&env, "operator_removed"));
 }
 

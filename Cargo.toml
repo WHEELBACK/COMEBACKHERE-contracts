@@ -53,3 +53,6 @@ debug-assertions = false
 panic = "abort"
 codegen-units = 1
 lto = true
+
+[profile.dev.package.soroban-env-host]
+opt-level = 2

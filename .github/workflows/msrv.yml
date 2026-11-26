@@ -26,7 +26,7 @@ jobs:
         uses: dtolnay/rust-toolchain@master
         with:
           toolchain: ${{ steps.rust.outputs.version }}
-          targets: wasm32-unknown-unknown
+          targets: wasm32v1-none
 
       - name: Check workspace with pinned toolchain
         run: cargo check --workspace

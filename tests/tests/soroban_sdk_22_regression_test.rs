@@ -37,14 +37,14 @@ fn events_do_not_accumulate_across_separate_top_level_calls() {
 
     let sid = client.propose_settlement(&admin, &merchant, &1_000_000, &0_u64);
     assert_eq!(
-        env.events().all().len(),
+        env.events().all().events().len(),
         1,
         "expected exactly one event right after the propose call"
     );
 
     client.approve_settlement(&admin, &sid);
     assert_eq!(
-        env.events().all().len(),
+        env.events().all().events().len(),
         1,
         "soroban-sdk 22 testutils does not accumulate events across separate \
          top-level calls: events().all() after approve_settlement should contain \

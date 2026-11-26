@@ -272,15 +272,20 @@ fn error_category_returns_non_empty_strings_for_sampled_variants() {
 
     for (variant, expected_category) in pairs {
         let (category, description) = error_category(*variant);
-        assert!(!category.is_empty(), "category must be non-empty for {:?}", variant);
-        assert!(!description.is_empty(), "description must be non-empty for {:?}", variant);
+        assert!(
+            !category.is_empty(),
+            "category must be non-empty for {:?}",
+            variant
+        );
+        assert!(
+            !description.is_empty(),
+            "description must be non-empty for {:?}",
+            variant
+        );
         assert_eq!(
-            category,
-            *expected_category,
+            category, *expected_category,
             "unexpected category for {:?}: got '{}', want '{}'",
-            variant,
-            category,
-            expected_category,
+            variant, category, expected_category,
         );
     }
 }
@@ -343,11 +348,7 @@ fn error_category_covers_all_variants_with_non_empty_strings() {
 
     for variant in all {
         let (category, description) = error_category(*variant);
-        assert!(
-            !category.is_empty(),
-            "category is empty for {:?}",
-            variant
-        );
+        assert!(!category.is_empty(), "category is empty for {:?}", variant);
         assert!(
             !description.is_empty(),
             "description is empty for {:?}",

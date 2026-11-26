@@ -26,11 +26,7 @@ fn setup() -> (Env, Address, InvoiceContractClient<'static>) {
     (env, admin, client)
 }
 
-fn create_basic_invoice(
-    env: &Env,
-    client: &InvoiceContractClient,
-    merchant: &Address,
-) -> u64 {
+fn create_basic_invoice(env: &Env, client: &InvoiceContractClient, merchant: &Address) -> u64 {
     client.create_invoice(
         merchant,
         &10_000_000,
@@ -91,10 +87,7 @@ fn test_cancel_invoice_by_unauthorized_caller_is_rejected() {
     let merchant = Address::generate(&env);
     let rogue = Address::generate(&env);
     let id = create_basic_invoice(&env, &client, &merchant);
-    let err = client
-        .try_cancel_invoice(&rogue, &id)
-        .unwrap_err()
-        .unwrap();
+    let err = client.try_cancel_invoice(&rogue, &id).unwrap_err().unwrap();
     assert_eq!(err, InvoiceError::Unauthorized);
 }
 
@@ -134,9 +127,10 @@ fn test_cancel_invoice_emits_cancelled_event() {
     client.cancel_invoice(&merchant, &id);
 
     let events = env.events().all();
-    let (_, topics, _) = events.last().unwrap();
+    let last = events.events().last().unwrap();
+    let soroban_sdk::xdr::ContractEventBody::V0(v0) = &last.body;
     assert_eq!(
-        Symbol::try_from_val(&env, &topics.get_unchecked(0)).unwrap(),
+        Symbol::try_from_val(&env, &v0.topics[0]).unwrap(),
         Symbol::new(&env, "invoice_cancelled")
     );
 }
@@ -165,10 +159,7 @@ fn test_request_refund_by_non_payer_is_rejected() {
     let rogue = Address::generate(&env);
     let id = create_basic_invoice(&env, &client, &merchant);
     client.mark_paid(&admin, &id, &payer, &MaybeBytes::None, &MaybeAddress::None);
-    let err = client
-        .try_request_refund(&rogue, &id)
-        .unwrap_err()
-        .unwrap();
+    let err = client.try_request_refund(&rogue, &id).unwrap_err().unwrap();
     assert_eq!(err, InvoiceError::Unauthorized);
 }
 
@@ -178,10 +169,7 @@ fn test_request_refund_on_pending_invoice_is_rejected() {
     let merchant = Address::generate(&env);
     let payer = Address::generate(&env);
     let id = create_basic_invoice(&env, &client, &merchant);
-    let err = client
-        .try_request_refund(&payer, &id)
-        .unwrap_err()
-        .unwrap();
+    let err = client.try_request_refund(&payer, &id).unwrap_err().unwrap();
     assert_eq!(err, InvoiceError::NotPaid);
 }
 
@@ -198,9 +186,10 @@ fn test_request_refund_emits_refund_requested_event() {
     client.request_refund(&payer, &id);
 
     let events = env.events().all();
-    let (_, topics, _) = events.last().unwrap();
+    let last = events.events().last().unwrap();
+    let soroban_sdk::xdr::ContractEventBody::V0(v0) = &last.body;
     assert_eq!(
-        Symbol::try_from_val(&env, &topics.get_unchecked(0)).unwrap(),
+        Symbol::try_from_val(&env, &v0.topics[0]).unwrap(),
         Symbol::new(&env, "invoice_refund_requested")
     );
 }
@@ -239,10 +228,7 @@ fn test_approve_refund_on_non_refund_requested_invoice_is_rejected() {
     let id = create_basic_invoice(&env, &client, &merchant);
     client.mark_paid(&admin, &id, &payer, &MaybeBytes::None, &MaybeAddress::None);
     // Attempt to approve without first requesting
-    let err = client
-        .try_approve_refund(&admin, &id)
-        .unwrap_err()
-        .unwrap();
+    let err = client.try_approve_refund(&admin, &id).unwrap_err().unwrap();
     assert_eq!(err, InvoiceError::NotRefundRequested);
 }
 
@@ -280,10 +266,7 @@ fn test_refund_when_contract_paused_is_rejected() {
     let id = create_basic_invoice(&env, &client, &merchant);
     client.mark_paid(&admin, &id, &payer, &MaybeBytes::None, &MaybeAddress::None);
     client.pause(&admin);
-    let err = client
-        .try_request_refund(&payer, &id)
-        .unwrap_err()
-        .unwrap();
+    let err = client.try_request_refund(&payer, &id).unwrap_err().unwrap();
     assert_eq!(err, InvoiceError::ContractPaused);
 }
 

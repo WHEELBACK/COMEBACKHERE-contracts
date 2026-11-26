@@ -101,7 +101,12 @@ mod is_terminal_tests {
             (InvoiceStatus::Refunded, true),
         ];
         for (status, expected) in variants {
-            assert_eq!(status.is_terminal(), expected, "is_terminal() for {:?}", status);
+            assert_eq!(
+                status.is_terminal(),
+                expected,
+                "is_terminal() for {:?}",
+                status
+            );
         }
     }
 }

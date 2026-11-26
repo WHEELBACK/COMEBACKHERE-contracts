@@ -147,19 +147,27 @@ fn token_balance(f: &Fixture, of: &Address) -> i128 {
 /// Read straight after the call, because soroban-sdk 22 no longer accumulates
 /// events across top-level calls.
 fn last_event_symbol(env: &Env) -> Symbol {
-    let (_, topics, _) = env.events().all().last().unwrap();
-    Symbol::try_from_val(env, &topics.get_unchecked(0)).unwrap()
+    let events = env.events().all();
+    let last = events.events().last().unwrap();
+    let soroban_sdk::xdr::ContractEventBody::V0(v0) = &last.body;
+    Symbol::try_from_val(env, &v0.topics[0]).unwrap()
 }
 
 /// The id topic of the last event published in the current top-level call.
 fn last_event_id(env: &Env) -> u64 {
-    let (_, topics, _) = env.events().all().last().unwrap();
-    u64::try_from_val(env, &topics.get_unchecked(1)).unwrap()
+    let events = env.events().all();
+    let last = events.events().last().unwrap();
+    let soroban_sdk::xdr::ContractEventBody::V0(v0) = &last.body;
+    let topic = soroban_sdk::Val::try_from_val(env, &v0.topics[1]).unwrap();
+    u64::try_from_val(env, &topic).unwrap()
 }
 
 /// The payload of the last event published in the current top-level call.
 fn last_event_payload(env: &Env) -> RefundProcessedEvent {
-    let (_, _, data) = env.events().all().last().unwrap();
+    let events = env.events().all();
+    let last = events.events().last().unwrap();
+    let soroban_sdk::xdr::ContractEventBody::V0(v0) = &last.body;
+    let data = soroban_sdk::Val::try_from_val(env, &v0.data).unwrap();
     RefundProcessedEvent::try_from_val(env, &data)
         .expect("refund_processed must publish a RefundProcessedEvent")
 }

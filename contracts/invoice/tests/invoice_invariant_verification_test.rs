@@ -48,14 +48,23 @@ const ALL: [InvoiceStatus; 7] = [
 fn well_formed_invoices_pass_in_every_status() {
     let env = Env::default();
     for status in ALL {
-        assert_eq!(verify_invoice_invariants(&base(&env, status.clone())), Ok(()), "{status:?}");
+        assert_eq!(
+            verify_invoice_invariants(&base(&env, status.clone())),
+            Ok(()),
+            "{status:?}"
+        );
     }
 }
 
 #[test]
 fn amount_pair_must_be_consistent() {
     let env = Env::default();
-    for (amount, gross) in [(0, GROSS), (-1, GROSS), (AMOUNT, AMOUNT - 1), (i128::MIN, 0)] {
+    for (amount, gross) in [
+        (0, GROSS),
+        (-1, GROSS),
+        (AMOUNT, AMOUNT - 1),
+        (i128::MIN, 0),
+    ] {
         let mut inv = base(&env, InvoiceStatus::Pending);
         inv.amount_usdc = amount;
         inv.gross_usdc = gross;
@@ -70,14 +79,24 @@ fn amount_pair_must_be_consistent() {
 #[test]
 fn unpaid_statuses_must_not_carry_payment_fields() {
     let env = Env::default();
-    for status in [InvoiceStatus::Pending, InvoiceStatus::Expired, InvoiceStatus::Cancelled] {
+    for status in [
+        InvoiceStatus::Pending,
+        InvoiceStatus::Expired,
+        InvoiceStatus::Cancelled,
+    ] {
         let mut with_payer = base(&env, status.clone());
         with_payer.payer = MaybeAddress::Some(Address::generate(&env));
-        assert_eq!(verify_invoice_invariants(&with_payer), Err(InvoiceError::InvariantViolation));
+        assert_eq!(
+            verify_invoice_invariants(&with_payer),
+            Err(InvoiceError::InvariantViolation)
+        );
 
         let mut with_paid_at = base(&env, status);
         with_paid_at.paid_at = Some(1);
-        assert_eq!(verify_invoice_invariants(&with_paid_at), Err(InvoiceError::InvariantViolation));
+        assert_eq!(
+            verify_invoice_invariants(&with_paid_at),
+            Err(InvoiceError::InvariantViolation)
+        );
     }
 }
 
@@ -92,11 +111,17 @@ fn paid_statuses_must_carry_payment_fields() {
     ] {
         let mut no_payer = base(&env, status.clone());
         no_payer.payer = MaybeAddress::None;
-        assert_eq!(verify_invoice_invariants(&no_payer), Err(InvoiceError::InvariantViolation));
+        assert_eq!(
+            verify_invoice_invariants(&no_payer),
+            Err(InvoiceError::InvariantViolation)
+        );
 
         let mut no_paid_at = base(&env, status);
         no_paid_at.paid_at = None;
-        assert_eq!(verify_invoice_invariants(&no_paid_at), Err(InvoiceError::InvariantViolation));
+        assert_eq!(
+            verify_invoice_invariants(&no_paid_at),
+            Err(InvoiceError::InvariantViolation)
+        );
     }
 }
 
@@ -105,7 +130,10 @@ fn payer_can_never_be_the_merchant() {
     let env = Env::default();
     let mut inv = base(&env, InvoiceStatus::Paid);
     inv.payer = MaybeAddress::Some(inv.merchant.clone());
-    assert_eq!(verify_invoice_invariants(&inv), Err(InvoiceError::InvariantViolation));
+    assert_eq!(
+        verify_invoice_invariants(&inv),
+        Err(InvoiceError::InvariantViolation)
+    );
 }
 
 /// Every record the public lifecycle produces satisfies the invariants.

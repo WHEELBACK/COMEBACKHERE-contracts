@@ -4,7 +4,8 @@ use fee_manager::{FeeManagerContract, FeeManagerContractClient, FeeManagerError}
 use soroban_sdk::{
     testutils::{Address as _, Events},
     token::{Client as TokenClient, StellarAssetClient},
-    Address, Env, Symbol, TryFromVal, Val, Vec,
+    xdr::{ContractEvent, ContractEventBody, ScVal},
+    Address, Env,
 };
 
 // ── Test helpers ──────────────────────────────────────────────────────────────
@@ -29,12 +30,14 @@ fn mint(env: &Env, token: &Address, to: &Address, amount: i128) {
     StellarAssetClient::new(env, token).mint(to, &amount);
 }
 
-/// Extract the event topic symbol name from a topics vec.
-fn last_event_symbol(env: &Env, topics: &Vec<Val>) -> std::string::String {
-    let val = topics.get_unchecked(0);
-    Symbol::try_from_val(env, &val)
-        .unwrap_or_else(|_| Symbol::new(env, ""))
-        .to_string()
+/// Extract the event topic symbol name from a ContractEvent.
+fn event_symbol(event: &ContractEvent) -> std::string::String {
+    match &event.body {
+        ContractEventBody::V0(v0) => match v0.topics.first() {
+            Some(ScVal::Symbol(sym)) => sym.to_string(),
+            _ => std::string::String::new(),
+        },
+    }
 }
 
 // ── Initialization ────────────────────────────────────────────────────────────
@@ -118,8 +121,8 @@ fn deposit_emits_deposited_event() {
     client.deposit(&depositor, &token, &500);
 
     let events = env.events().all();
-    let last = events.last().unwrap();
-    assert_eq!(last_event_symbol(&env, &last.1), "deposited");
+    let last = events.events().last().unwrap();
+    assert_eq!(event_symbol(last), "deposited");
 }
 
 #[test]
@@ -185,8 +188,8 @@ fn collect_fees_emits_fees_collected_event() {
     client.collect_fees(&admin, &token, &recipient);
 
     let events = env.events().all();
-    let last = events.last().unwrap();
-    assert_eq!(last_event_symbol(&env, &last.1), "fees_collected");
+    let last = events.events().last().unwrap();
+    assert_eq!(event_symbol(last), "fees_collected");
 }
 
 #[test]
@@ -232,8 +235,8 @@ fn update_fee_rate_emits_event() {
     client.update_fee_rate(&admin, &75);
 
     let events = env.events().all();
-    let last = events.last().unwrap();
-    assert_eq!(last_event_symbol(&env, &last.1), "fee_rate_updated");
+    let last = events.events().last().unwrap();
+    assert_eq!(event_symbol(last), "fee_rate_updated");
 }
 
 // ── Pause / unpause ───────────────────────────────────────────────────────────
@@ -262,8 +265,8 @@ fn pause_emits_event() {
     client.pause(&admin);
 
     let events = env.events().all();
-    let last = events.last().unwrap();
-    assert_eq!(last_event_symbol(&env, &last.1), "fee_manager_paused");
+    let last = events.events().last().unwrap();
+    assert_eq!(event_symbol(last), "fee_manager_paused");
 }
 
 #[test]
@@ -273,8 +276,8 @@ fn unpause_emits_event() {
     client.unpause(&admin);
 
     let events = env.events().all();
-    let last = events.last().unwrap();
-    assert_eq!(last_event_symbol(&env, &last.1), "fee_manager_unpaused");
+    let last = events.events().last().unwrap();
+    assert_eq!(event_symbol(last), "fee_manager_unpaused");
 }
 
 // ── bump_state_ttl ────────────────────────────────────────────────────────────

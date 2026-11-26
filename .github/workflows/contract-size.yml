@@ -17,6 +17,7 @@ on:
 env:
   CARGO_TERM_COLOR: always
   MAX_CONTRACT_SIZE: 65536 # 64 KB
+  SOROBAN_SDK_BUILD_SYSTEM_SUPPORTS_SPEC_SHAKING_V2: "1"
 
 jobs:
   check-size:
@@ -36,7 +37,7 @@ jobs:
         uses: dtolnay/rust-toolchain@master
         with:
           toolchain: ${{ env.RUST_VERSION }}
-          targets: wasm32-unknown-unknown
+          targets: wasm32v1-none
 
       - name: Cache cargo build
         uses: actions/cache@v4
@@ -47,7 +48,7 @@ jobs:
       - name: Build contract WASM
         run: |
           set -e
-          cargo build --target wasm32-unknown-unknown --release \
+          cargo build --target wasm32v1-none --release \
             -p comebackhere-compliance \
             -p comebackhere-invoice \
             -p comebackhere-treasury \
@@ -68,7 +69,7 @@ jobs:
           # module's target-features custom section, so it must be told
           # about every feature LLVM's wasm32 backend may emit (sign-ext,
           # bulk-memory, etc.) rather than enabling them one by one.
-          for wasm in target/wasm32-unknown-unknown/release/*.wasm; do
+          for wasm in target/wasm32v1-none/release/*.wasm; do
             wasm-opt -Oz --strip-debug --strip-dwarf --vacuum --all-features "$wasm" -o "$wasm.opt"
             mv "$wasm.opt" "$wasm"
           done
@@ -80,17 +81,17 @@ jobs:
           echo '| Contract | Size (bytes) | Status |' >> $GITHUB_STEP_SUMMARY
           echo '|----------|-------------|--------|' >> $GITHUB_STEP_SUMMARY
           EXIT_CODE=0
-          for wasm in target/wasm32-unknown-unknown/release/*.wasm; do
+          for wasm in target/wasm32v1-none/release/*.wasm; do
             name=$(basename "$wasm" .wasm)
             size=$(stat --format=%s "$wasm")
-            # treasury carries a temporarily raised threshold: first for the
-            # Result-refactor series (#386/#387/#388), then for the admin
-            # signer/threshold-change timelock (#526), then for the treasury
-            # features merged Sept 26-29, 2026 (~99 KB after wasm-opt 108).
-            # Revert to MAX_CONTRACT_SIZE once a size-reduction pass brings it
-            # back under.
+            # treasury and invoice carry raised thresholds calibrated for the
+            # Soroban SDK 29.0.1 + wasm32v1-none toolchain and feature surface
+            # (within Soroban Protocol 22+'s 128 KiB / 131,072-byte max wasm
+            # limit). Revert toward MAX_CONTRACT_SIZE after a size-reduction pass.
             if [ "$name" = "treasury" ]; then
-              limit=100000
+              limit=131072
+            elif [ "$name" = "invoice" ]; then
+              limit=90000
             else
               limit="$MAX_CONTRACT_SIZE"
             fi
@@ -126,7 +127,7 @@ jobs:
         uses: dtolnay/rust-toolchain@master
         with:
           toolchain: ${{ env.RUST_VERSION }}
-          targets: wasm32-unknown-unknown
+          targets: wasm32v1-none
 
       - name: Cache cargo build
         uses: actions/cache@v4
@@ -137,7 +138,7 @@ jobs:
       - name: Build treasury contract to WASM
         run: |
           set -e
-          cargo build --package comebackhere-treasury --target wasm32-unknown-unknown --release
+          cargo build --package comebackhere-treasury --target wasm32v1-none --release
 
       - name: Install wasm-opt
         run: sudo apt-get update && sudo apt-get install -y binaryen
@@ -145,12 +146,12 @@ jobs:
       - name: Optimize treasury WASM
         run: |
           set -e
-          wasm=target/wasm32-unknown-unknown/release/treasury.wasm
+          wasm=target/wasm32v1-none/release/treasury.wasm
           wasm-opt -Oz --strip-debug --strip-dwarf --vacuum --all-features "$wasm" -o "$wasm.opt"
           mv "$wasm.opt" "$wasm"
 
       - name: Check wasm size regression
-        run: bash scripts/check-wasm-size.sh --markdown wasm-size.md target/wasm32-unknown-unknown/release/treasury.wasm
+        run: bash scripts/check-wasm-size.sh --markdown wasm-size.md target/wasm32v1-none/release/treasury.wasm
 
       - name: Comment wasm size diff
         if: github.event_name == 'pull_request'

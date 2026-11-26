@@ -99,7 +99,7 @@ impl TreasuryContract {
             .ok_or(TreasuryError::ArithmeticOverflow)?;
 
         if let SignerChangeKind::UpdateTimelockDelay(seconds) = kind {
-            if seconds < MIN_TIMELOCK_DELAY_SECS || seconds > MAX_TIMELOCK_DELAY_SECS {
+            if !(MIN_TIMELOCK_DELAY_SECS..=MAX_TIMELOCK_DELAY_SECS).contains(&seconds) {
                 return Err(TreasuryError::InvalidTimelockDelay);
             }
         }
@@ -228,7 +228,7 @@ impl TreasuryContract {
                 // Re-checked here (not just at proposal time) so the bound can never
                 // be bypassed, even if a future change alters the bounds between
                 // proposal and execution.
-                if seconds < MIN_TIMELOCK_DELAY_SECS || seconds > MAX_TIMELOCK_DELAY_SECS {
+                if !(MIN_TIMELOCK_DELAY_SECS..=MAX_TIMELOCK_DELAY_SECS).contains(&seconds) {
                     return Err(TreasuryError::InvalidTimelockDelay);
                 }
                 env.storage()
@@ -321,7 +321,7 @@ impl TreasuryContract {
             .unwrap_or(0);
         let mut page = Vec::new(&env);
         let mut id = start_after.saturating_add(1);
-        while id <= count && (page.len() as u32) < capped_limit {
+        while id <= count && page.len() < capped_limit {
             if let Some(proposal) = env
                 .storage()
                 .persistent()

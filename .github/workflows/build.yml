@@ -6,6 +6,7 @@ on:
 
 env:
   CARGO_TERM_COLOR: always
+  SOROBAN_SDK_BUILD_SYSTEM_SUPPORTS_SPEC_SHAKING_V2: "1"
 
 jobs:
   wasm-build:
@@ -26,12 +27,21 @@ jobs:
         uses: dtolnay/rust-toolchain@master
         with:
           toolchain: ${{ env.RUST_VERSION }}
-          targets: wasm32-unknown-unknown
+          targets: wasm32v1-none
+
+      - name: Cache Stellar CLI binary
+        id: cache-stellar-cli
+        uses: actions/cache@v4
+        with:
+          path: ~/.cargo/bin/stellar
+          key: ${{ runner.os }}-stellar-cli-${{ env.STELLAR_CLI_VERSION }}
 
       - name: Install stellar-cli build dependencies
+        if: steps.cache-stellar-cli.outputs.cache-hit != 'true'
         run: sudo apt-get update && sudo apt-get install -y libdbus-1-dev libudev-dev pkg-config
 
       - name: Install Stellar CLI (pinned)
+        if: steps.cache-stellar-cli.outputs.cache-hit != 'true'
         run: cargo install --locked stellar-cli --version "$STELLAR_CLI_VERSION"
 
       - name: Verify Stellar CLI version
@@ -49,10 +59,13 @@ jobs:
           key: build
 
       - name: Build compliance contract (WASM)
-        run: cargo build --target wasm32-unknown-unknown --release -p comebackhere-compliance
+        run: cargo build --target wasm32v1-none --release --package comebackhere-compliance
 
       - name: Build invoice contract (WASM)
-        run: cargo build --target wasm32-unknown-unknown --release -p comebackhere-invoice
+        run: cargo build --target wasm32v1-none --release --package comebackhere-invoice
 
       - name: Build treasury contract (WASM)
-        run: cargo build --target wasm32-unknown-unknown --release -p comebackhere-treasury
+        run: cargo build --target wasm32v1-none --release --package comebackhere-treasury
+
+      - name: Build settlement-workflow contract (WASM)
+        run: cargo build --target wasm32v1-none --release --package comebackhere-settlement-workflow

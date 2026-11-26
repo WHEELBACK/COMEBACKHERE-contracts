@@ -201,7 +201,10 @@ fn invalid_fee_never_reaches_the_token_contract() {
         .unwrap_err()
         .unwrap();
     assert_eq!(err, InvoiceError::RefundFeeTooHigh);
-    assert_eq!(RecordingTokenClient::new(&f.env, &token_id).calls().len(), 0);
+    assert_eq!(
+        RecordingTokenClient::new(&f.env, &token_id).calls().len(),
+        0
+    );
 }
 
 /// `approve_refund` records the decision only and must not call out.
@@ -213,7 +216,10 @@ fn approve_refund_makes_no_cross_contract_call() {
 
     f.invoice.approve_refund(&f.admin, &id);
 
-    assert_eq!(RecordingTokenClient::new(&f.env, &token_id).calls().len(), 0);
+    assert_eq!(
+        RecordingTokenClient::new(&f.env, &token_id).calls().len(),
+        0
+    );
     assert_eq!(f.invoice.get_invoice(&id).status, InvoiceStatus::Refunded);
 }
 
@@ -254,10 +260,7 @@ fn process_refund_against_stellar_asset_contract() {
     let token = TokenClient::new(&f.env, &token_id);
     let breakdown = f.invoice.get_refund_breakdown(&id);
     assert_eq!(token.balance(&f.payer), breakdown.net_amount);
-    assert_eq!(
-        token.balance(&f.invoice_id),
-        AMOUNT - breakdown.net_amount
-    );
+    assert_eq!(token.balance(&f.invoice_id), AMOUNT - breakdown.net_amount);
     assert_eq!(f.invoice.get_invoice(&id).status, InvoiceStatus::Refunded);
 }
 

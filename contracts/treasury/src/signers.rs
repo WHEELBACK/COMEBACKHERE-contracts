@@ -26,23 +26,35 @@ impl TreasuryContract {
         weight: u32,
     ) -> Result<(), TreasuryError> {
         require_admin(&env, &admin);
-        if weight == 0 {
-            return Err(TreasuryError::InvalidAmount);
-        }
-        env.storage()
-            .instance()
-            .set(&DataKey::Signer(signer.clone()), &weight);
-        // Targeted membership check first: only touch `SignerList` when the
-        // signer is genuinely new, avoiding a needless deserialize/serialize
-        // round-trip on the common reweight path.
         let mut list: Vec<Address> = env
             .storage()
             .instance()
             .get(&DataKey::SignerList)
             .unwrap_or_else(|| Vec::new(&env));
-        if !list.contains(&signer) {
-            list.push_back(signer.clone());
-            env.storage().instance().set(&DataKey::SignerList, &list);
+        if weight == 0 {
+            env.storage()
+                .instance()
+                .remove(&DataKey::Signer(signer.clone()));
+            if list.contains(&signer) {
+                let mut updated = Vec::new(&env);
+                for s in list.iter() {
+                    if s != signer {
+                        updated.push_back(s);
+                    }
+                }
+                env.storage().instance().set(&DataKey::SignerList, &updated);
+            }
+        } else {
+            env.storage()
+                .instance()
+                .set(&DataKey::Signer(signer.clone()), &weight);
+            // Targeted membership check first: only touch `SignerList` when the
+            // signer is genuinely new, avoiding a needless deserialize/serialize
+            // round-trip on the common reweight path.
+            if !list.contains(&signer) {
+                list.push_back(signer.clone());
+                env.storage().instance().set(&DataKey::SignerList, &list);
+            }
         }
         env.events()
             .publish((Symbol::new(&env, "signer_weight_set"), signer), weight);
@@ -95,12 +107,6 @@ impl TreasuryContract {
             .storage()
             .instance()
             .get(&DataKey::Threshold)
-            .unwrap_or(0);
-        // Targeted lookup: only the signer being removed needs to be read here.
-        let signer_weight: u32 = env
-            .storage()
-            .instance()
-            .get(&DataKey::Signer(signer.clone()))
             .unwrap_or(0);
 
         let list: Vec<Address> = env

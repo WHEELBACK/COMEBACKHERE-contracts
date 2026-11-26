@@ -28,6 +28,7 @@
 //! precedence rules, and `docs/GLOSSARY.md` for term definitions.
 
 #![no_std]
+#![allow(deprecated)]
 
 pub use compliance_errors::ComplianceError;
 /// Alias kept for entrypoints and tests that historically referenced `ContractError`
@@ -479,11 +480,9 @@ impl ComplianceContract {
         let blocked: bool = storage
             .get(&DataKey::Blocked(address.clone()))
             .unwrap_or(false);
-        let expires_at: Option<u64> = storage
-            .get::<_, u64>(&DataKey::AllowedUntil(address.clone()));
-        let tier: u32 = storage
-            .get(&DataKey::Tier(address.clone()))
-            .unwrap_or(0u32);
+        let expires_at: Option<u64> =
+            storage.get::<_, u64>(&DataKey::AllowedUntil(address.clone()));
+        let tier: u32 = storage.get(&DataKey::Tier(address.clone())).unwrap_or(0u32);
         AddressStatus {
             allowed,
             blocked,
@@ -513,7 +512,11 @@ impl ComplianceContract {
     ///
     /// # Events
     /// Publishes `("address_allowed",) → address`.
-    pub fn allow_address(env: Env, admin: Address, address: Address) -> Result<(), ComplianceError> {
+    pub fn allow_address(
+        env: Env,
+        admin: Address,
+        address: Address,
+    ) -> Result<(), ComplianceError> {
         Self::require_admin(&env, &admin)?;
         Self::require_not_paused(&env)?;
         let was_allowed: bool = env
@@ -1052,7 +1055,11 @@ impl ComplianceContract {
     ///
     /// # Events
     /// Publishes `("address_cleared",) → address`.
-    pub fn clear_address(env: Env, caller: Address, address: Address) -> Result<(), ComplianceError> {
+    pub fn clear_address(
+        env: Env,
+        caller: Address,
+        address: Address,
+    ) -> Result<(), ComplianceError> {
         Self::require_admin_or_operator(&env, &caller)?;
         if !Self::is_admin(&env, &caller) {
             Self::require_operator_placed_block(&env, &caller, &address)?;
@@ -1210,6 +1217,9 @@ impl ComplianceContract {
         if Self::is_blocked(env.clone(), address.clone()) {
             return true;
         }
+        if proof.len() > 32 {
+            return false;
+        }
         let root: BytesN<32> = match env.storage().instance().get(&DataKey::BlocklistRoot) {
             Some(r) => r,
             None => return false,
@@ -1258,7 +1268,11 @@ impl ComplianceContract {
     /// Assign an operator address. Only admin may call this.
     /// Not gated behind `require_not_paused` — role assignment, like admin
     /// transfer, is permitted while paused.
-    pub fn set_operator(env: Env, admin: Address, operator: Address) -> Result<(), ComplianceError> {
+    pub fn set_operator(
+        env: Env,
+        admin: Address,
+        operator: Address,
+    ) -> Result<(), ComplianceError> {
         Self::require_admin(&env, &admin)?;
         env.storage().instance().set(&DataKey::Operator, &operator);
         env.events()
@@ -1307,7 +1321,11 @@ impl ComplianceContract {
     ///
     /// # Events
     /// Publishes `("operator_added",) → operator`.
-    pub fn add_operator(env: Env, admin: Address, operator: Address) -> Result<(), ComplianceError> {
+    pub fn add_operator(
+        env: Env,
+        admin: Address,
+        operator: Address,
+    ) -> Result<(), ComplianceError> {
         Self::require_admin(&env, &admin)?;
         let mut operators: Vec<Address> = env
             .storage()
@@ -1545,7 +1563,7 @@ impl ComplianceContract {
             while i < page_end {
                 let addr = page.get_unchecked((i % page_size) as u32);
                 let addr_state = Self::address_state(&env, &addr);
-                if state.as_ref().map_or(true, |s| *s == addr_state) {
+                if state.as_ref().is_none_or(|s| *s == addr_state) {
                     result.push_back((addr, addr_state));
                 }
                 i += 1;

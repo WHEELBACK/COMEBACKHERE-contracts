@@ -12,6 +12,7 @@ const MAX_BATCH_EXPIRE_INSTRUCTIONS: u64 = 100_000_000;
 fn setup() -> (Env, Address, InvoiceContractClient<'static>) {
     let env = Env::default();
     env.mock_all_auths();
+    env.cost_estimate().disable_resource_limits();
     let admin = Address::generate(&env);
     let id = env.register_contract(None, InvoiceContract);
     let client = InvoiceContractClient::new(&env, &id);

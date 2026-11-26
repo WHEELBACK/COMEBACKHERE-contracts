@@ -8,8 +8,8 @@
 //! amount above the invoice amount — is rejected.
 
 use invoice::{
-    require_valid_discount, DataKey, Invoice, InvoiceContract, InvoiceContractClient,
-    InvoiceError, InvoiceStatus, MaybeAddress, MaybeBytes,
+    require_valid_discount, DataKey, Invoice, InvoiceContract, InvoiceContractClient, InvoiceError,
+    InvoiceStatus, MaybeAddress, MaybeBytes,
 };
 use soroban_sdk::{testutils::Address as _, Address, Env};
 
@@ -132,7 +132,10 @@ fn negative_discount_is_rejected() {
 #[test]
 fn discount_boundaries_are_unchanged() {
     assert_eq!(require_valid_discount(0, AMOUNT_USDC, 0, 10), Ok(()));
-    assert_eq!(require_valid_discount(AMOUNT_USDC - 1, AMOUNT_USDC, 0, 10), Ok(()));
+    assert_eq!(
+        require_valid_discount(AMOUNT_USDC - 1, AMOUNT_USDC, 0, 10),
+        Ok(())
+    );
     assert_eq!(
         require_valid_discount(AMOUNT_USDC, AMOUNT_USDC, 0, 10),
         Err(InvoiceError::DiscountExceedsAmount)

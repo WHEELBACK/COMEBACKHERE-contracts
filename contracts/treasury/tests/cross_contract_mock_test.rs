@@ -4,11 +4,7 @@
 //! configured, passes the right arguments, and handles both allowed and denied
 //! responses. Also covers the no-compliance path (backward compatibility).
 
-use soroban_sdk::{
-    contract, contractimpl,
-    testutils::Address as _,
-    token, Address, Env,
-};
+use soroban_sdk::{contract, contractimpl, testutils::Address as _, token, Address, Env};
 use treasury::{TreasuryContract, TreasuryContractClient, TreasuryError};
 
 // ── Minimal compliance stub ──────────────────────────────────────────────────
@@ -21,7 +17,16 @@ struct StubCompliance;
 #[contractimpl]
 impl StubCompliance {
     pub fn set_allowed(env: Env, allowed: bool) {
-        env.storage().instance().set(&soroban_sdk::Symbol::new(&env, "allowed"), &allowed);
+        env.storage()
+            .instance()
+            .set(&soroban_sdk::Symbol::new(&env, "allowed"), &allowed);
+    }
+
+    pub fn is_allowed(env: Env, _recipient: Address) -> bool {
+        env.storage()
+            .instance()
+            .get::<_, bool>(&soroban_sdk::Symbol::new(&env, "allowed"))
+            .unwrap_or(false)
     }
 
     pub fn is_allowed_for_amount(env: Env, _recipient: Address, _amount: i128) -> bool {
@@ -66,7 +71,8 @@ fn mint_and_propose(
 fn execute_settlement_succeeds_without_compliance_configured() {
     let env = Env::default();
     let (treasury, admin, merchant, treasury_id) = setup_treasury(&env);
-    let (token_id, sid) = mint_and_propose(&env, &treasury, &treasury_id, &admin, &merchant, 5_000_000);
+    let (token_id, sid) =
+        mint_and_propose(&env, &treasury, &treasury_id, &admin, &merchant, 5_000_000);
 
     treasury
         .try_execute_settlement(&admin, &sid, &token_id)
@@ -93,7 +99,8 @@ fn execute_settlement_succeeds_when_compliance_allows() {
     });
     treasury.set_compliance_id(&admin, &compliance_id);
 
-    let (token_id, sid) = mint_and_propose(&env, &treasury, &treasury_id, &admin, &merchant, 8_000_000);
+    let (token_id, sid) =
+        mint_and_propose(&env, &treasury, &treasury_id, &admin, &merchant, 8_000_000);
 
     treasury
         .try_execute_settlement(&admin, &sid, &token_id)
@@ -114,22 +121,19 @@ fn execute_settlement_fails_when_compliance_denies() {
     let (treasury, admin, merchant, treasury_id) = setup_treasury(&env);
 
     let compliance_id = env.register_contract(None, StubCompliance);
-    // compliance stub defaults to false (not allowed)
+    let (token_id, sid) =
+        mint_and_propose(&env, &treasury, &treasury_id, &admin, &merchant, 8_000_000);
+    // Configure compliance (defaults to false / denied) before execution.
     treasury.set_compliance_id(&admin, &compliance_id);
-
-    let (token_id, sid) = mint_and_propose(&env, &treasury, &treasury_id, &admin, &merchant, 8_000_000);
 
     let err = treasury
         .try_execute_settlement(&admin, &sid, &token_id)
-        .expect("outer call must not panic")
-        .expect_err("execution must fail when compliance denies");
-    assert_eq!(err, TreasuryError::ComplianceCheckFailed.into());
+        .expect_err("execution must fail when compliance denies")
+        .expect("contract error expected");
+    assert_eq!(err, TreasuryError::ComplianceCheckFailed);
 
     // No funds moved.
-    assert_eq!(
-        token::Client::new(&env, &token_id).balance(&merchant),
-        0
-    );
+    assert_eq!(token::Client::new(&env, &token_id).balance(&merchant), 0);
 }
 
 /// Treasury passes the merchant address (not the signer) and the settlement
@@ -141,17 +145,17 @@ fn compliance_check_uses_merchant_address_and_settlement_amount() {
     let (treasury, admin, merchant, treasury_id) = setup_treasury(&env);
 
     let compliance_id = env.register_contract(None, StubCompliance);
-    treasury.set_compliance_id(&admin, &compliance_id);
-
     let amount = 3_000_000i128;
-    let (token_id, sid) = mint_and_propose(&env, &treasury, &treasury_id, &admin, &merchant, amount);
+    let (token_id, sid) =
+        mint_and_propose(&env, &treasury, &treasury_id, &admin, &merchant, amount);
+    treasury.set_compliance_id(&admin, &compliance_id);
 
     // Initially denied — no funds should move.
     let err = treasury
         .try_execute_settlement(&admin, &sid, &token_id)
-        .unwrap()
-        .unwrap_err();
-    assert_eq!(err, TreasuryError::ComplianceCheckFailed.into());
+        .unwrap_err()
+        .unwrap();
+    assert_eq!(err, TreasuryError::ComplianceCheckFailed);
     assert_eq!(token::Client::new(&env, &token_id).balance(&merchant), 0);
 
     // Now allow — the same settlement (still pending) should execute.
@@ -162,7 +166,10 @@ fn compliance_check_uses_merchant_address_and_settlement_amount() {
         .try_execute_settlement(&admin, &sid, &token_id)
         .unwrap()
         .unwrap();
-    assert_eq!(token::Client::new(&env, &token_id).balance(&merchant), amount);
+    assert_eq!(
+        token::Client::new(&env, &token_id).balance(&merchant),
+        amount
+    );
 }
 
 /// Removing the compliance contract (setting it to a fresh unregistered address
@@ -180,19 +187,28 @@ fn compliance_check_is_live_on_every_execution() {
     treasury.set_compliance_id(&admin, &compliance_id);
 
     // First settlement succeeds.
-    let (token_id, sid1) = mint_and_propose(&env, &treasury, &treasury_id, &admin, &merchant, 1_000_000);
-    treasury.try_execute_settlement(&admin, &sid1, &token_id).unwrap().unwrap();
+    let (token_id, sid1) =
+        mint_and_propose(&env, &treasury, &treasury_id, &admin, &merchant, 1_000_000);
+    treasury
+        .try_execute_settlement(&admin, &sid1, &token_id)
+        .unwrap()
+        .unwrap();
+
+    // Propose a second settlement while still compliant, then revoke compliance before execution.
+    let sid2 = treasury.propose_settlement(&admin, &merchant, &1_000_000, &0_u64);
+    token::StellarAssetClient::new(&env, &token_id).mint(&treasury_id, &1_000_000);
 
     // Revoke compliance.
     env.as_contract(&compliance_id, || {
         StubCompliance::set_allowed(env.clone(), false);
     });
 
-    // Second settlement fails.
-    let sid2 = treasury.propose_settlement(&admin, &merchant, &1_000_000, &0_u64);
-    token::StellarAssetClient::new(&env, &token_id).mint(&treasury_id, &1_000_000);
-    let err = treasury.try_execute_settlement(&admin, &sid2, &token_id).unwrap().unwrap_err();
-    assert_eq!(err, TreasuryError::ComplianceCheckFailed.into());
+    // Second settlement execution fails.
+    let err = treasury
+        .try_execute_settlement(&admin, &sid2, &token_id)
+        .unwrap_err()
+        .unwrap();
+    assert_eq!(err, TreasuryError::ComplianceCheckFailed);
 }
 
 /// Token transfer is a cross-contract call: verify the correct amount reaches
@@ -202,7 +218,8 @@ fn token_transfer_reaches_merchant_after_execution() {
     let env = Env::default();
     let (treasury, admin, merchant, treasury_id) = setup_treasury(&env);
     let amount = 42_000_000i128;
-    let (token_id, sid) = mint_and_propose(&env, &treasury, &treasury_id, &admin, &merchant, amount);
+    let (token_id, sid) =
+        mint_and_propose(&env, &treasury, &treasury_id, &admin, &merchant, amount);
 
     treasury.execute_settlement(&admin, &sid, &token_id);
 

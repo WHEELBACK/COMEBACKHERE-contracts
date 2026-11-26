@@ -1,4 +1,5 @@
 #![no_std]
+#![allow(deprecated)]
 
 mod errors;
 
@@ -65,7 +66,12 @@ fn require_authorized_emitter(env: &Env, caller: &Address) -> Result<(), EventEm
     if is_admin(env, caller) {
         return Ok(());
     }
-    if env.storage().instance().get(&DataKey::SettlementAgent(caller.clone())).unwrap_or(false) {
+    if env
+        .storage()
+        .instance()
+        .get(&DataKey::SettlementAgent(caller.clone()))
+        .unwrap_or(false)
+    {
         return Ok(());
     }
     Err(EventEmitterError::Unauthorized)
@@ -110,8 +116,10 @@ impl EventEmitterContract {
         env.storage()
             .instance()
             .set(&DataKey::EmissionRecord(settlement_id), &record);
-        env.events()
-            .publish((Symbol::new(&env, "emitted_amount_set"), settlement_id), amount);
+        env.events().publish(
+            (Symbol::new(&env, "emitted_amount_set"), settlement_id),
+            amount,
+        );
         Ok(())
     }
 
@@ -147,6 +155,9 @@ impl EventEmitterContract {
                 emitted_amount: 0,
                 last_updated: 0,
             });
+        if record.emitted_amount > settlement_total {
+            return Err(EventEmitterError::Underflow);
+        }
         let remaining = settlement_total
             .checked_sub(record.emitted_amount)
             .ok_or(EventEmitterError::Underflow)?;
@@ -156,7 +167,10 @@ impl EventEmitterContract {
             .instance()
             .set(&DataKey::EmissionRecord(settlement_id), &record);
         env.events().publish(
-            (Symbol::new(&env, "partial_settlement_emitted"), settlement_id),
+            (
+                Symbol::new(&env, "partial_settlement_emitted"),
+                settlement_id,
+            ),
             remaining,
         );
         Ok(remaining)
@@ -182,13 +196,19 @@ impl EventEmitterContract {
         agent: Address,
     ) -> Result<(), EventEmitterError> {
         require_admin(&env, &admin)?;
-        if env.storage().instance().get(&DataKey::SettlementAgent(agent.clone())).unwrap_or(false) {
+        if env
+            .storage()
+            .instance()
+            .get(&DataKey::SettlementAgent(agent.clone()))
+            .unwrap_or(false)
+        {
             return Err(EventEmitterError::AgentAlreadyGranted);
         }
         env.storage()
             .instance()
             .set(&DataKey::SettlementAgent(agent.clone()), &true);
-        env.events().publish((Symbol::new(&env, "settlement_agent_granted"),), agent);
+        env.events()
+            .publish((Symbol::new(&env, "settlement_agent_granted"),), agent);
         Ok(())
     }
 
@@ -214,13 +234,17 @@ impl EventEmitterContract {
         env.storage()
             .instance()
             .remove(&DataKey::SettlementAgent(agent.clone()));
-        env.events().publish((Symbol::new(&env, "settlement_agent_revoked"),), agent);
+        env.events()
+            .publish((Symbol::new(&env, "settlement_agent_revoked"),), agent);
         Ok(())
     }
 
     /// Returns `true` if `agent` is authorized to emit partial-settlement
     /// events (i.e. holds a settlement-agent grant).
     pub fn has_settlement_agent(env: Env, agent: Address) -> bool {
-        env.storage().instance().get(&DataKey::SettlementAgent(agent)).unwrap_or(false)
+        env.storage()
+            .instance()
+            .get(&DataKey::SettlementAgent(agent))
+            .unwrap_or(false)
     }
 }

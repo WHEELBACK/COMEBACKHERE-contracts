@@ -52,29 +52,20 @@ log_info "Using network: $NETWORK ($RPC_URL)"
 # `memory.copy`) that Rust >= 1.82 enables by default for wasm32 and the
 # Soroban host rejects; see the wasm-opt step below for the rest.
 log_info "Building contracts..."
-CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUSTFLAGS="-C target-cpu=mvp" \
-cargo build --target wasm32-unknown-unknown --release \
+SOROBAN_SDK_BUILD_SYSTEM_SUPPORTS_SPEC_SHAKING_V2=1 cargo build --target wasm32v1-none --release \
     -p comebackhere-compliance \
     -p comebackhere-invoice \
     -p comebackhere-treasury \
     -p comebackhere-settlement-workflow
 
-# target-cpu=mvp doesn't reach the prebuilt `core` that gets linked in, which
-# is built with `reference-types` and carries call_indirect encodings the
-# Soroban host's validator rejects ("reference-types not enabled: zero byte
-# expected"). Nothing actually uses reference types, so re-encoding through
-# binaryen with only MVP + sign-ext/mutable-globals enabled yields a
-# deployable module. Custom sections (contractspecv0 etc.) are preserved.
-# -Oz also shrinks the modules: treasury's unoptimized install transaction
-# grew large enough to time out on the local quickstart network.
 if ! command -v wasm-opt > /dev/null 2>&1; then
     log_error "wasm-opt not found. Install binaryen (e.g. 'apt-get install binaryen' or 'brew install binaryen')."
     exit 1
 fi
-log_info "Lowering contract wasm to the Soroban-supported feature set..."
+log_info "Optimizing contract wasm..."
 for contract in compliance invoice treasury settlement_workflow; do
-    wasm="target/wasm32-unknown-unknown/release/${contract}.wasm"
-    wasm-opt -Oz --mvp-features --enable-sign-ext --enable-mutable-globals "$wasm" -o "$wasm"
+    wasm="target/wasm32v1-none/release/${contract}.wasm"
+    wasm-opt -Oz --mvp-features --enable-sign-ext --enable-mutable-globals --strip-debug --strip-dwarf --vacuum "$wasm" -o "$wasm"
 done
 
 # 2. Setup network
@@ -83,14 +74,16 @@ stellar network add --rpc-url "$RPC_URL" --network-passphrase "$NETWORK_PASSPHRA
 
 # 3. Setup Admin Identity
 log_info "Ensuring admin identity exists..."
-stellar keys generate --network "$NETWORK" admin 2>/dev/null || true
+stellar keys generate --network "$NETWORK" --fund admin 2>/dev/null || stellar keys generate admin 2>/dev/null || true
 ADMIN_ADDRESS=$(stellar keys address admin)
 log_info "Admin Address: $ADMIN_ADDRESS"
+log_info "Ensuring admin account is funded..."
+stellar keys fund admin --network "$NETWORK" 2>/dev/null || curl -sf "http://localhost:8000/friendbot?addr=${ADMIN_ADDRESS}" > /dev/null || true
 
 # 4. Deploy and Initialize Compliance
 log_info "Deploying Compliance contract..."
 COMPLIANCE_ID=$(stellar contract deploy \
-    --wasm target/wasm32-unknown-unknown/release/compliance.wasm \
+    --wasm target/wasm32v1-none/release/compliance.wasm \
     --source admin \
     --network "$NETWORK")
 log_info "Compliance ID: $COMPLIANCE_ID"
@@ -105,7 +98,7 @@ stellar contract invoke \
 # 5. Deploy and Initialize Invoice
 log_info "Deploying Invoice contract..."
 INVOICE_ID=$(stellar contract deploy \
-    --wasm target/wasm32-unknown-unknown/release/invoice.wasm \
+    --wasm target/wasm32v1-none/release/invoice.wasm \
     --source admin \
     --network "$NETWORK")
 log_info "Invoice ID: $INVOICE_ID"
@@ -120,7 +113,7 @@ stellar contract invoke \
 # 6. Deploy and Initialize Treasury
 log_info "Deploying Treasury contract..."
 TREASURY_ID=$(stellar contract deploy \
-    --wasm target/wasm32-unknown-unknown/release/treasury.wasm \
+    --wasm target/wasm32v1-none/release/treasury.wasm \
     --source admin \
     --network "$NETWORK")
 log_info "Treasury ID: $TREASURY_ID"
@@ -132,23 +125,15 @@ stellar contract invoke \
     --network "$NETWORK" \
     -- initialize --admin "$ADMIN_ADDRESS" --threshold 1 --signers '[]'
 
-# 7. Deploy and Initialize Settlement Workflow
-echo "Deploying Settlement Workflow contract..."
+# 7. Deploy and Initialize Settlement Workflow (uses __constructor at deploy time)
+echo "Deploying and initializing Settlement Workflow contract..."
 SETTLEMENT_WORKFLOW_ID=$(stellar contract deploy \
-    --wasm target/wasm32-unknown-unknown/release/settlement_workflow.wasm \
-    --source admin \
-    --network "$NETWORK")
-echo "Settlement Workflow ID: $SETTLEMENT_WORKFLOW_ID"
-
-# The workflow's admin is set here and is thereafter only changeable through the
-# two-step transfer_admin/accept_admin flow (#621); there is no single-step
-# override, so choose this address deliberately.
-echo "Initializing Settlement Workflow contract..."
-stellar contract invoke \
-    --id "$SETTLEMENT_WORKFLOW_ID" \
+    --wasm target/wasm32v1-none/release/settlement_workflow.wasm \
     --source admin \
     --network "$NETWORK" \
-    -- initialize --admin "$ADMIN_ADDRESS" --compliance_id "$COMPLIANCE_ID" --treasury_id "$TREASURY_ID"
+    -- \
+    --admin "$ADMIN_ADDRESS" --compliance_id "$COMPLIANCE_ID" --treasury_id "$TREASURY_ID")
+echo "Settlement Workflow ID: $SETTLEMENT_WORKFLOW_ID"
 
 echo ""
 echo "============================================================"

@@ -47,11 +47,10 @@ ERROR_ENUM_MACROS='declare_contract_error|declare_settlement_error'
 # scanned and that its enums start at 1 and increase by exactly 1, so a future
 # edit cannot silently renumber the modularized codes.
 MODULAR_ERROR_CRATES=(
-    crates/event-emitter-errors
-    crates/storage-layout-errors
-    crates/access-control-errors
+    crates/compliance-errors
+    crates/invoice-errors
+    crates/workflow-errors
 )
-=======
 
 # Find all #[repr(u32)] enum definitions under contracts/ and crates/
 # We use awk to extract the enum name and its variants with explicit discriminants.

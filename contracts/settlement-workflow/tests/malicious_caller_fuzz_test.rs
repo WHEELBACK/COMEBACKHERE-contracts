@@ -94,7 +94,12 @@ fn harness() -> Harness {
 
 fn assert_untouched(h: &Harness, iteration: u32, action: u64) {
     let ctx = || format!("iteration {iteration}, action {action}");
-    assert_eq!(h.f.workflow.get_admin(), h.f.admin, "admin moved: {}", ctx());
+    assert_eq!(
+        h.f.workflow.get_admin(),
+        h.f.admin,
+        "admin moved: {}",
+        ctx()
+    );
     assert!(!h.f.workflow.is_paused(), "workflow paused: {}", ctx());
     assert_eq!(
         h.f.workflow.get_emergency_paused_at(),
@@ -128,7 +133,11 @@ fn run(seed: u64) {
             1 => assert!(h.f.workflow.try_unpause(&attacker).is_err()),
             2 => {
                 let nominee = h.attackers[rng.below(h.attackers.len() as u64) as usize].clone();
-                assert!(h.f.workflow.try_transfer_admin(&attacker, &nominee).is_err());
+                assert!(h
+                    .f
+                    .workflow
+                    .try_transfer_admin(&attacker, &nominee)
+                    .is_err());
             }
             3 => assert!(h.f.workflow.try_accept_admin(&attacker).is_err()),
             4 => assert_eq!(

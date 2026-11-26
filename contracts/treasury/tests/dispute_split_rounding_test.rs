@@ -386,11 +386,11 @@ fn prop_split_hold_amount_invariant() {
         let sid = client.propose_settlement(&admin, &claimant, &amount, &0_u64);
         let did = client.raise_dispute(&claimant, &sid, &counterparty, &amount, &500, &None);
 
-        let treasury_before = token_client.balance(&token_id);
+        let treasury_before = token_client.balance(&client.address);
 
         client.resolve_dispute_split(&admin, &did, &claimant_bps, &token_id, &None);
 
-        let treasury_after = token_client.balance(&token_id);
+        let treasury_after = token_client.balance(&client.address);
 
         prop_assert_eq!(
             treasury_before - treasury_after,

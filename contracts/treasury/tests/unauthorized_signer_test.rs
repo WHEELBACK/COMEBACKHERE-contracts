@@ -310,111 +310,61 @@ fn guard_table_approve_signer_rotation_rejects_unauthorized() {
 fn admin_can_modify_threshold() {
     let env = Env::default();
     let (client, admin, _contract_id) = setup_treasury(&env, 2);
+    let extra = Address::generate(&env);
+    client.set_signer(&admin, &extra, &2);
 
-    client.set_threshold(&admin, &3);
+    client.update_threshold(&admin, &3);
     assert_eq!(client.get_threshold(), 3);
 }
 
 #[test]
-#[should_panic(expected = "Error(Contract, #10)")]
 fn operator_cannot_modify_threshold() {
     let env = Env::default();
     let (client, admin, _contract_id) = setup_treasury(&env, 2);
 
-    // Register an operator-role signer (weight 1, not the admin).
     let operator = Address::generate(&env);
-    client.set_signer(&admin, &operator, &1);
+    client.set_signer(&admin, &operator, &2);
 
-    // Operators must not be able to raise the approval threshold.
-    client.set_threshold(&operator, &3);
+    assert!(client.try_update_threshold(&operator, &3).is_err());
 }
 
 #[test]
-#[should_panic(expected = "Error(Contract, #10)")]
 fn unauthorized_signer_cannot_modify_threshold() {
     let env = Env::default();
     let (client, _admin, _contract_id) = setup_treasury(&env, 2);
 
     let unauthorized = Address::generate(&env);
-    client.set_threshold(&unauthorized, &3);
+    assert!(client.try_update_threshold(&unauthorized, &3).is_err());
 }
 
 #[test]
-fn admin_can_set_payout_override() {
-    let env = Env::default();
-    let (client, admin, _contract_id) = setup_treasury(&env, 2);
-
-    let merchant = Address::generate(&env);
-    client.set_payout_override(&admin, &merchant, &Some(5_000_000));
-    assert_eq!(client.get_payout_override(&merchant), Some(5_000_000));
-}
-
-#[test]
-#[should_panic(expected = "Error(Contract, #10)")]
-fn operator_cannot_set_payout_override() {
-    let env = Env::default();
-    let (client, admin, _contract_id) = setup_treasury(&env, 2);
-
-    let operator = Address::generate(&env);
-    client.set_signer(&admin, &operator, &1);
-
-    let merchant = Address::generate(&env);
-    client.set_payout_override(&operator, &merchant, &Some(5_000_000));
-}
-
-#[test]
-#[should_panic(expected = "Error(Contract, #10)")]
-fn unauthorized_signer_cannot_set_payout_override() {
+fn merchant_can_set_payout_address() {
     let env = Env::default();
     let (client, _admin, _contract_id) = setup_treasury(&env, 2);
 
-    let unauthorized = Address::generate(&env);
     let merchant = Address::generate(&env);
-    client.set_payout_override(&unauthorized, &merchant, &Some(5_000_000));
+    let payout = Address::generate(&env);
+    client.update_merchant_payout_address(&merchant, &payout);
+    assert_eq!(client.get_merchant_payout_address(&merchant), Some(payout));
 }
 
 #[test]
-fn admin_can_toggle_signer_activity() {
-    let env = Env::default();
-    let (client, admin, _contract_id) = setup_treasury(&env, 2);
-
-    let signer = Address::generate(&env);
-    client.set_signer(&admin, &signer, &1);
-
-    client.set_signer_active(&admin, &signer, &false);
-    assert!(!client.is_signer_active(&signer));
-
-    client.set_signer_active(&admin, &signer, &true);
-    assert!(client.is_signer_active(&signer));
-}
-
-#[test]
-#[should_panic(expected = "Error(Contract, #10)")]
-fn operator_cannot_toggle_signer_activity() {
+fn admin_can_set_withdrawal_limit_and_non_admin_cannot() {
     let env = Env::default();
     let (client, admin, _contract_id) = setup_treasury(&env, 2);
 
     let operator = Address::generate(&env);
     client.set_signer(&admin, &operator, &1);
 
-    let target = Address::generate(&env);
-    client.set_signer(&admin, &target, &1);
-
-    // Operators must not be able to deactivate other signers.
-    client.set_signer_active(&operator, &target, &false);
-}
-
-#[test]
-#[should_panic(expected = "Error(Contract, #10)")]
-fn unauthorized_signer_cannot_toggle_signer_activity() {
-    let env = Env::default();
-    let (client, admin, _contract_id) = setup_treasury(&env, 2);
-
-    let target = Address::generate(&env);
-    client.set_signer(&admin, &target, &1);
+    client.set_withdrawal_limit(&admin, &5_000_000, &3600);
+    assert!(client
+        .try_set_withdrawal_limit(&operator, &1_000_000, &3600)
+        .is_err());
 
     let unauthorized = Address::generate(&env);
-    client.set_signer_active(&unauthorized, &target, &false);
+    assert!(client
+        .try_set_withdrawal_limit(&unauthorized, &1_000_000, &3600)
+        .is_err());
 }
 
 #[test]
@@ -426,11 +376,14 @@ fn admin_can_force_cancel_settlement() {
     let settlement_id = client.propose_settlement(&admin, &merchant, &10_000_000, &0_u64);
 
     client.force_cancel_settlement(&admin, &settlement_id);
-    assert!(client.get_settlement(&settlement_id).is_none());
+    assert_eq!(
+        client.get_settlement(&settlement_id).status,
+        treasury::SettlementStatus::Cancelled
+    );
 }
 
 #[test]
-#[should_panic(expected = "Error(Contract, #10)")]
+#[should_panic(expected = "Error(Contract, #9)")]
 fn operator_cannot_force_cancel_settlement() {
     let env = Env::default();
     let (client, admin, _contract_id) = setup_treasury(&env, 2);
@@ -446,7 +399,7 @@ fn operator_cannot_force_cancel_settlement() {
 }
 
 #[test]
-#[should_panic(expected = "Error(Contract, #10)")]
+#[should_panic(expected = "Error(Contract, #9)")]
 fn unauthorized_signer_cannot_force_cancel_settlement() {
     let env = Env::default();
     let (client, admin, _contract_id) = setup_treasury(&env, 2);

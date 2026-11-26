@@ -61,7 +61,13 @@ fn partial_settlement_returns_unemitted_remainder() {
 // #951: granular role-based authorization (settlement agents).
 // ---------------------------------------------------------------------------
 
-fn setup_with_agent() -> (Env, Address, Address, Address, EventEmitterContractClient<'static>) {
+fn setup_with_agent() -> (
+    Env,
+    Address,
+    Address,
+    Address,
+    EventEmitterContractClient<'static>,
+) {
     let env = Env::default();
     env.mock_all_auths();
     let admin = Address::generate(&env);

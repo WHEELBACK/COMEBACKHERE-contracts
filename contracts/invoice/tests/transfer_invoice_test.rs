@@ -156,9 +156,10 @@ fn test_transfer_invoice_emits_invoice_transferred_event() {
     client.transfer_invoice(&payer, &id, &new_payer);
 
     let events = env.events().all();
-    let (_, topics, _) = events.last().unwrap();
+    let last = events.events().last().unwrap();
+    let soroban_sdk::xdr::ContractEventBody::V0(v0) = &last.body;
     assert_eq!(
-        Symbol::try_from_val(&env, &topics.get_unchecked(0)).unwrap(),
+        Symbol::try_from_val(&env, &v0.topics[0]).unwrap(),
         Symbol::new(&env, "invoice_transferred")
     );
 }
@@ -172,10 +173,7 @@ fn test_transfer_invoice_new_owner_can_request_refund() {
     client.transfer_invoice(&payer, &id, &new_payer);
 
     // Old payer can no longer request refund
-    let err = client
-        .try_request_refund(&payer, &id)
-        .unwrap_err()
-        .unwrap();
+    let err = client.try_request_refund(&payer, &id).unwrap_err().unwrap();
     assert_eq!(err, InvoiceError::Unauthorized);
 
     // New payer can request refund

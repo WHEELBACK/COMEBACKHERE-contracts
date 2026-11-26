@@ -12,13 +12,12 @@ db-urls = ["https://github.com/rustsec/advisory-db"]
 # advisory, say why it is not actionable from this repo, and say when to
 # remove it.
 ignore = [
-  # Both are "unmaintained" notices, not vulnerabilities, and neither has a
-  # safe upgrade. They reach us only through soroban-sdk -> soroban-env-host
-  # -> ark-bls12-381 / ark-ec / ark-ff, so the fix has to come from upstream.
-  # Remove each entry once a soroban-sdk upgrade drops the crate from
-  # Cargo.lock.
-  "RUSTSEC-2024-0436", # paste: unmaintained
-  "RUSTSEC-2024-0388", # derivative: unmaintained (reported in #688)
+  # Reaches us only through soroban-sdk 29.0.1 -> soroban-env-host -> k256/p256
+  # -> elliptic-curve 0.13.8 -> crypto-bigint 0.5.5 (host/test-only; not compiled
+  # into on-chain WASM contracts). elliptic-curve 0.13.8 pins crypto-bigint ^0.5,
+  # so the upgrade must come from upstream soroban-env-host. Remove once a
+  # soroban-sdk upgrade moves past crypto-bigint 0.5.x.
+  "RUSTSEC-2026-0387",
 ]
 
 [licenses]

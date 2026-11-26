@@ -40,6 +40,7 @@ fn setup() -> (Env, Address, ComplianceContractClient<'static>) {
     let env = Env::default();
     env.mock_all_auths();
     env.cost_estimate().budget().reset_unlimited();
+    env.cost_estimate().disable_resource_limits();
     let admin = Address::generate(&env);
     let id = env.register_contract(None, ComplianceContract);
     let client = ComplianceContractClient::new(&env, &id);
@@ -99,7 +100,7 @@ fn page_with_start_near_end_and_oversized_limit_returns_remaining_suffix_only() 
 
     let start = (CAP - 3) as u64;
     // limit is far larger than the 3 entries actually remaining after start.
-    let page = client.export_snapshot_page(&admin, &start, &10_000);
+    let page = client.export_snapshot_page(&admin, &start, &10_000, &None);
 
     assert_eq!(page.len(), 3);
     for (i, (addr, state)) in page.iter().enumerate() {
@@ -113,10 +114,10 @@ fn page_with_limit_zero_returns_empty_regardless_of_start() {
     let (env, admin, client) = setup();
     fill_index_to_cap(&env, &admin, &client);
 
-    assert_eq!(client.export_snapshot_page(&admin, &0, &0).len(), 0);
+    assert_eq!(client.export_snapshot_page(&admin, &0, &0, &None).len(), 0);
     assert_eq!(
         client
-            .export_snapshot_page(&admin, &((CAP - 1) as u64), &0)
+            .export_snapshot_page(&admin, &((CAP - 1) as u64), &0, &None)
             .len(),
         0
     );
@@ -126,7 +127,7 @@ fn page_with_limit_zero_returns_empty_regardless_of_start() {
 fn page_with_start_exactly_at_total_returns_empty() {
     let (env, admin, client) = setup();
     fill_index_to_cap(&env, &admin, &client);
-    let page = client.export_snapshot_page(&admin, &(CAP as u64), &10);
+    let page = client.export_snapshot_page(&admin, &(CAP as u64), &10, &None);
     assert_eq!(page.len(), 0);
 }
 
@@ -135,12 +136,12 @@ fn page_with_start_beyond_total_returns_empty_not_panic() {
     let (env, admin, client) = setup();
     fill_index_to_cap(&env, &admin, &client);
 
-    let page = client.export_snapshot_page(&admin, &(CAP as u64 + 12_345), &10);
+    let page = client.export_snapshot_page(&admin, &(CAP as u64 + 12_345), &10, &None);
     assert_eq!(page.len(), 0);
 
     // u64::MAX as `start` must not overflow or wrap the internal u32 cast
     // used when indexing into the AddressIndex vector.
-    let page_max = client.export_snapshot_page(&admin, &u64::MAX, &10);
+    let page_max = client.export_snapshot_page(&admin, &u64::MAX, &10, &None);
     assert_eq!(page_max.len(), 0);
 }
 
@@ -151,7 +152,7 @@ fn page_with_limit_u64_max_near_end_is_bounded_by_remaining_not_by_limit() {
 
     let start = (CAP - 25) as u64;
     env.cost_estimate().budget().reset_tracker();
-    let page = client.export_snapshot_page(&admin, &start, &u64::MAX);
+    let page = client.export_snapshot_page(&admin, &start, &u64::MAX, &None);
     let instructions = env.cost_estimate().budget().cpu_instruction_cost();
 
     // Only the 25 remaining entries should come back -- not an attempt to
@@ -172,7 +173,7 @@ fn full_index_page_matches_insertion_order() {
     let (env, admin, client) = setup();
     let tracked = fill_index_to_cap(&env, &admin, &client);
 
-    let page = client.export_snapshot_page(&admin, &0, &(CAP as u64));
+    let page = client.export_snapshot_page(&admin, &0, &(CAP as u64), &None);
     assert_eq!(page.len() as u32, CAP);
     for (i, (addr, state)) in page.iter().enumerate() {
         assert_eq!(addr, tracked[i]);
@@ -209,7 +210,7 @@ fn address_added_after_first_page_read_appears_in_later_page() {
     client.allow_address(&admin, &addr_b);
 
     // Read page 0 (start=0, limit=2) — captures only addr_a and addr_b.
-    let page0_before = client.export_snapshot_page(&admin, &0, &2);
+    let page0_before = client.export_snapshot_page(&admin, &0, &2, &None);
     assert_eq!(page0_before.len(), 2);
 
     // Now add a third address — simulating a write between page reads.
@@ -218,13 +219,13 @@ fn address_added_after_first_page_read_appears_in_later_page() {
 
     // Re-reading page 0 with the same parameters must return the same two
     // entries; addr_c must NOT appear here because it was appended after them.
-    let page0_after = client.export_snapshot_page(&admin, &0, &2);
+    let page0_after = client.export_snapshot_page(&admin, &0, &2, &None);
     assert_eq!(page0_after.len(), 2);
     assert_eq!(page0_after.get(0).unwrap().0, addr_a);
     assert_eq!(page0_after.get(1).unwrap().0, addr_b);
 
     // Fetching the next page (start=2, limit=10) must include addr_c.
-    let page1 = client.export_snapshot_page(&admin, &2, &10);
+    let page1 = client.export_snapshot_page(&admin, &2, &10, &None);
     assert_eq!(page1.len(), 1);
     assert_eq!(page1.get(0).unwrap().0, addr_c);
 }
@@ -247,7 +248,7 @@ fn multiple_addresses_added_between_page_reads_all_visible_in_later_pages() {
     }
 
     // Read the first page — establishes a "snapshot" of the first 5 entries.
-    let page0 = client.export_snapshot_page(&admin, &0, &page_size);
+    let page0 = client.export_snapshot_page(&admin, &0, &page_size, &None);
     assert_eq!(page0.len() as u64, page_size);
     for (i, (addr, _state)) in page0.iter().enumerate() {
         assert_eq!(addr, first_batch[i]);
@@ -262,14 +263,14 @@ fn multiple_addresses_added_between_page_reads_all_visible_in_later_pages() {
     }
 
     // Fetching the next page must see all 3 newly added addresses.
-    let page1 = client.export_snapshot_page(&admin, &page_size, &10);
+    let page1 = client.export_snapshot_page(&admin, &page_size, &10, &None);
     assert_eq!(page1.len(), 3);
     for (i, (addr, _state)) in page1.iter().enumerate() {
         assert_eq!(addr, second_batch[i]);
     }
 
     // The first page remains unchanged after the writes.
-    let page0_reread = client.export_snapshot_page(&admin, &0, &page_size);
+    let page0_reread = client.export_snapshot_page(&admin, &0, &page_size, &None);
     assert_eq!(page0_reread.len() as u64, page_size);
     for (i, (addr, _state)) in page0_reread.iter().enumerate() {
         assert_eq!(addr, first_batch[i]);
@@ -295,7 +296,7 @@ fn sequential_scan_with_mid_export_write_produces_no_duplicates_and_no_gaps() {
 
     // Read the first page (limit=2).
     let limit: u64 = 2;
-    let page0 = client.export_snapshot_page(&admin, &0, &limit);
+    let page0 = client.export_snapshot_page(&admin, &0, &limit, &None);
     assert_eq!(page0.len() as u64, limit);
 
     // Add a new address mid-scan.
@@ -307,7 +308,7 @@ fn sequential_scan_with_mid_export_write_produces_no_duplicates_and_no_gaps() {
     let mut collected: std::vec::Vec<Address> = page0.iter().map(|(a, _)| a).collect();
     let mut start: u64 = limit;
     loop {
-        let page = client.export_snapshot_page(&admin, &start, &limit);
+        let page = client.export_snapshot_page(&admin, &start, &limit, &None);
         if page.len() == 0 {
             break;
         }

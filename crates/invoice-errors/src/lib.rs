@@ -13,74 +13,77 @@ declare_contract_error! {
     /// New variants must be added at the end with an explicit discriminant one
     /// higher than the current maximum; see `scripts/check-enum-ordering.sh`.
     pub enum InvoiceError {
+        /// Caller is not authorized for this operation.
         Unauthorized = 1,
+        /// Contract is currently paused.
         ContractPaused = 2,
+        /// Invoice or refund amount is invalid (e.g. zero or negative).
         InvalidAmount = 3,
+        /// Invoice is not in the `Pending` state.
         NotPending = 4,
+        /// Invoice has expired.
         Expired = 5,
+        /// Requested invoice or template does not exist.
         NotFound = 6,
+        /// Contract has already been initialized.
         AlreadyInitialized = 7,
+        /// Duration argument is zero.
         ZeroDuration = 8,
+        /// Expiry timestamp calculation overflowed.
         ExpiryOverflow = 9,
+        /// Invoice has not been paid yet.
         NotPaid = 10,
+        /// Escrow has not been released yet.
         NotReleased = 11,
+        /// Amount does not meet required precision constraints.
         AmountPrecision = 12,
+        /// Nonce has already been used for this merchant.
         DuplicateNonce = 13,
+        /// Requested expiry duration exceeds the configured maximum.
         ExpiryTooLong = 14,
+        /// Supplied metadata does not match the invoice record.
         MetadataMismatch = 15,
+        /// No pending admin transfer is active.
         NoPendingAdmin = 16,
+        /// Payment link hash is invalid.
         InvalidPaymentLinkHash = 17,
+        /// Invoice does not have an active refund request.
         NotRefundRequested = 18,
+        /// Supplied token address does not match the invoice token.
         TokenMismatch = 19,
+        /// Batch argument exceeds the maximum allowed size.
         BatchTooLarge = 20,
+        /// Operation is still within its cooldown window.
         CooldownActive = 21,
+        /// Invoice counter overflowed `u64::MAX`.
         InvoiceCountOverflow = 22,
+        /// Hash argument exceeds the maximum permitted length.
         HashTooLong = 23,
-        // Appended for #70: the stored invoice does not describe a completed
-        // payment, so a refund must not be recorded or paid out against it. Raised
-        // by `verify_payment_state` before any refund state is written.
+        /// Stored invoice does not describe a completed payment (#70).
         PaymentStateInconsistent = 24,
-        // Appended for #70: the cross-contract call that executes the refund payout
-        // failed (token contract paused, insufficient escrow balance, wrong token,
-        // or not a SEP-41 contract at all). The refund is abandoned with no state
-        // change rather than being marked `Refunded` without the customer being
-        // paid.
+        /// Cross-contract refund token transfer failed (#70).
         RefundTransferFailed = 25,
-        // Appended for #70: the invoice was created without a `token_address`, so
-        // there is no contract to execute the refund payout through.
+        /// Invoice was created without a `token_address` (#70).
         RefundTokenNotSet = 26,
-        // Appended for #71: a refund fee above `MAX_REFUND_FEE_BPS` (10_000 bps =
-        // 100%), which would make the deduction meaningless.
+        /// Refund fee exceeds `MAX_REFUND_FEE_BPS` (#71).
         RefundFeeTooHigh = 27,
-        // Appended for #71: refund fee arithmetic (`gross_amount * fee_bps`)
-        // overflowed, so the net payout cannot be computed.
+        /// Refund fee arithmetic overflowed (#71).
         ArithmeticOverflow = 28,
-        // Appended for #708: a discount amount that is larger than the invoice
-        // amount, which would make the effective price negative or zero.
+        /// Discount amount exceeds the invoice amount (#708).
         DiscountExceedsAmount = 29,
-        // Appended for #708: a discount early-pay deadline that falls after the
-        // invoice expiry, making it impossible to honour the discount window.
+        /// Discount deadline falls after the invoice expiry (#708).
         DiscountDeadlineAfterExpiry = 30,
-        // Appended for #709: the memo field supplied to create_invoice exceeds
-        // MAX_MEMO_BYTES, which would waste storage and make deserialization
-        // unpredictable for off-chain consumers.
+        /// Memo exceeds `MAX_MEMO_BYTES` (#709).
         MemoTooLong = 31,
-        // Appended for #702: request_refund was called after the configurable
-        // refund window (paid_at + refund_window_secs) has elapsed. Zero means
-        // no limit, preserving the current behaviour.
+        /// Refund requested after the refund window elapsed (#702).
         RefundWindowClosed = 32,
-        // Appended for #717: mark_paid called with payer == the invoice's
-        // merchant (self-pay), which could inflate volume metrics.
+        /// Payer cannot equal the invoice merchant (#717).
         SelfPayNotAllowed = 33,
-        // Appended for #694: generate_from_template was called on a template
-        // that has been deactivated.
+        /// Invoice template has been deactivated (#694).
         TemplateDisabled = 34,
-        // Appended for #704: set_late_fee_bps called with more than 10_000 bps
-        // (100% of the net amount).
+        /// Late fee exceeds 10_000 bps (#704).
         InvalidLateFee = 35,
-        // Appended for #882: an invoice write would persist a record whose
-        // status, payment fields or amounts contradict each other. Raised by
-        // `verify_invoice_invariants` before any such record is stored.
+        /// Invoice write would violate a contract invariant (#882).
         InvariantViolation = 36,
     }
 }

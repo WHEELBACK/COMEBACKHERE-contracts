@@ -248,6 +248,7 @@ fn merchant_can_update_own_payout_address_with_authorization() {
         .update_merchant_payout_address(&merchant, &payout_override);
 
     // The override is persisted and used at settlement time.
+    env.mock_all_auths();
     let token_id = env.register_contract(None, TestToken);
     let test_token_client = TestTokenClient::new(&env, &token_id);
     test_token_client.mint(&treasury_id, &5_000_000);
@@ -303,6 +304,7 @@ fn unauthorized_payout_override_is_rejected_and_state_unchanged() {
     );
 
     // Invariant: the legitimate override still governs settlement routing.
+    env.mock_all_auths();
     let token_id = env.register_contract(None, TestToken);
     let test_token_client = TestTokenClient::new(&env, &token_id);
     test_token_client.mint(&treasury_id, &3_000_000);

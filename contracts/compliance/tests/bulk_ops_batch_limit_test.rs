@@ -37,6 +37,7 @@ fn setup() -> (Env, Address, ComplianceContractClient<'static>) {
     let env = Env::default();
     env.mock_all_auths();
     env.cost_estimate().budget().reset_unlimited();
+    env.cost_estimate().disable_resource_limits();
     let admin = Address::generate(&env);
     let id = env.register_contract(None, ComplianceContract);
     let client = ComplianceContractClient::new(&env, &id);

@@ -1,4 +1,5 @@
 #![no_std]
+#![allow(deprecated)]
 
 /// Protocol-wide basis-point denominator (10 000 = 100.00%) and typed helpers,
 /// re-exported from `crates/protocol-math` so clients building against the
@@ -115,9 +116,11 @@ pub(crate) const DEPOSIT_REF_TTL_LEDGERS: u32 = 30 * 24 * 60 * 60 / 5;
 // Callers: `bump_settlement_ttl` (called from `write_settlement` for live
 // settlements) and the `initialize` instance-TTL bump.
 /// Default TTL (in ledgers) applied to persistent dispute keys (#920).
+#[allow(dead_code)]
 pub(crate) const DISPUTE_TTL_LEDGERS: u32 = 30 * 24 * 60 * 60 / 5;
 
 /// Bumps the TTL of a persistent dispute-related key (#920).
+#[allow(dead_code)]
 pub(crate) fn bump_persistent_ttl(env: &Env, key: &DataKey) {
     if env.storage().persistent().has(key) {
         env.storage()
@@ -156,16 +159,20 @@ pub(crate) fn bump_settlement_ttl(env: &Env, id: u64) {
 
     let partial_approved_key = DataKey::PartialApprovedTotal(id);
     if env.storage().persistent().has(&partial_approved_key) {
-        env.storage()
-            .persistent()
-            .extend_ttl(&partial_approved_key, MIN_TTL_LEDGERS, TARGET_TTL_LEDGERS);
+        env.storage().persistent().extend_ttl(
+            &partial_approved_key,
+            MIN_TTL_LEDGERS,
+            TARGET_TTL_LEDGERS,
+        );
     }
 
     let partial_executed_key = DataKey::PartialExecutedTotal(id);
     if env.storage().persistent().has(&partial_executed_key) {
-        env.storage()
-            .persistent()
-            .extend_ttl(&partial_executed_key, MIN_TTL_LEDGERS, TARGET_TTL_LEDGERS);
+        env.storage().persistent().extend_ttl(
+            &partial_executed_key,
+            MIN_TTL_LEDGERS,
+            TARGET_TTL_LEDGERS,
+        );
     }
 }
 
@@ -208,6 +215,7 @@ pub(crate) fn require_admin(env: &Env, admin: &Address) {
 /// Granular role guard for parameter-modifying entrypoints (#969). Requires the
 /// caller's authorization and verifies it holds `role` in the access-control
 /// role table. Fails closed with `Unauthorized` when the role is not granted.
+#[allow(dead_code)]
 pub(crate) fn require_role(env: &Env, caller: &Address, role: &Symbol) {
     caller.require_auth();
     if !access_control::has_role(env, caller, role) {
@@ -247,10 +255,7 @@ pub(crate) fn require_compliance_allowed(
     recipient: &Address,
     amount: i128,
 ) -> Result<(), TreasuryError> {
-    let client: Option<Address> = env
-        .storage()
-        .instance()
-        .get(&DataKey::ComplianceId);
+    let client: Option<Address> = env.storage().instance().get(&DataKey::ComplianceId);
     let Some(compliance) = client else {
         return Ok(());
     };
@@ -268,10 +273,8 @@ pub(crate) fn require_compliance_allowed(
 /// Checked subtraction used by partial settlement computations (#968). Returns
 /// `TreasuryError::ArithmeticOverflow` instead of wrapping/panicking when
 /// `amount` exceeds `available`, keeping partial settlement math defensive.
-pub(crate) fn checked_sub_amount(
-    available: i128,
-    amount: i128,
-) -> Result<i128, TreasuryError> {
+#[allow(dead_code)]
+pub(crate) fn checked_sub_amount(available: i128, amount: i128) -> Result<i128, TreasuryError> {
     available
         .checked_sub(amount)
         .ok_or(TreasuryError::ArithmeticOverflow)
